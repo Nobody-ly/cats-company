@@ -1335,6 +1335,17 @@ body {
   color: #6B6C6F;
 }
 
+.v3-live-input-status {
+  margin: 10px 12px 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.1);
+  color: #BFFFE4;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .v3-composer-footer {
   padding: 6px 12px;
   display: flex;

@@ -266,6 +266,25 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     }
   };
 
+  const activeBotWorking = useMemo(() => {
+    let lastWorkingIndex = -1;
+    let lastBotTextIndex = -1;
+
+    messages.forEach((message, index) => {
+      if (message.from_uid === user.uid) return;
+      if (isWorkingMessage(message)) {
+        lastWorkingIndex = index;
+        return;
+      }
+      const type = message.type || message.msg_type || '';
+      if (type === 'text' && typeof message.content === 'string' && message.content.trim()) {
+        lastBotTextIndex = index;
+      }
+    });
+
+    return lastWorkingIndex > lastBotTextIndex;
+  }, [messages, user.uid]);
+
   const finalizeOptimisticMessage = useCallback((tempId, result) => {
     if (!result || (!result.seq_id && !result.id)) return;
     setMessages((prev) => {
@@ -812,6 +831,12 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             <div style={{flex:1}}></div>
             <button className="v3-tool" style={{ fontWeight: 600 }} onClick={() => { if(isGroup && textareaRef.current) { const pos = textareaRef.current.selectionStart; setInput(input.slice(0,pos) + '@' + input.slice(pos)); textareaRef.current.focus(); } }} title="Mention" type="button">@</button>
           </div>
+
+          {activeBotWorking && (
+            <div className="v3-live-input-status" role="status">
+              小八正在处理。你现在继续发送的补充消息，会在下一轮一起处理。
+            </div>
+          )}
 
           <textarea
             ref={textareaRef}
