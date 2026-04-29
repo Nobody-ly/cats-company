@@ -7,6 +7,8 @@ import { resolveMediaURL } from '../api';
 
 marked.setOptions({ breaks: false, gfm: true });
 
+const WORKING_TEXT_PREFIX = 'AI文本:';
+
 /* Extract concise summary from tool input */
 function toolInputSummary(name, input) {
   if (!input) return '';
@@ -84,6 +86,10 @@ function groupContentBlocks(blocks) {
       items.push({ type: 'thinking', text: block.thinking || block.text || block.content || '' });
       continue;
     }
+    if (block.type === 'assistant_text') {
+      items.push({ type: 'assistant_text', text: block.text || block.content || '' });
+      continue;
+    }
     if (block.type === 'tool_use') {
       const toolId = block.id || block.tool_use_id;
       const pair = {
@@ -125,6 +131,13 @@ function groupContentBlocks(blocks) {
   return items;
 }
 
+function workingTextContent(text) {
+  const value = messageContentText(text).trim();
+  return value.startsWith(WORKING_TEXT_PREFIX)
+    ? value.slice(WORKING_TEXT_PREFIX.length).trim()
+    : value;
+}
+
 function messageContentText(content, fallback = '') {
   if (typeof content === 'string') return content;
   if (content == null) return fallback;
@@ -160,6 +173,9 @@ function contentBlocksFromMessage(msg) {
       is_error: !!msg.metadata?.is_error,
     }];
   }
+  if (msg?.type === 'text' && typeof msg.content === 'string' && msg.content.trim().startsWith(WORKING_TEXT_PREFIX)) {
+    return [{ type: 'assistant_text', text: workingTextContent(msg.content) }];
+  }
 
   return [];
 }
@@ -194,6 +210,14 @@ function WorkingProcess({ blocks }) {
         <div className="v3-working-steps">
           {blocks.map((item, i) => {
             if (item.type === 'thinking') {
+              return (
+                <div key={i} className="v3-wpi-thinking">
+                  <Brain size={14} className="v3-wpi-icon" />
+                  <span className="v3-wpi-text">{item.text}</span>
+                </div>
+              );
+            }
+            if (item.type === 'assistant_text') {
               return (
                 <div key={i} className="v3-wpi-thinking">
                   <Brain size={14} className="v3-wpi-icon" />

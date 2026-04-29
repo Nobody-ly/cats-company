@@ -9,6 +9,7 @@ import Avatar from '../widgets/avatar';
 const PAGE_SIZE = 50;
 const TYPING_TIMEOUT_MS = 10000;
 const WORKING_MESSAGE_TYPES = new Set(['thinking', 'tool_use', 'tool_result']);
+const WORKING_TEXT_PREFIX = 'AI文本:';
 const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024; // 100MB
 const MAX_DROPPED_FILES = 200;
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']);
@@ -834,7 +835,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
           {activeBotWorking && (
             <div className="v3-live-input-status" role="status">
-              小八正在处理。你现在继续发送的补充消息，会在下一轮一起处理。
+              小八正在处理。你可以继续发送补充消息，小八完成当前步骤后会接着一起看。
             </div>
           )}
 
@@ -1090,7 +1091,15 @@ function inferWorkingTypeFromBlocks(blocks) {
 
 function isWorkingMessage(message) {
   if (WORKING_MESSAGE_TYPES.has(message?.type)) return true;
+  if (isWorkingTextMessage(message)) return true;
   return Boolean(inferWorkingTypeFromBlocks(message?.content_blocks));
+}
+
+function isWorkingTextMessage(message) {
+  const type = message?.type || message?.msg_type || '';
+  if (type !== 'text') return false;
+  const content = typeof message?.content === 'string' ? message.content.trim() : '';
+  return content.startsWith(WORKING_TEXT_PREFIX);
 }
 
 // Parse "usr123" -> 123
