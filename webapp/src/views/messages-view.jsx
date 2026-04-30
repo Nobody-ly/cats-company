@@ -565,6 +565,28 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     await uploadAttachmentFile(files[0]);
   };
 
+  const handlePaste = async (e) => {
+    const files = collectClipboardFiles(e.clipboardData);
+    if (files.length === 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (isUploadingAttachment) {
+      window.alert('Upload in progress. Please wait before pasting another file.');
+      return;
+    }
+    if (pendingAttachment && !window.confirm('Replace the current pending attachment with the pasted file?')) {
+      return;
+    }
+
+    if (files.length > 1) {
+      window.alert(`Pasted ${files.length} files. The current composer supports one attachment at a time, so only "${files[0].name || 'pasted file'}" will be prepared.`);
+    }
+
+    await uploadAttachmentFile(files[0]);
+  };
+
   // Find the display name for a uid in group context
   const getMemberName = (fromUid) => {
     if (!isGroup || !members.length) return null;
@@ -847,6 +869,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
           />
 
           {(isUploadingAttachment || pendingAttachment) && (
@@ -942,6 +965,32 @@ async function collectDroppedFiles(dataTransfer) {
 
   if (files.length === 0) {
     Array.from(dataTransfer?.files || []).forEach(addFile);
+  }
+
+  return files;
+}
+
+function collectClipboardFiles(clipboardData) {
+  const files = [];
+  const addFile = (file) => {
+    if (file && files.length < MAX_DROPPED_FILES) {
+      files.push(file);
+    }
+  };
+
+  const items = Array.from(clipboardData?.items || []);
+  if (items.length > 0) {
+    for (const item of items) {
+      if (files.length >= MAX_DROPPED_FILES) break;
+      if (item.kind !== 'file') continue;
+      if (typeof item.getAsFile === 'function') {
+        addFile(item.getAsFile());
+      }
+    }
+  }
+
+  if (files.length === 0) {
+    Array.from(clipboardData?.files || []).forEach(addFile);
   }
 
   return files;
