@@ -1625,7 +1625,7 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  cursor: pointer;
+  cursor: default;
 }
 
 .oc-modal-overlay img {
@@ -2212,6 +2212,7 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  cursor: default;
 }
 
 .oc-modal {
@@ -2221,6 +2222,7 @@ body {
   max-width: 400px;
   max-height: 90vh;
   overflow: hidden;
+  cursor: default;
 }
 
 .oc-modal-header {
