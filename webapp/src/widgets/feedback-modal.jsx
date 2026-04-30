@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 
 const MAX_ATTACHMENTS = 5;
+const FEEDBACK_DRAFT_VERSION = 1;
 
 const CATEGORY_OPTIONS = [
   { value: 'bug', label: '问题反馈' },
@@ -9,10 +10,34 @@ const CATEGORY_OPTIONS = [
   { value: 'other', label: '其他' },
 ];
 
-export default function FeedbackModal({ onClose }) {
-  const [category, setCategory] = useState('bug');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+function getDraftKey(user) {
+  return `cats_feedback_draft_v${FEEDBACK_DRAFT_VERSION}_${user?.uid || user?.username || 'guest'}`;
+}
+
+function readDraft(draftKey) {
+  try {
+    const saved = localStorage.getItem(draftKey);
+    if (!saved) return null;
+    const draft = JSON.parse(saved);
+    if (draft?.version !== FEEDBACK_DRAFT_VERSION) return null;
+    return draft;
+  } catch (error) {
+    console.warn('Failed to restore feedback draft:', error);
+    localStorage.removeItem(draftKey);
+    return null;
+  }
+}
+
+function isEmptyDraft({ category, title, description }) {
+  return category === 'bug' && title.trim() === '' && description.trim() === '';
+}
+
+export default function FeedbackModal({ onClose, user }) {
+  const draftKey = useMemo(() => getDraftKey(user), [user]);
+  const initialDraft = useMemo(() => readDraft(draftKey), [draftKey]);
+  const [category, setCategory] = useState(initialDraft?.category || 'bug');
+  const [title, setTitle] = useState(initialDraft?.title || '');
+  const [description, setDescription] = useState(initialDraft?.description || '');
   const [attachments, setAttachments] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -26,6 +51,25 @@ export default function FeedbackModal({ onClose }) {
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+
+  useEffect(() => {
+    if (submitted) return;
+
+    const draft = {
+      version: FEEDBACK_DRAFT_VERSION,
+      category,
+      title,
+      description,
+      saved_at: new Date().toISOString(),
+      page_url: window.location.href,
+    };
+
+    if (isEmptyDraft(draft)) {
+      localStorage.removeItem(draftKey);
+    } else {
+      localStorage.setItem(draftKey, JSON.stringify(draft));
+    }
+  }, [category, description, draftKey, submitted, title]);
 
   useEffect(() => {
     return () => {
@@ -68,6 +112,17 @@ export default function FeedbackModal({ onClose }) {
     });
   };
 
+  const handleClearDraft = () => {
+    attachmentsRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    attachmentsRef.current = [];
+    setCategory('bug');
+    setTitle('');
+    setDescription('');
+    setAttachments([]);
+    setError('');
+    localStorage.removeItem(draftKey);
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!description.trim()) {
@@ -99,6 +154,7 @@ export default function FeedbackModal({ onClose }) {
         attachments: uploaded,
       });
 
+      localStorage.removeItem(draftKey);
       setSubmitted(true);
     } catch (err) {
       setError(err.message || '提交失败，请稍后再试。');
@@ -131,6 +187,9 @@ export default function FeedbackModal({ onClose }) {
           </div>
         ) : (
           <form className="oc-modal-body" onSubmit={handleSubmit}>
+            <div className="oc-feedback-required-note">
+              内容会自动暂存，关闭后下次打开可继续编辑。
+            </div>
             <div className="oc-feedback-required-note">
               标 <span className="oc-required">*</span> 的项目为必填，截图可不上传。
             </div>
@@ -212,6 +271,9 @@ export default function FeedbackModal({ onClose }) {
             <div className="oc-modal-footer">
               <button type="button" className="oc-btn oc-btn-default" onClick={onClose} disabled={submitting}>
                 取消
+              </button>
+              <button type="button" className="oc-btn oc-btn-default" onClick={handleClearDraft} disabled={submitting}>
+                清空草稿
               </button>
               <button type="submit" className="oc-btn oc-btn-primary" disabled={!canSubmit}>
                 {submitting ? '提交中...' : '提交反馈'}

@@ -225,7 +225,7 @@ export default function TinodeWeb() {
       )}
 
       {showFeedbackModal && (
-        <FeedbackModal onClose={() => setShowFeedbackModal(false)} />
+        <FeedbackModal user={user} onClose={() => setShowFeedbackModal(false)} />
       )}
     </div>
   );
