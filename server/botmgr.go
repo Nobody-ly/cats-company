@@ -555,6 +555,53 @@ func (h *BotHandler) HandleSetBotVisibility(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// HandleGetBotAPIKey handles GET /api/bots/api-key?uid=xxx.
+// Only the owner can read a bot API key for later copy/configuration.
+func (h *BotHandler) HandleGetBotAPIKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ownerUID := UIDFromContext(r.Context())
+	if ownerUID == 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	uidStr := r.URL.Query().Get("uid")
+	botUID, err := strconv.ParseInt(uidStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid uid"})
+		return
+	}
+
+	actualOwner, err := h.db.GetBotOwner(botUID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "bot not found"})
+		return
+	}
+	if actualOwner != ownerUID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not your bot"})
+		return
+	}
+
+	apiKey, err := h.db.GetBotAPIKey(botUID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load api key"})
+		return
+	}
+	if apiKey == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "api key not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"uid":     botUID,
+		"api_key": apiKey,
+	})
+}
+
 var globalBotStats *BotStats
 
 // SetBotStats sets the global bot stats reference for the API.

@@ -24,6 +24,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const [createdBot, setCreatedBot] = useState(null);
   const [createdMode, setCreatedMode] = useState(CREATE_MODES.SELF_HOSTED);
   const [copiedField, setCopiedField] = useState('');
+  const [copyingBotKey, setCopyingBotKey] = useState(null);
   const [editingBot, setEditingBot] = useState(null);
   const avatarFileRef = useRef(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -96,6 +97,31 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
       setTimeout(() => setCopiedField(''), 2000);
     } catch (e) {
       console.error('Copy failed:', e);
+    }
+  };
+
+  const handleCopyBotAPIKey = async (bot, field = 'api_edit') => {
+    const botId = bot?.id || bot?.uid;
+    if (!botId) return;
+
+    try {
+      setError('');
+      setCopyingBotKey(botId);
+
+      let apiKey = bot.api_key;
+      if (!apiKey) {
+        const result = await api.getBotAPIKey(botId);
+        apiKey = result.api_key;
+      }
+      if (!apiKey) throw new Error('API Key not found');
+
+      setBots(prev => prev.map(item => item.id === botId ? { ...item, api_key: apiKey } : item));
+      setEditingBot(prev => prev && (prev.id === botId || prev.uid === botId) ? { ...prev, api_key: apiKey } : prev);
+      await handleCopy(field, apiKey);
+    } catch (e) {
+      setError(e.message || 'Failed to copy API Key');
+    } finally {
+      setCopyingBotKey(null);
     }
   };
 
@@ -196,6 +222,16 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                         }}>
                           Manage
                         </button>
+                        {!bot.tenant_name && (
+                          <button
+                            className="oc-btn oc-btn-default"
+                            style={{ padding: '8px 12px', borderRadius: 8 }}
+                            onClick={() => handleCopyBotAPIKey(bot, `api_${bot.id}`)}
+                            disabled={copyingBotKey === bot.id}
+                          >
+                            {copiedField === `api_${bot.id}` ? 'Copied!' : copyingBotKey === bot.id ? 'Loading...' : 'Copy Key'}
+                          </button>
+                        )}
                         <button className="oc-btn oc-btn-default" style={{ padding: '8px 16px', borderRadius: 8, borderColor: 'rgba(250,81,81,0.3)' }} onClick={() => handleDelete(bot)}>
                           <span style={{ color: '#FA5151' }}>Del</span>
                         </button>
@@ -368,17 +404,15 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                   <div style={{ fontSize: 11, color: 'var(--v3-text-muted)', marginBottom: 8, letterSpacing: 0.5 }}>AUTHORIZATION (API KEY)</div>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                     <code style={{ flex: 1, background: '#111', padding: '10px 12px', borderRadius: 6, color: editingBot.api_key ? 'var(--v3-primary)' : 'var(--v3-text-muted)', fontFamily: 'monospace', fontSize: 13, userSelect: 'all' }}>
-                      {editingBot.api_key || '••••••••••••••••••••••••••••'}
+                      {editingBot.api_key || 'Click Copy to load API Key'}
                     </code>
                     <button 
                       type="button" 
                       className="oc-btn oc-btn-default" 
-                      onClick={() => editingBot.api_key && handleCopy('api_edit', editingBot.api_key)}
-                      disabled={!editingBot.api_key}
-                      title={!editingBot.api_key ? "API Key is hidden by the server after creation for security" : ""}
-                      style={{ opacity: !editingBot.api_key ? 0.5 : 1, cursor: !editingBot.api_key ? 'not-allowed' : 'pointer' }}
+                      onClick={() => handleCopyBotAPIKey(editingBot, 'api_edit')}
+                      disabled={copyingBotKey === editingBot.id}
                     >
-                      {copiedField === 'api_edit' ? 'Copied!' : 'Copy'}
+                      {copiedField === 'api_edit' ? 'Copied!' : copyingBotKey === editingBot.id ? 'Loading...' : 'Copy'}
                     </button>
                   </div>
 

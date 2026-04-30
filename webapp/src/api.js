@@ -150,6 +150,7 @@ export const api = {
 
   // Bot management
   getMyBots: () => request('GET', '/api/bots'),
+  getBotAPIKey: (uid) => request('GET', `/api/bots/api-key?uid=${uid}`),
   createBot: ({ username, display_name }, deployToCloud = false) =>
     request('POST', deployToCloud ? '/api/bots/deploy' : '/api/bots', { username, display_name }),
   updateBot: (uid, { display_name, avatar_url }) =>
