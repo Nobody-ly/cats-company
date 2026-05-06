@@ -85,6 +85,19 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
       if (msg.pres && msg.pres.what && msg.pres.what.startsWith('group_')) { loadAll(); }
       if (msg.pres && msg.pres.what === 'members_invited') { loadAll(); }
+      // 同步 Bot 在线/离线状态到会话列表
+      if (msg.pres && (msg.pres.what === 'on' || msg.pres.what === 'off')) {
+        const rawUid = msg.pres.src || '';
+        const uid = rawUid.startsWith('usr') ? parseInt(rawUid.slice(3), 10) : parseInt(rawUid, 10);
+        if (uid > 0) {
+          setChats((prev) => prev.map((c) => {
+            if (!c.isGroup && c.friendId === uid) {
+              return { ...c, isOnline: msg.pres.what === 'on' };
+            }
+            return c;
+          }));
+        }
+      }
     });
     return () => unsub();
   }, []);
