@@ -195,18 +195,25 @@ type BotConfig struct {
 	Config      map[string]string `json:"config,omitempty"`
 }
 
-// WeComConfig stores one Enterprise WeChat self-built app binding for a bot.
-type WeComConfig struct {
-	BotUID         int64     `json:"bot_uid"`
-	CorpID         string    `json:"corp_id"`
-	AgentID        string    `json:"agent_id"`
-	Secret         string    `json:"-"`
-	CallbackToken  string    `json:"-"`
-	EncodingAESKey string    `json:"-"`
-	APIBaseURL     string    `json:"api_base_url"`
-	Enabled        bool      `json:"enabled"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+// WeComSuiteState stores third-party app suite runtime state.
+type WeComSuiteState struct {
+	SuiteID                   string     `json:"suite_id"`
+	SuiteTicket               string     `json:"-"`
+	SuiteAccessToken          string     `json:"-"`
+	SuiteAccessTokenExpiresAt *time.Time `json:"suite_access_token_expires_at,omitempty"`
+	UpdatedAt                 time.Time  `json:"updated_at"`
+}
+
+// WeComSuiteAuth stores one authorized enterprise for the third-party app.
+type WeComSuiteAuth struct {
+	AuthCorpID    string    `json:"auth_corp_id"`
+	AuthCorpName  string    `json:"auth_corp_name,omitempty"`
+	AgentID       string    `json:"agent_id"`
+	PermanentCode string    `json:"-"`
+	BotUID        int64     `json:"bot_uid,omitempty"`
+	Enabled       bool      `json:"enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Group represents a chat group.

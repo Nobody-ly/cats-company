@@ -15,7 +15,8 @@ func (a *Adapter) CreateSchema() error {
 		createGroupsTable,
 		createGroupMembersTable,
 		createFeedbackReportsTable,
-		createWeComIntegrationsTable,
+		createWeComSuiteStateTable,
+		createWeComSuiteAuthsTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -204,19 +205,29 @@ CREATE TABLE IF NOT EXISTS feedback_reports (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 
-const createWeComIntegrationsTable = `
-CREATE TABLE IF NOT EXISTS wecom_integrations (
-    bot_uid BIGINT PRIMARY KEY,
-    corp_id VARCHAR(128) NOT NULL,
+const createWeComSuiteStateTable = `
+CREATE TABLE IF NOT EXISTS wecom_suite_state (
+    suite_id VARCHAR(128) PRIMARY KEY,
+    suite_ticket TEXT DEFAULT NULL,
+    suite_access_token TEXT DEFAULT NULL,
+    suite_access_token_expires_at TIMESTAMP NULL DEFAULT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createWeComSuiteAuthsTable = `
+CREATE TABLE IF NOT EXISTS wecom_suite_auths (
+    auth_corp_id VARCHAR(128) NOT NULL,
     agent_id VARCHAR(64) NOT NULL,
-    app_secret TEXT NOT NULL,
-    callback_token VARCHAR(255) NOT NULL,
-    encoding_aes_key VARCHAR(255) NOT NULL,
-    api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://qyapi.weixin.qq.com',
+    auth_corp_name VARCHAR(255) DEFAULT '',
+    permanent_code TEXT NOT NULL,
+    bot_uid BIGINT DEFAULT NULL,
     enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (bot_uid) REFERENCES users(id) ON DELETE CASCADE
+    PRIMARY KEY (auth_corp_id, agent_id),
+    INDEX idx_wecom_suite_auth_bot (bot_uid),
+    FOREIGN KEY (bot_uid) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 

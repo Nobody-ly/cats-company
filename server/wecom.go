@@ -12,12 +12,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,12 +33,23 @@ const defaultWeComAPIBaseURL = "https://qyapi.weixin.qq.com"
 type WeComHandler struct {
 	db     *mysql.Adapter
 	client *http.Client
+	suite  weComSuiteConfig
 
-	mu       sync.Mutex
-	queues   map[int64][]WeComEvent
-	notify   map[int64]chan struct{}
-	seen     map[int64]map[string]time.Time
-	tokenMap map[int64]weComAccessToken
+	mu          sync.Mutex
+	queues      map[int64][]WeComEvent
+	notify      map[int64]chan struct{}
+	seen        map[string]time.Time
+	corpTokens  map[string]weComAccessToken
+	suiteTokens map[string]weComAccessToken
+}
+
+type weComSuiteConfig struct {
+	SuiteID        string
+	SuiteSecret    string
+	Token          string
+	EncodingAESKey string
+	APIBaseURL     string
+	PublicBaseURL  string
 }
 
 type weComAccessToken struct {
@@ -48,21 +59,18 @@ type weComAccessToken struct {
 
 type WeComEvent struct {
 	ID         string `json:"id"`
-	FromUser  string `json:"from_user"`
-	ToUser    string `json:"to_user"`
-	MsgType   string `json:"msg_type"`
-	Content   string `json:"content"`
-	AgentID   string `json:"agent_id,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	AuthCorpID string `json:"auth_corp_id,omitempty"`
+	FromUser   string `json:"from_user"`
+	ToUser     string `json:"to_user"`
+	MsgType    string `json:"msg_type"`
+	Content    string `json:"content"`
+	AgentID    string `json:"agent_id,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
 }
 
 type weComConfigRequest struct {
-	CorpID         string `json:"corp_id"`
-	AgentID        string `json:"agent_id"`
-	Secret         string `json:"secret"`
-	CallbackToken  string `json:"callback_token"`
-	EncodingAESKey string `json:"encoding_aes_key"`
-	APIBaseURL     string `json:"api_base_url"`
+	AuthCorpID string `json:"auth_corp_id"`
+	AgentID    string `json:"agent_id"`
 }
 
 type weComSendRequest struct {
@@ -77,6 +85,11 @@ type weComEncryptedEnvelope struct {
 
 type weComPlainMessage struct {
 	XMLName      xml.Name `xml:"xml"`
+	SuiteID      string   `xml:"SuiteId"`
+	InfoType     string   `xml:"InfoType"`
+	SuiteTicket  string   `xml:"SuiteTicket"`
+	AuthCode     string   `xml:"AuthCode"`
+	AuthCorpID   string   `xml:"AuthCorpId"`
 	ToUserName   string   `xml:"ToUserName"`
 	FromUserName string   `xml:"FromUserName"`
 	CreateTime   int64    `xml:"CreateTime"`
@@ -89,12 +102,25 @@ type weComPlainMessage struct {
 
 func NewWeComHandler(db *mysql.Adapter) *WeComHandler {
 	return &WeComHandler{
-		db:     db,
-		client: &http.Client{Timeout: 15 * time.Second},
-		queues:   make(map[int64][]WeComEvent),
-		notify:   make(map[int64]chan struct{}),
-		seen:     make(map[int64]map[string]time.Time),
-		tokenMap: make(map[int64]weComAccessToken),
+		db:          db,
+		client:      &http.Client{Timeout: 15 * time.Second},
+		suite:       loadWeComSuiteConfigFromEnv(),
+		queues:      make(map[int64][]WeComEvent),
+		notify:      make(map[int64]chan struct{}),
+		seen:        make(map[string]time.Time),
+		corpTokens:  make(map[string]weComAccessToken),
+		suiteTokens: make(map[string]weComAccessToken),
+	}
+}
+
+func loadWeComSuiteConfigFromEnv() weComSuiteConfig {
+	return weComSuiteConfig{
+		SuiteID:        strings.TrimSpace(os.Getenv("WECOM_SUITE_ID")),
+		SuiteSecret:    strings.TrimSpace(os.Getenv("WECOM_SUITE_SECRET")),
+		Token:          strings.TrimSpace(os.Getenv("WECOM_SUITE_TOKEN")),
+		EncodingAESKey: strings.TrimSpace(os.Getenv("WECOM_SUITE_ENCODING_AES_KEY")),
+		APIBaseURL:     strings.TrimRight(firstNonEmptyWeCom(os.Getenv("WECOM_API_BASE_URL"), defaultWeComAPIBaseURL), "/"),
+		PublicBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("WECOM_PUBLIC_BASE_URL")), "/"),
 	}
 }
 
@@ -107,28 +133,30 @@ func (h *WeComHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		cfg, err := h.db.GetWeComConfig(botUID)
+		auth, err := h.db.GetWeComSuiteAuthByBotUID(botUID)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load wecom config"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load wecom binding"})
 			return
 		}
-		writeJSON(w, http.StatusOK, h.configResponse(r, botUID, cfg))
+		writeJSON(w, http.StatusOK, h.configResponse(r, auth))
 	case http.MethodPost:
 		var req weComConfigRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 			return
 		}
-		cfg, err := normalizeWeComConfig(botUID, req)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		req.AuthCorpID = strings.TrimSpace(req.AuthCorpID)
+		req.AgentID = strings.TrimSpace(req.AgentID)
+		if req.AuthCorpID == "" || req.AgentID == "" {
+			writeJSON(w, http.StatusOK, h.configResponse(r, nil))
 			return
 		}
-		if err := h.db.SaveWeComConfig(botUID, cfg); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save wecom config"})
+		if err := h.db.BindWeComSuiteAuth(botUID, req.AuthCorpID, req.AgentID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "wecom authorization not found; install the third-party app first"})
 			return
 		}
-		writeJSON(w, http.StatusOK, h.configResponse(r, botUID, cfg))
+		auth, _ := h.db.GetWeComSuiteAuthByBotUID(botUID)
+		writeJSON(w, http.StatusOK, h.configResponse(r, auth))
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
@@ -189,60 +217,57 @@ func (h *WeComHandler) HandleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := h.db.GetWeComConfig(botUID)
+	auth, err := h.db.GetWeComSuiteAuthByBotUID(botUID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load wecom config"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load wecom authorization"})
 		return
 	}
-	if cfg == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "wecom config not found"})
-		return
-	}
-	if strings.TrimSpace(cfg.AgentID) == "" || strings.TrimSpace(cfg.Secret) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "wecom agent_id and secret required before sending messages"})
+	if auth == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "wecom authorization not bound"})
 		return
 	}
 
-	if err := h.sendText(r.Context(), cfg, req.ToUser, req.Content); err != nil {
-		log.Printf("[wecom] send failed bot=%d to=%s: %v", botUID, req.ToUser, err)
+	if err := h.sendText(r.Context(), auth, req.ToUser, req.Content); err != nil {
+		log.Printf("[wecom] send failed bot=%d corp=%s to=%s: %v", botUID, auth.AuthCorpID, req.ToUser, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "wecom send failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (h *WeComHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
-	botUID, err := parseWeComCallbackBotUID(r.URL.Path)
-	if err != nil {
-		http.Error(w, "bad callback path", http.StatusBadRequest)
-		return
-	}
+func (h *WeComHandler) HandleSuiteDataCallback(w http.ResponseWriter, r *http.Request) {
+	h.handleSuiteCallback(w, r, parseWeComSuiteCallbackCorpID(r.URL.Path))
+}
 
-	cfg, err := h.db.GetWeComConfig(botUID)
-	if err != nil || cfg == nil {
-		http.Error(w, "wecom config not found", http.StatusNotFound)
+func (h *WeComHandler) HandleSuiteCommandCallback(w http.ResponseWriter, r *http.Request) {
+	h.handleSuiteCallback(w, r, "")
+}
+
+func (h *WeComHandler) handleSuiteCallback(w http.ResponseWriter, r *http.Request, pathCorpID string) {
+	if !h.suite.isConfigured() {
+		http.Error(w, "wecom suite is not configured", http.StatusServiceUnavailable)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		h.handleVerifyCallback(w, r, cfg)
+		h.handleVerifyCallback(w, r)
 	case http.MethodPost:
-		h.handleMessageCallback(w, r, botUID, cfg)
+		h.handleMessageCallback(w, r, pathCorpID)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func (h *WeComHandler) handleVerifyCallback(w http.ResponseWriter, r *http.Request, cfg *types.WeComConfig) {
+func (h *WeComHandler) handleVerifyCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	encryptedEcho := q.Get("echostr")
-	if err := verifyWeComSignature(cfg.CallbackToken, q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce"), encryptedEcho); err != nil {
+	if err := verifyWeComSignature(h.suite.Token, q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce"), encryptedEcho); err != nil {
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}
 
-	plain, err := decryptWeComPayload(cfg.EncodingAESKey, encryptedEcho, cfg.CorpID)
+	plain, err := decryptWeComPayload(h.suite.EncodingAESKey, encryptedEcho, h.suite.SuiteID)
 	if err != nil {
 		http.Error(w, "decrypt failed", http.StatusBadRequest)
 		return
@@ -252,7 +277,7 @@ func (h *WeComHandler) handleVerifyCallback(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(plain)
 }
 
-func (h *WeComHandler) handleMessageCallback(w http.ResponseWriter, r *http.Request, botUID int64, cfg *types.WeComConfig) {
+func (h *WeComHandler) handleMessageCallback(w http.ResponseWriter, r *http.Request, pathCorpID string) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 	if err != nil {
 		http.Error(w, "read failed", http.StatusBadRequest)
@@ -266,12 +291,12 @@ func (h *WeComHandler) handleMessageCallback(w http.ResponseWriter, r *http.Requ
 	}
 
 	q := r.URL.Query()
-	if err := verifyWeComSignature(cfg.CallbackToken, q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce"), envelope.Encrypt); err != nil {
+	if err := verifyWeComSignature(h.suite.Token, q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce"), envelope.Encrypt); err != nil {
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}
 
-	plainXML, err := decryptWeComPayload(cfg.EncodingAESKey, envelope.Encrypt, cfg.CorpID)
+	plainXML, err := decryptWeComPayload(h.suite.EncodingAESKey, envelope.Encrypt, h.suite.SuiteID)
 	if err != nil {
 		http.Error(w, "decrypt failed", http.StatusBadRequest)
 		return
@@ -283,37 +308,68 @@ func (h *WeComHandler) handleMessageCallback(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	event := weComEventFromMessage(msg)
-	if event.ID == "" {
-		event.ID = hex.EncodeToString(sha1Bytes(plainXML))
+	if err := h.dispatchSuiteMessage(r.Context(), msg, pathCorpID, plainXML); err != nil {
+		log.Printf("[wecom] callback dispatch failed: %v", err)
 	}
-	if !h.markSeen(botUID, event.ID) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("success"))
-		return
-	}
-	h.enqueue(botUID, event)
-
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("success"))
 }
 
-func (h *WeComHandler) configResponse(r *http.Request, botUID int64, cfg *types.WeComConfig) map[string]interface{} {
-	resp := map[string]interface{}{
-		"configured":   cfg != nil,
-		"callback_url": buildWeComCallbackURL(r, botUID),
+func (h *WeComHandler) dispatchSuiteMessage(ctx context.Context, msg weComPlainMessage, pathCorpID string, raw []byte) error {
+	infoType := strings.TrimSpace(msg.InfoType)
+	switch infoType {
+	case "suite_ticket":
+		if strings.TrimSpace(msg.SuiteTicket) == "" {
+			return nil
+		}
+		return h.db.SaveWeComSuiteTicket(h.suite.SuiteID, strings.TrimSpace(msg.SuiteTicket))
+	case "create_auth":
+		if strings.TrimSpace(msg.AuthCode) == "" {
+			return nil
+		}
+		return h.exchangeAndSavePermanentCode(ctx, strings.TrimSpace(msg.AuthCode), 0)
+	case "change_auth":
+		if strings.TrimSpace(msg.AuthCode) == "" {
+			return nil
+		}
+		return h.exchangeAndSavePermanentCode(ctx, strings.TrimSpace(msg.AuthCode), 0)
 	}
-	if cfg != nil {
-		resp["corp_id"] = cfg.CorpID
-		resp["agent_id"] = cfg.AgentID
-		resp["api_base_url"] = cfg.APIBaseURL
-		resp["secret_present"] = cfg.Secret != ""
-		resp["callback_token_present"] = cfg.CallbackToken != ""
-		resp["encoding_aes_key_present"] = cfg.EncodingAESKey != ""
-		resp["ready_for_callback"] = cfg.CorpID != "" && cfg.CallbackToken != "" && cfg.EncodingAESKey != ""
-		resp["ready_for_send"] = cfg.CorpID != "" && cfg.AgentID != "" && cfg.Secret != "" && cfg.CallbackToken != "" && cfg.EncodingAESKey != ""
-		resp["enabled"] = cfg.Enabled
+
+	event := weComEventFromMessage(msg, pathCorpID)
+	if event.ID == "" {
+		event.ID = hex.EncodeToString(sha1Bytes(raw))
+	}
+	if !h.markSeen(event.AuthCorpID, event.AgentID, event.ID) {
+		return nil
+	}
+
+	auth, err := h.db.GetWeComSuiteAuth(event.AuthCorpID, event.AgentID)
+	if err != nil || auth == nil || auth.BotUID == 0 {
+		log.Printf("[wecom] unbound message ignored corp=%s agent=%s", event.AuthCorpID, event.AgentID)
+		return err
+	}
+	h.enqueue(auth.BotUID, event)
+	return nil
+}
+
+func (h *WeComHandler) configResponse(r *http.Request, auth *types.WeComSuiteAuth) map[string]interface{} {
+	resp := map[string]interface{}{
+		"mode":                     "suite",
+		"suite_configured":         h.suite.isConfigured(),
+		"suite_id_present":         h.suite.SuiteID != "",
+		"suite_secret_present":     h.suite.SuiteSecret != "",
+		"token_present":            h.suite.Token != "",
+		"encoding_aes_key_present": h.suite.EncodingAESKey != "",
+		"data_callback_url":        h.suite.callbackURL(r, "/api/wecom/suite/data"),
+		"command_callback_url":     h.suite.callbackURL(r, "/api/wecom/suite/command"),
+		"api_base_url":             h.suite.APIBaseURL,
+		"bound":                    auth != nil,
+	}
+	if auth != nil {
+		resp["auth_corp_id"] = auth.AuthCorpID
+		resp["auth_corp_name"] = auth.AuthCorpName
+		resp["agent_id"] = auth.AgentID
 	}
 	return resp
 }
@@ -355,35 +411,73 @@ func (h *WeComHandler) getNotifyChanLocked(botUID int64) chan struct{} {
 	return ch
 }
 
-func (h *WeComHandler) markSeen(botUID int64, id string) bool {
+func (h *WeComHandler) markSeen(corpID, agentID, id string) bool {
 	now := time.Now()
+	key := corpID + ":" + agentID + ":" + id
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
-	seen := h.seen[botUID]
-	if seen == nil {
-		seen = make(map[string]time.Time)
-		h.seen[botUID] = seen
-	}
-	for key, ts := range seen {
+	for seenKey, ts := range h.seen {
 		if now.Sub(ts) > 10*time.Minute {
-			delete(seen, key)
+			delete(h.seen, seenKey)
 		}
 	}
-	if _, ok := seen[id]; ok {
+	if _, ok := h.seen[key]; ok {
 		return false
 	}
-	seen[id] = now
+	h.seen[key] = now
 	return true
 }
 
-func (h *WeComHandler) sendText(ctx context.Context, cfg *types.WeComConfig, toUser, content string) error {
-	token, err := h.accessToken(ctx, cfg)
+func (h *WeComHandler) exchangeAndSavePermanentCode(ctx context.Context, authCode string, botUID int64) error {
+	suiteToken, err := h.suiteAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	payload := map[string]string{"auth_code": authCode}
+	var parsed struct {
+		ErrCode       int    `json:"errcode"`
+		ErrMsg        string `json:"errmsg"`
+		PermanentCode string `json:"permanent_code"`
+		AuthCorpInfo  struct {
+			CorpID   string `json:"corpid"`
+			CorpName string `json:"corp_name"`
+		} `json:"auth_corp_info"`
+		AuthInfo struct {
+			Agent []struct {
+				AgentID int `json:"agentid"`
+			} `json:"agent"`
+		} `json:"auth_info"`
+	}
+	if err := h.postWeComJSON(ctx, "/cgi-bin/service/get_permanent_code?suite_access_token="+url.QueryEscape(suiteToken), payload, &parsed); err != nil {
+		return err
+	}
+	if parsed.ErrCode != 0 || parsed.PermanentCode == "" || parsed.AuthCorpInfo.CorpID == "" {
+		return fmt.Errorf("wecom permanent_code errcode=%d errmsg=%s", parsed.ErrCode, parsed.ErrMsg)
+	}
+	agentID := ""
+	if len(parsed.AuthInfo.Agent) > 0 {
+		agentID = strconv.Itoa(parsed.AuthInfo.Agent[0].AgentID)
+	}
+	if agentID == "" {
+		return fmt.Errorf("wecom auth has no agent id")
+	}
+	return h.db.SaveWeComSuiteAuth(&types.WeComSuiteAuth{
+		AuthCorpID:    parsed.AuthCorpInfo.CorpID,
+		AuthCorpName:  parsed.AuthCorpInfo.CorpName,
+		AgentID:       agentID,
+		PermanentCode: parsed.PermanentCode,
+		BotUID:        botUID,
+		Enabled:       true,
+	})
+}
+
+func (h *WeComHandler) sendText(ctx context.Context, auth *types.WeComSuiteAuth, toUser, content string) error {
+	token, err := h.corpAccessToken(ctx, auth)
 	if err != nil {
 		return err
 	}
 
-	agentID, err := strconv.Atoi(strings.TrimSpace(cfg.AgentID))
+	agentID, err := strconv.Atoi(strings.TrimSpace(auth.AgentID))
 	if err != nil {
 		return fmt.Errorf("invalid wecom agent id: %w", err)
 	}
@@ -392,115 +486,131 @@ func (h *WeComHandler) sendText(ctx context.Context, cfg *types.WeComConfig, toU
 		"touser":  toUser,
 		"msgtype": "text",
 		"agentid": agentID,
-		"text": map[string]string{
-			"content": content,
-		},
+		"text":    map[string]string{"content": content},
 	}
-	body, _ := json.Marshal(payload)
-	endpoint := strings.TrimRight(cfg.APIBaseURL, "/") + "/cgi-bin/message/send?access_token=" + url.QueryEscape(token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
 	var parsed struct {
 		ErrCode int    `json:"errcode"`
 		ErrMsg  string `json:"errmsg"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return fmt.Errorf("decode wecom send response: %w", err)
+	if err := h.postWeComJSON(ctx, "/cgi-bin/message/send?access_token="+url.QueryEscape(token), payload, &parsed); err != nil {
+		return err
 	}
-	if resp.StatusCode >= 300 || parsed.ErrCode != 0 {
+	if parsed.ErrCode != 0 {
 		return fmt.Errorf("wecom send errcode=%d errmsg=%s", parsed.ErrCode, parsed.ErrMsg)
 	}
 	return nil
 }
 
-func (h *WeComHandler) accessToken(ctx context.Context, cfg *types.WeComConfig) (string, error) {
+func (h *WeComHandler) suiteAccessToken(ctx context.Context) (string, error) {
 	h.mu.Lock()
-	cached := h.tokenMap[cfg.BotUID]
+	cached := h.suiteTokens[h.suite.SuiteID]
 	if cached.token != "" && time.Now().Before(cached.expiresAt.Add(-2*time.Minute)) {
 		h.mu.Unlock()
 		return cached.token, nil
 	}
 	h.mu.Unlock()
 
-	endpoint := fmt.Sprintf(
-		"%s/cgi-bin/gettoken?corpid=%s&corpsecret=%s",
-		strings.TrimRight(cfg.APIBaseURL, "/"),
-		url.QueryEscape(cfg.CorpID),
-		url.QueryEscape(cfg.Secret),
-	)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	state, err := h.db.GetWeComSuiteState(h.suite.SuiteID)
 	if err != nil {
 		return "", err
 	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return "", err
+	if state != nil && state.SuiteAccessToken != "" && state.SuiteAccessTokenExpiresAt != nil && time.Now().Before(state.SuiteAccessTokenExpiresAt.Add(-2*time.Minute)) {
+		return state.SuiteAccessToken, nil
 	}
-	defer resp.Body.Close()
+	if state == nil || strings.TrimSpace(state.SuiteTicket) == "" {
+		return "", fmt.Errorf("wecom suite_ticket is not ready yet")
+	}
 
+	payload := map[string]string{
+		"suite_id":     h.suite.SuiteID,
+		"suite_secret": h.suite.SuiteSecret,
+		"suite_ticket": state.SuiteTicket,
+	}
+	var parsed struct {
+		ErrCode          int    `json:"errcode"`
+		ErrMsg           string `json:"errmsg"`
+		SuiteAccessToken string `json:"suite_access_token"`
+		ExpiresIn        int    `json:"expires_in"`
+	}
+	if err := h.postWeComJSON(ctx, "/cgi-bin/service/get_suite_token", payload, &parsed); err != nil {
+		return "", err
+	}
+	if parsed.ErrCode != 0 || parsed.SuiteAccessToken == "" {
+		return "", fmt.Errorf("wecom suite token errcode=%d errmsg=%s", parsed.ErrCode, parsed.ErrMsg)
+	}
+	if parsed.ExpiresIn <= 0 {
+		parsed.ExpiresIn = 7200
+	}
+	expiresAt := time.Now().Add(time.Duration(parsed.ExpiresIn) * time.Second)
+	if err := h.db.SaveWeComSuiteToken(h.suite.SuiteID, parsed.SuiteAccessToken, expiresAt); err != nil {
+		return "", err
+	}
+	h.mu.Lock()
+	h.suiteTokens[h.suite.SuiteID] = weComAccessToken{token: parsed.SuiteAccessToken, expiresAt: expiresAt}
+	h.mu.Unlock()
+	return parsed.SuiteAccessToken, nil
+}
+
+func (h *WeComHandler) corpAccessToken(ctx context.Context, auth *types.WeComSuiteAuth) (string, error) {
+	cacheKey := auth.AuthCorpID + ":" + auth.AgentID
+	h.mu.Lock()
+	cached := h.corpTokens[cacheKey]
+	if cached.token != "" && time.Now().Before(cached.expiresAt.Add(-2*time.Minute)) {
+		h.mu.Unlock()
+		return cached.token, nil
+	}
+	h.mu.Unlock()
+
+	suiteToken, err := h.suiteAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]string{
+		"auth_corpid":    auth.AuthCorpID,
+		"permanent_code": auth.PermanentCode,
+	}
 	var parsed struct {
 		ErrCode     int    `json:"errcode"`
 		ErrMsg      string `json:"errmsg"`
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", fmt.Errorf("decode wecom token response: %w", err)
+	if err := h.postWeComJSON(ctx, "/cgi-bin/service/get_corp_token?suite_access_token="+url.QueryEscape(suiteToken), payload, &parsed); err != nil {
+		return "", err
 	}
-	if resp.StatusCode >= 300 || parsed.ErrCode != 0 || parsed.AccessToken == "" {
-		return "", fmt.Errorf("wecom token errcode=%d errmsg=%s", parsed.ErrCode, parsed.ErrMsg)
+	if parsed.ErrCode != 0 || parsed.AccessToken == "" {
+		return "", fmt.Errorf("wecom corp token errcode=%d errmsg=%s", parsed.ErrCode, parsed.ErrMsg)
 	}
 	if parsed.ExpiresIn <= 0 {
 		parsed.ExpiresIn = 7200
 	}
-
+	token := weComAccessToken{token: parsed.AccessToken, expiresAt: time.Now().Add(time.Duration(parsed.ExpiresIn) * time.Second)}
 	h.mu.Lock()
-	h.tokenMap[cfg.BotUID] = weComAccessToken{
-		token:     parsed.AccessToken,
-		expiresAt: time.Now().Add(time.Duration(parsed.ExpiresIn) * time.Second),
-	}
+	h.corpTokens[cacheKey] = token
 	h.mu.Unlock()
-	return parsed.AccessToken, nil
+	return token.token, nil
 }
 
-func normalizeWeComConfig(botUID int64, req weComConfigRequest) (*types.WeComConfig, error) {
-	cfg := &types.WeComConfig{
-		BotUID:         botUID,
-		CorpID:         strings.TrimSpace(req.CorpID),
-		AgentID:        strings.TrimSpace(req.AgentID),
-		Secret:         strings.TrimSpace(req.Secret),
-		CallbackToken:  strings.TrimSpace(req.CallbackToken),
-		EncodingAESKey: strings.TrimSpace(req.EncodingAESKey),
-		APIBaseURL:     strings.TrimRight(strings.TrimSpace(req.APIBaseURL), "/"),
-		Enabled:        true,
+func (h *WeComHandler) postWeComJSON(ctx context.Context, path string, payload interface{}, out interface{}) error {
+	body, _ := json.Marshal(payload)
+	endpoint := strings.TrimRight(h.suite.APIBaseURL, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
 	}
-	if cfg.APIBaseURL == "" {
-		cfg.APIBaseURL = defaultWeComAPIBaseURL
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
 	}
-
-	switch {
-	case cfg.CorpID == "":
-		return nil, errors.New("corp_id required")
-	case cfg.CallbackToken == "":
-		return nil, errors.New("callback_token required")
-	case cfg.EncodingAESKey == "":
-		return nil, errors.New("encoding_aes_key required")
-	case len(cfg.EncodingAESKey) != 43:
-		return nil, errors.New("encoding_aes_key must be 43 chars")
-	case !isHTTPURL(cfg.APIBaseURL):
-		return nil, errors.New("api_base_url must be http(s) url")
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode wecom response: %w", err)
 	}
-	return cfg, nil
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("wecom http status: %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func parseLongPollTimeout(raw string) time.Duration {
@@ -519,16 +629,23 @@ func parseLongPollTimeout(raw string) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func parseWeComCallbackBotUID(path string) (int64, error) {
-	raw := strings.TrimPrefix(path, "/api/wecom/callback/")
+func parseWeComSuiteCallbackCorpID(path string) string {
+	raw := strings.TrimPrefix(path, "/api/wecom/suite/data")
 	raw = strings.Trim(raw, "/")
 	if raw == "" || strings.Contains(raw, "/") {
-		return 0, fmt.Errorf("invalid callback path")
+		return ""
 	}
-	return strconv.ParseInt(raw, 10, 64)
+	return raw
 }
 
-func buildWeComCallbackURL(r *http.Request, botUID int64) string {
+func (c weComSuiteConfig) callbackURL(r *http.Request, path string) string {
+	if c.PublicBaseURL != "" {
+		return c.PublicBaseURL + path
+	}
+	return buildWeComSuiteCallbackURL(r, path)
+}
+
+func buildWeComSuiteCallbackURL(r *http.Request, path string) string {
 	scheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
 	if scheme == "" {
 		if r.TLS != nil {
@@ -541,7 +658,7 @@ func buildWeComCallbackURL(r *http.Request, botUID int64) string {
 	if host == "" {
 		host = r.Host
 	}
-	return fmt.Sprintf("%s://%s/api/wecom/callback/%d", scheme, host, botUID)
+	return fmt.Sprintf("%s://%s%s", scheme, host, path)
 }
 
 func verifyWeComSignature(token, signature, timestamp, nonce, encrypted string) error {
@@ -555,7 +672,7 @@ func verifyWeComSignature(token, signature, timestamp, nonce, encrypted string) 
 	return nil
 }
 
-func decryptWeComPayload(encodingAESKey, encrypted, corpID string) ([]byte, error) {
+func decryptWeComPayload(encodingAESKey, encrypted, receiveID string) ([]byte, error) {
 	key, err := base64.StdEncoding.DecodeString(encodingAESKey + "=")
 	if err != nil {
 		return nil, fmt.Errorf("decode aes key: %w", err)
@@ -590,15 +707,13 @@ func decryptWeComPayload(encodingAESKey, encrypted, corpID string) ([]byte, erro
 	msgLen := int(binary.BigEndian.Uint32(plain[16:20]))
 	start := 20
 	end := start + msgLen
-	if msgLen < 0 || end > len(plain) {
+	if end > len(plain) {
 		return nil, fmt.Errorf("invalid message length")
 	}
 
-	if corpID != "" {
-		actualCorpID := string(plain[end:])
-		if actualCorpID != "" && actualCorpID != corpID {
-			return nil, fmt.Errorf("corp id mismatch")
-		}
+	actualReceiveID := string(plain[end:])
+	if receiveID != "" && actualReceiveID != "" && actualReceiveID != receiveID {
+		return nil, fmt.Errorf("receive id mismatch")
 	}
 	return plain[start:end], nil
 }
@@ -619,19 +734,21 @@ func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
 	return data[:len(data)-padding], nil
 }
 
-func weComEventFromMessage(msg weComPlainMessage) WeComEvent {
+func weComEventFromMessage(msg weComPlainMessage, pathCorpID string) WeComEvent {
+	authCorpID := firstNonEmptyWeCom(strings.TrimSpace(msg.AuthCorpID), strings.TrimSpace(pathCorpID))
 	content := strings.TrimSpace(msg.Content)
 	if content == "" && msg.MsgType != "text" {
 		content = fmt.Sprintf("[Enterprise WeChat %s message is not supported yet]", msg.MsgType)
 	}
 	return WeComEvent{
 		ID:         strings.TrimSpace(msg.MsgID),
+		AuthCorpID: authCorpID,
 		FromUser:   strings.TrimSpace(msg.FromUserName),
 		ToUser:     strings.TrimSpace(msg.ToUserName),
 		MsgType:    strings.TrimSpace(msg.MsgType),
 		Content:    content,
 		AgentID:    strings.TrimSpace(msg.AgentID),
-		CreatedAt: msg.CreateTime,
+		CreatedAt:  msg.CreateTime,
 	}
 }
 
@@ -640,7 +757,15 @@ func sha1Bytes(data []byte) []byte {
 	return sum[:]
 }
 
-func isHTTPURL(value string) bool {
-	parsed, err := url.Parse(value)
-	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
+func (c weComSuiteConfig) isConfigured() bool {
+	return c.SuiteID != "" && c.SuiteSecret != "" && c.Token != "" && c.EncodingAESKey != "" && c.APIBaseURL != ""
+}
+
+func firstNonEmptyWeCom(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
