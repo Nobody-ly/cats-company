@@ -97,6 +97,7 @@ func main() {
 	uploadHandler := server.NewUploadHandler("./uploads", "/uploads")
 	readerHandler := server.NewReaderProxyHandlerFromEnv()
 	feedbackHandler := server.NewFeedbackHandler(db)
+	wecomHandler := server.NewWeComHandler(db)
 	// usageHandler := server.NewUsageHandler(db)
 
 	// HTTP routes
@@ -147,6 +148,10 @@ func main() {
 	mux.HandleFunc("/api/messages", authWithDB(msgHandler.HandleGetMessages))
 	mux.HandleFunc("/api/conversations", authWithDB(conversationHandler.HandleList))
 	mux.HandleFunc("/api/feedback", authWithDB(feedbackHandler.HandleCreateFeedback))
+	mux.HandleFunc("/api/wecom/config", authWithDB(wecomHandler.HandleConfig))
+	mux.HandleFunc("/api/wecom/events", authWithDB(wecomHandler.HandleEvents))
+	mux.HandleFunc("/api/wecom/send", authWithDB(wecomHandler.HandleSend))
+	mux.HandleFunc("/api/wecom/callback/", wecomHandler.HandleCallback)
 
 	// Online status API
 	mux.HandleFunc("/api/users/online", server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
