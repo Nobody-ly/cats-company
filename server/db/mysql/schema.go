@@ -15,7 +15,6 @@ func (a *Adapter) CreateSchema() error {
 		createGroupsTable,
 		createGroupMembersTable,
 		createFeedbackReportsTable,
-		createWeComIntegrationsTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -201,22 +200,6 @@ CREATE TABLE IF NOT EXISTS feedback_reports (
     INDEX idx_feedback_user_created (user_id, created_at),
     INDEX idx_feedback_status_created (status, created_at),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-`
-
-const createWeComIntegrationsTable = `
-CREATE TABLE IF NOT EXISTS wecom_integrations (
-    bot_uid BIGINT PRIMARY KEY,
-    corp_id VARCHAR(128) NOT NULL,
-    agent_id VARCHAR(64) NOT NULL,
-    app_secret TEXT NOT NULL,
-    callback_token VARCHAR(255) NOT NULL,
-    encoding_aes_key VARCHAR(255) NOT NULL,
-    api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://qyapi.weixin.qq.com',
-    enabled TINYINT(1) NOT NULL DEFAULT 1,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (bot_uid) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 

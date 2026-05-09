@@ -195,20 +195,6 @@ type BotConfig struct {
 	Config      map[string]string `json:"config,omitempty"`
 }
 
-// WeComConfig stores one Enterprise WeChat self-built app binding for a bot.
-type WeComConfig struct {
-	BotUID         int64     `json:"bot_uid"`
-	CorpID         string    `json:"corp_id"`
-	AgentID        string    `json:"agent_id"`
-	Secret         string    `json:"-"`
-	CallbackToken  string    `json:"-"`
-	EncodingAESKey string    `json:"-"`
-	APIBaseURL     string    `json:"api_base_url"`
-	Enabled        bool      `json:"enabled"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
 // Group represents a chat group.
 type Group struct {
 	ID           int64     `json:"id"`
