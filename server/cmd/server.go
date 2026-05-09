@@ -151,9 +151,7 @@ func main() {
 	mux.HandleFunc("/api/wecom/config", authWithDB(wecomHandler.HandleConfig))
 	mux.HandleFunc("/api/wecom/events", authWithDB(wecomHandler.HandleEvents))
 	mux.HandleFunc("/api/wecom/send", authWithDB(wecomHandler.HandleSend))
-	mux.HandleFunc("/api/wecom/suite/data", wecomHandler.HandleSuiteDataCallback)
-	mux.HandleFunc("/api/wecom/suite/data/", wecomHandler.HandleSuiteDataCallback)
-	mux.HandleFunc("/api/wecom/suite/command", wecomHandler.HandleSuiteCommandCallback)
+	mux.HandleFunc("/api/wecom/callback/", wecomHandler.HandleCallback)
 
 	// Online status API
 	mux.HandleFunc("/api/users/online", server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
