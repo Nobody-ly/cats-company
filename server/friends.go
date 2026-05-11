@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/openchat/openchat/server/db/mysql"
 )
@@ -176,7 +177,8 @@ func (h *FriendHandler) HandleGetPendingRequests(w http.ResponseWriter, r *http.
 
 // HandleSearchUsers handles GET /api/users/search?q=xxx
 func (h *FriendHandler) HandleSearchUsers(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
+	uid := UIDFromContext(r.Context())
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if len(query) < 2 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query too short"})
 		return
@@ -188,7 +190,14 @@ func (h *FriendHandler) HandleSearchUsers(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"users": users})
+	filtered := users[:0]
+	for _, user := range users {
+		if user.ID != uid {
+			filtered = append(filtered, user)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"users": filtered})
 }
 
 // p2pTopicID generates a deterministic topic ID for a P2P conversation.

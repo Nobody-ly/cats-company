@@ -212,6 +212,7 @@ type GroupMember struct {
 	GroupID  int64     `json:"group_id"`
 	UserID   int64     `json:"user_id"`
 	Role     string    `json:"role"` // "owner", "admin", "member"
+	Muted    bool      `json:"muted,omitempty"`
 	JoinedAt time.Time `json:"joined_at"`
 	// Joined fields from user table (populated by queries)
 	Username    string `json:"username,omitempty"`

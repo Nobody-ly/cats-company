@@ -3,28 +3,42 @@ import { api } from '../api';
 import t from '../i18n';
 import Avatar from './avatar';
 
-export default function AddFriend({ onClose, onSent }) {
+export default function AddFriend({ currentUser, onClose, onSent }) {
   const [query, setQuery] = useState('');
+  const [message, setMessage] = useState(() => defaultFriendMessage(currentUser));
   const [results, setResults] = useState([]);
   const [sent, setSent] = useState(new Set());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSearch = async () => {
-    if (query.length < 2) return;
+    if (query.trim().length < 2) {
+      setError(t('friend_search_too_short'));
+      return;
+    }
+
+    setLoading(true);
+    setError('');
     try {
-      const res = await api.searchUsers(query);
+      const res = await api.searchUsers(query.trim());
       setResults(res.users || []);
     } catch (e) {
       console.error('search:', e);
+      setError(e.message || t('error_server'));
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleSend = async (userId) => {
+    setError('');
     try {
-      await api.sendFriendRequest(userId, message);
+      await api.sendFriendRequest(userId, message.trim());
       setSent((prev) => new Set([...prev, userId]));
-      onSent();
+      if (onSent) onSent();
     } catch (e) {
       console.error('send request:', e);
+      setError(e.message || t('error_server'));
     }
   };
 
@@ -42,9 +56,17 @@ export default function AddFriend({ onClose, onSent }) {
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           />
           <button className="oc-btn oc-btn-primary" onClick={handleSearch}>
-            {t('search')}
+            {loading ? t('loading') : t('search')}
           </button>
         </div>
+        <input
+          className="oc-auth-input"
+          placeholder={t('friend_request_message')}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+
+        {error && <div className="oc-form-error">{error}</div>}
 
         {results.map((user) => (
           <div key={user.id} className="oc-contact-item">
@@ -81,4 +103,9 @@ export default function AddFriend({ onClose, onSent }) {
       </div>
     </div>
   );
+}
+
+function defaultFriendMessage(user) {
+  const name = user?.display_name || user?.username || '';
+  return name ? t('friend_request_default_msg', { name }) : '';
 }

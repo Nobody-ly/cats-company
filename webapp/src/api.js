@@ -147,6 +147,10 @@ export const api = {
   kickMember: (groupId, userId) => request('POST', '/api/groups/kick', { group_id: groupId, user_id: userId }),
   disbandGroup: (groupId) => request('POST', '/api/groups/disband', { group_id: groupId }),
   updateMemberRole: (groupId, userId, role) => request('POST', '/api/groups/role', { group_id: groupId, user_id: userId, role }),
+  muteMember: (groupId, userId) => request('POST', '/api/groups/mute', { group_id: groupId, user_id: userId }),
+  unmuteMember: (groupId, userId) => request('POST', '/api/groups/unmute', { group_id: groupId, user_id: userId }),
+  setGroupAnnouncement: (groupId, announcement) =>
+    request('POST', '/api/groups/announcement', { group_id: groupId, announcement }),
 
   // Bot management
   getMyBots: () => request('GET', '/api/bots'),

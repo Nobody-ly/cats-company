@@ -291,7 +291,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
       </div>
 
       {showCreateGroup && <CreateGroup onClose={() => setShowCreateGroup(false)} onCreated={handleGroupCreated} />}
-      {showAddFriend && <AddFriend onClose={() => setShowAddFriend(false)} onSent={() => loadAll()} />}
+      {showAddFriend && <AddFriend currentUser={user} onClose={() => setShowAddFriend(false)} onSent={() => loadAll()} />}
       {showAgentStore && <AgentStoreModal onClose={() => setShowAgentStore(false)} user={user} onBotsChanged={() => loadAll()} />}
     </>
   );

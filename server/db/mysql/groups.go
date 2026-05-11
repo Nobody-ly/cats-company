@@ -101,7 +101,7 @@ func (a *Adapter) RemoveGroupMember(groupID, userID int64) error {
 // GetGroupMembers returns all members of a group with user info.
 func (a *Adapter) GetGroupMembers(groupID int64) ([]*types.GroupMember, error) {
 	rows, err := a.db.Query(
-		`SELECT gm.id, gm.group_id, gm.user_id, gm.role, gm.joined_at,
+		`SELECT gm.id, gm.group_id, gm.user_id, gm.role, COALESCE(gm.muted, 0), gm.joined_at,
 		        u.username, u.display_name, u.avatar_url,
 		        u.account_type, COALESCE(u.bot_disclose, 0)
 		 FROM group_members gm
@@ -121,7 +121,7 @@ func (a *Adapter) GetGroupMembers(groupID int64) ([]*types.GroupMember, error) {
 		var avatarURL *string
 		var acctType string
 		var botDisclose bool
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.JoinedAt,
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.Muted, &m.JoinedAt,
 			&m.Username, &m.DisplayName, &avatarURL, &acctType, &botDisclose); err != nil {
 			return nil, fmt.Errorf("scan group member: %w", err)
 		}

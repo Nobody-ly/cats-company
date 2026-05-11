@@ -136,7 +136,7 @@ func main() {
 	mux.HandleFunc("/api/friends/remove", authWithDB(friendHandler.HandleRemoveFriend))
 
 	// User search
-	mux.HandleFunc("/api/users/search", friendHandler.HandleSearchUsers)
+	mux.HandleFunc("/api/users/search", authWithDB(friendHandler.HandleSearchUsers))
 
 	// User profile (require auth — JWT or API Key)
 	mux.HandleFunc("/api/me", authWithDB(userHandler.HandleMe))

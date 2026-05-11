@@ -918,6 +918,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       {showGroupSettings && isGroup && groupId && (
         <GroupSettings
           groupId={groupId}
+          currentUser={user}
           onClose={() => setShowGroupSettings(false)}
           onSaved={handleGroupSaved}
         />

@@ -156,7 +156,7 @@ export default function FriendsView({ onSelectUser, user, onClose }) {
 
       </div>
 
-      {showAdd && <AddFriend onClose={() => setShowAdd(false)} onSent={loadPending} />}
+      {showAdd && <AddFriend currentUser={user} onClose={() => setShowAdd(false)} onSent={loadPending} />}
       {showCreateGroup && <CreateGroup onClose={() => setShowCreateGroup(false)} onCreated={handleGroupCreated} />}
     </div>
   );

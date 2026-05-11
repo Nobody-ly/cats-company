@@ -31,6 +31,8 @@ func (a *Adapter) CreateSchema() error {
 		migrateBotConfigAddVisibility,
 		migrateBotConfigAddTenantName,
 		migrateMessagesAddCodeMode,
+		migrateGroupsAddAnnouncement,
+		migrateGroupMembersAddMuted,
 	}
 	for _, m := range migrations {
 		if _, err := a.db.Exec(m); err != nil {
@@ -164,6 +166,7 @@ CREATE TABLE IF NOT EXISTS ` + "`groups`" + ` (
     name VARCHAR(128) NOT NULL,
     owner_id BIGINT NOT NULL,
     avatar_url VARCHAR(512) DEFAULT NULL,
+    announcement TEXT DEFAULT NULL,
     max_members INT NOT NULL DEFAULT 200,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
@@ -176,6 +179,7 @@ CREATE TABLE IF NOT EXISTS group_members (
     group_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
     role ENUM('owner','admin','member') NOT NULL DEFAULT 'member',
+    muted TINYINT(1) NOT NULL DEFAULT 0,
     joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_group_user (group_id, user_id),
     INDEX idx_gm_user (user_id),
@@ -230,4 +234,14 @@ ALTER TABLE messages
   ADD COLUMN content_blocks JSON DEFAULT NULL,
   ADD COLUMN mode VARCHAR(20) DEFAULT 'normal',
   ADD COLUMN role VARCHAR(20) DEFAULT NULL;
+`
+
+// Migration: add group announcement support.
+const migrateGroupsAddAnnouncement = `
+ALTER TABLE ` + "`groups`" + ` ADD COLUMN announcement TEXT DEFAULT NULL;
+`
+
+// Migration: add per-member mute state.
+const migrateGroupMembersAddMuted = `
+ALTER TABLE group_members ADD COLUMN muted TINYINT(1) NOT NULL DEFAULT 0;
 `

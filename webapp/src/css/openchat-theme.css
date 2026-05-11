@@ -751,6 +751,39 @@ body {
   font-weight: 700;
 }
 
+.oc-settings-textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.oc-settings-member-item {
+  align-items: flex-start;
+}
+
+.oc-settings-member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 220px;
+}
+
+.oc-settings-small-btn {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.oc-settings-actions-split {
+  justify-content: space-between;
+}
+
+.oc-settings-inline-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .oc-settings-empty {
   padding: 12px;
   border: 1px dashed var(--oc-border);
@@ -761,6 +794,28 @@ body {
 
 .oc-modal-wide {
   width: 520px;
+}
+
+@media (max-width: 640px) {
+  .oc-settings-member-item {
+    flex-wrap: wrap;
+  }
+
+  .oc-settings-member-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+    padding-left: 42px;
+  }
+
+  .oc-settings-actions-split {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .oc-settings-inline-actions {
+    justify-content: flex-end;
+  }
 }
 
 /* Profile Status */
