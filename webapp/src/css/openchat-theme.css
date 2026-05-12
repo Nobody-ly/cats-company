@@ -1427,6 +1427,14 @@ body {
   background: var(--v3-primary-hover);
 }
 
+.v3-send.stop {
+  background: #DC2626;
+}
+
+.v3-send.stop:hover {
+  background: #B91C1C;
+}
+
 .v3-send:disabled {
   background: #35373B;
   cursor: not-allowed;

@@ -8,6 +8,14 @@ import { resolveMediaURL } from '../api';
 marked.setOptions({ breaks: false, gfm: true });
 
 const WORKING_TEXT_PREFIX = 'AI文本:';
+const HIDDEN_TOOL_PROGRESS_NAMES = new Set([
+  'send_text',
+  'send_file',
+]);
+
+function shouldHideToolProgressName(name) {
+  return HIDDEN_TOOL_PROGRESS_NAMES.has(String(name || '').trim());
+}
 
 /* Extract concise summary from tool input */
 function toolInputSummary(name, input) {
@@ -33,13 +41,20 @@ function truncateResult(text, max = 300) {
 function groupBlocks(messages) {
   const items = [];
   const pendingTools = {};
+  const hiddenToolIds = new Set();
+  let hiddenToolWithoutId = false;
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.type === 'thinking') {
       items.push({ type: 'thinking', text: msg.content });
     } else if (msg.type === 'tool_use') {
-      const toolId = msg.metadata?.id || msg.metadata?.tool_call_id;
+      const toolId = msg.metadata?.id || msg.metadata?.tool_call_id || msg.metadata?.tool_use_id;
+      if (shouldHideToolProgressName(msg.content)) {
+        if (toolId) hiddenToolIds.add(toolId);
+        else hiddenToolWithoutId = true;
+        continue;
+      }
       const pair = {
         type: 'tool_pair',
         name: msg.content,
@@ -51,7 +66,11 @@ function groupBlocks(messages) {
       if (toolId) pendingTools[toolId] = pair;
       items.push(pair);
     } else if (msg.type === 'tool_result') {
-      const toolId = msg.metadata?.id || msg.metadata?.tool_call_id;
+      const toolId = msg.metadata?.tool_use_id || msg.metadata?.id || msg.metadata?.tool_call_id;
+      if ((toolId && hiddenToolIds.has(toolId)) || (!toolId && hiddenToolWithoutId)) {
+        if (!toolId) hiddenToolWithoutId = false;
+        continue;
+      }
       let matched = false;
       if (toolId && pendingTools[toolId]) {
         pendingTools[toolId].result = msg.content;
@@ -79,6 +98,8 @@ function groupBlocks(messages) {
 function groupContentBlocks(blocks) {
   const items = [];
   const pendingTools = {};
+  const hiddenToolIds = new Set();
+  let hiddenToolWithoutId = false;
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
@@ -92,6 +113,11 @@ function groupContentBlocks(blocks) {
     }
     if (block.type === 'tool_use') {
       const toolId = block.id || block.tool_use_id;
+      if (shouldHideToolProgressName(block.name)) {
+        if (toolId) hiddenToolIds.add(toolId);
+        else hiddenToolWithoutId = true;
+        continue;
+      }
       const pair = {
         type: 'tool_pair',
         name: block.name || 'Tool',
@@ -107,6 +133,10 @@ function groupContentBlocks(blocks) {
     if (block.type === 'tool_result') {
       const toolId = block.tool_use_id || block.id;
       const resultText = block.content || block.text || '';
+      if ((toolId && hiddenToolIds.has(toolId)) || (!toolId && hiddenToolWithoutId)) {
+        if (!toolId) hiddenToolWithoutId = false;
+        continue;
+      }
       let matched = false;
       if (toolId && pendingTools[toolId]) {
         pendingTools[toolId].result = resultText;

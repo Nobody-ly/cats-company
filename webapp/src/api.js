@@ -281,6 +281,32 @@ export async function wsSendMessage(topicId, content, replyTo) {
   return null;
 }
 
+// Send a non-persistent cancel event to stop the active agent turn.
+export async function wsSendStreamCancel(topicId) {
+  const streamId = `cancel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+    const id = nextMsgId();
+    sendWS({
+      pub: {
+        id,
+        topic: topicId,
+        type: 'stream_cancel',
+        msg_type: 'stream_cancel',
+        content: '',
+        metadata: {
+          stream_id: streamId,
+          stream_event: 'cancel',
+          control: 'interrupt',
+        },
+      },
+    });
+    return id;
+  }
+  // Fallback for old/offline transports: visible, but still understood by CatsCo.
+  await api.sendMessage(topicId, '停止');
+  return null;
+}
+
 // Send typing indicator
 export function wsSendTyping(topicId) {
   sendWS({ note: { topic: topicId, what: 'kp' } });

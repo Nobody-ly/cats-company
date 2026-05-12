@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { MoreHorizontal } from 'lucide-react';
-import { api, wsSendMessage, wsSendTyping, wsSendRead, onWSMessage, updateTopicSeq } from '../api';
+import { MoreHorizontal, SendHorizontal, Square } from 'lucide-react';
+import { api, wsSendMessage, wsSendStreamCancel, wsSendTyping, wsSendRead, onWSMessage, updateTopicSeq } from '../api';
 import t from '../i18n';
 import ChatMessage from '../widgets/chat-message';
 import GroupSettings from '../widgets/group-settings';
@@ -31,6 +31,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const [isStopRequested, setIsStopRequested] = useState(false);
   const [showThinking, setShowThinking] = useState(() => {
     const saved = localStorage.getItem('cc_show_thinking');
     return saved === null ? true : saved === 'true';
@@ -60,6 +61,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setPeerProfile(null);
     setHistoryOffset(0);
     setHasMoreHistory(false);
+    setIsStopRequested(false);
     loadHistory();
     if (isGroup && groupId) {
       loadGroupMembers();
@@ -286,6 +288,15 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     return lastWorkingIndex > lastBotTextIndex;
   }, [messages, user.uid]);
 
+  useEffect(() => {
+    if (!activeBotWorking) {
+      setIsStopRequested(false);
+    }
+  }, [activeBotWorking]);
+
+  const hasComposerDraft = input.trim().length > 0 || Boolean(pendingAttachment);
+  const showStopButton = activeBotWorking && !hasComposerDraft && !isUploadingAttachment;
+
   const finalizeOptimisticMessage = useCallback((tempId, result) => {
     if (!result || (!result.seq_id && !result.id)) return;
     setMessages((prev) => {
@@ -387,6 +398,16 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       }
     }
   }, [finalizeOptimisticMessage, input, isUploadingAttachment, pendingAttachment, removeOptimisticMessage, replyTo, topic, user.uid]);
+
+  const handleStopGeneration = useCallback(async () => {
+    if (!activeBotWorking || isStopRequested) return;
+    setIsStopRequested(true);
+    try {
+      await wsSendStreamCancel(topic);
+    } catch (err) {
+      setIsStopRequested(false);
+    }
+  }, [activeBotWorking, isStopRequested, topic]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -857,7 +878,9 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
           {activeBotWorking && (
             <div className="v3-live-input-status" role="status">
-              小八正在处理。你可以继续发送补充消息，小八完成当前步骤后会接着一起看。
+              {isStopRequested
+                ? '已请求 CatsCo 停止当前工作。'
+                : 'CatsCo 正在处理。没有补充内容时可点停止；输入内容后仍可继续发送。'}
             </div>
           )}
 
@@ -901,13 +924,17 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           <div className="v3-composer-footer">
             <span><strong>Return</strong> to send, <strong>Shift + Return</strong> to add a new line</span>
             <button
-              className="v3-send"
-              disabled={isUploadingAttachment || (!input.trim() && !pendingAttachment)}
-              onClick={handleSend}
+              className={`v3-send${showStopButton ? ' stop' : ''}`}
+              disabled={showStopButton ? isStopRequested : isUploadingAttachment || (!input.trim() && !pendingAttachment)}
+              onClick={showStopButton ? handleStopGeneration : handleSend}
+              aria-label={showStopButton ? '停止当前工作' : t('chat_send')}
+              title={showStopButton ? '停止当前工作' : t('chat_send')}
               type="button"
             >
-              <svg width="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path></svg>
-              <span>{t('chat_send')}</span>
+              {showStopButton
+                ? <Square size={12} fill="currentColor" strokeWidth={2.5} />
+                : <SendHorizontal size={13} strokeWidth={2.5} />}
+              <span>{showStopButton ? (isStopRequested ? '停止中' : '停止') : t('chat_send')}</span>
             </button>
           </div>
           
