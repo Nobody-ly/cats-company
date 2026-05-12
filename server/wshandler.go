@@ -2,6 +2,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -117,6 +118,64 @@ func (h *Hub) GetOnlineUIDs() []int64 {
 	return uids
 }
 
+// BuildOnlineStatusList returns online status for accepted friends plus bots
+// owned by the current user, so the web sidebar can show AI Apps status.
+func BuildOnlineStatusList(db *mysql.Adapter, hub *Hub, uid int64) ([]map[string]interface{}, error) {
+	friends, err := db.GetFriends(uid)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[int64]struct{})
+	onlineList := make([]map[string]interface{}, 0, len(friends))
+	addUser := func(id int64) {
+		if id <= 0 {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		onlineList = append(onlineList, map[string]interface{}{
+			"uid":    id,
+			"online": hub != nil && hub.IsOnline(id),
+		})
+	}
+
+	for _, friend := range friends {
+		addUser(friend.ID)
+	}
+
+	bots, err := db.ListBotsByOwner(uid)
+	if err != nil {
+		log.Printf("online status: failed to list owner bots for uid=%d: %v", uid, err)
+		return onlineList, nil
+	}
+	for _, bot := range bots {
+		addUser(mapID(bot["id"]))
+	}
+
+	return onlineList, nil
+}
+
+func mapID(value interface{}) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case json.Number:
+		id, _ := v.Int64()
+		return id
+	default:
+		return 0
+	}
+}
+
 func (h *Hub) addClient(client *Client) (firstConn bool, deviceCount int, onlineUsers int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -155,7 +214,7 @@ func (h *Hub) removeClient(client *Client) (removed bool, lastConn bool, remaini
 	return removed, lastConn, remaining, len(h.clients)
 }
 
-// broadcastPresence notifies all friends of a user's online/offline status.
+// broadcastPresence notifies friends and, for bots, their owner of online/offline status.
 func (h *Hub) broadcastPresence(uid int64, what string) {
 	if h.db == nil {
 		return
@@ -172,8 +231,15 @@ func (h *Hub) broadcastPresence(uid int64, what string) {
 			Src:   formatUID(uid),
 		},
 	}
+	recipients := make(map[int64]struct{}, len(friends)+1)
 	for _, f := range friends {
-		h.SendToUser(f.ID, msg)
+		recipients[f.ID] = struct{}{}
+	}
+	if ownerID, err := h.db.GetBotOwner(uid); err == nil && ownerID > 0 {
+		recipients[ownerID] = struct{}{}
+	}
+	for id := range recipients {
+		h.SendToUser(id, msg)
 	}
 }
 
@@ -641,17 +707,10 @@ func (h *Hub) handleGet(client *Client, msg *MsgClientGet) {
 	uid := client.uid
 	switch msg.What {
 	case "online":
-		// Return online status of friends
-		friends, err := h.db.GetFriends(uid)
+		// Return online status of friends and owned bots.
+		onlineList, err := BuildOnlineStatusList(h.db, h, uid)
 		if err != nil {
 			return
-		}
-		onlineList := make([]map[string]interface{}, 0)
-		for _, f := range friends {
-			onlineList = append(onlineList, map[string]interface{}{
-				"uid":    f.ID,
-				"online": h.IsOnline(f.ID),
-			})
 		}
 		h.SendToClient(client, &ServerMessage{
 			Meta: &MsgServerMeta{

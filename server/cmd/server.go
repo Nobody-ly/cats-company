@@ -151,19 +151,12 @@ func main() {
 	// Online status API
 	mux.HandleFunc("/api/users/online", server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		uid := server.UIDFromContext(r.Context())
-		friends, err := db.GetFriends(uid)
+		onlineList, err := server.BuildOnlineStatusList(db, hub, uid)
 		if err != nil {
 			server.WriteJSONPublic(w, http.StatusInternalServerError, map[string]string{"error": "failed"})
 			return
 		}
-		result := make([]map[string]interface{}, 0, len(friends))
-		for _, f := range friends {
-			result = append(result, map[string]interface{}{
-				"uid":    f.ID,
-				"online": hub.IsOnline(f.ID),
-			})
-		}
-		server.WriteJSONPublic(w, http.StatusOK, map[string]interface{}{"users": result})
+		server.WriteJSONPublic(w, http.StatusOK, map[string]interface{}{"users": onlineList})
 	}))
 
 	// Bot management (admin — legacy)

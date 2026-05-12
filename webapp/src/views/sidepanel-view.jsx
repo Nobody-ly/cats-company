@@ -227,6 +227,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
             ) : (
               filteredBots.map((bot) => {
                 const topicId = p2pTopicId(user.uid, bot.id);
+                const isOnline = Boolean((onlineUsers && onlineUsers[bot.id]) || bot.is_online);
                 return (
                   <div
                     key={bot.id}
@@ -240,7 +241,13 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
                     })}
                   >
                     <span className="prefix" style={{display:'flex', alignItems:'center'}}><Bot size={18} /></span>
-                    <span>{bot.display_name || bot.username}</span>
+                    <span className="v3-chat-item-label">{bot.display_name || bot.username}</span>
+                    <span
+                      className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`}
+                      style={{marginLeft: 'auto'}}
+                      title={isOnline ? 'Online' : 'Offline'}
+                      aria-label={isOnline ? 'Online' : 'Offline'}
+                    />
                   </div>
                 );
               })
