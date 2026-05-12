@@ -100,11 +100,19 @@ function groupContentBlocks(blocks) {
   const pendingTools = {};
   const hiddenToolIds = new Set();
   let hiddenToolWithoutId = false;
+  const subAgentGroups = {};
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     if (block.type === 'thinking') {
-      items.push({ type: 'thinking', text: block.thinking || block.text || block.content || '' });
+      const text = block.thinking || block.text || block.content || '';
+      const subAgentEvent = subAgentEventFromBlock(block, text);
+      if (subAgentEvent) {
+        const group = upsertSubAgentGroup(items, subAgentGroups, subAgentEvent);
+        group.steps.push({ type: 'thinking', text: subAgentEvent.text });
+      } else {
+        items.push({ type: 'thinking', text });
+      }
       continue;
     }
     if (block.type === 'assistant_text') {
@@ -113,6 +121,16 @@ function groupContentBlocks(blocks) {
     }
     if (block.type === 'tool_use') {
       const toolId = block.id || block.tool_use_id;
+      const subAgentInfo = subAgentInfoFromToolUse(block, toolId);
+      if (subAgentInfo) {
+        const group = upsertSubAgentGroup(items, subAgentGroups, subAgentInfo);
+        group.steps.push({
+          type: 'thinking',
+          text: subAgentInfo.task ? `已派出：${subAgentInfo.task}` : '已派出，正在后台执行',
+        });
+        if (toolId) pendingTools[toolId] = group;
+        continue;
+      }
       if (shouldHideToolProgressName(block.name)) {
         if (toolId) hiddenToolIds.add(toolId);
         else hiddenToolWithoutId = true;
@@ -139,8 +157,34 @@ function groupContentBlocks(blocks) {
       }
       let matched = false;
       if (toolId && pendingTools[toolId]) {
-        pendingTools[toolId].result = resultText;
-        pendingTools[toolId].isError = !!block.is_error;
+        if (pendingTools[toolId].type === 'subagent_group') {
+          const group = pendingTools[toolId];
+          const subAgentEvent = subAgentEventFromBlock(block, resultText) || {};
+          upsertSubAgentGroup(items, subAgentGroups, {
+            id: group.id,
+            name: group.name,
+            toolId,
+            status: subAgentEvent.status || (block.is_error ? 'failed' : 'completed'),
+          });
+          group.result = resultText;
+          group.isError = !!block.is_error;
+          group.steps.push({ type: 'tool_result_orphan', content: resultText, isError: !!block.is_error });
+        } else {
+          pendingTools[toolId].result = resultText;
+          pendingTools[toolId].isError = !!block.is_error;
+        }
+        matched = true;
+      } else if (isSubAgentToolId(toolId)) {
+        const subAgentEvent = subAgentEventFromBlock(block, resultText) || {};
+        const group = upsertSubAgentGroup(items, subAgentGroups, {
+          ...subAgentEvent,
+          id: subAgentEvent.id || subAgentIdFromToolId(toolId),
+          toolId,
+          status: subAgentEvent.status || (block.is_error ? 'failed' : 'completed'),
+        });
+        group.result = resultText;
+        group.isError = !!block.is_error;
+        group.steps.push({ type: 'tool_result_orphan', content: resultText, isError: !!block.is_error });
         matched = true;
       } else {
         for (const item of items) {
@@ -159,6 +203,112 @@ function groupContentBlocks(blocks) {
   }
 
   return items;
+}
+
+function upsertSubAgentGroup(items, groups, info) {
+  const keys = [
+    info.id ? `id:${info.id}` : '',
+    info.toolId ? `tool:${info.toolId}` : '',
+    info.name ? `name:${info.name}` : '',
+  ].filter(Boolean);
+  let group = keys.map((key) => groups[key]).find(Boolean);
+
+  if (!group) {
+    group = {
+      type: 'subagent_group',
+      id: info.id || subAgentIdFromToolId(info.toolId) || info.name || `subagent-${items.length + 1}`,
+      name: info.name || '子agent',
+      task: '',
+      agentType: '',
+      status: 'running',
+      steps: [],
+      result: null,
+      isError: false,
+    };
+    items.push(group);
+  }
+
+  if (info.name) group.name = info.name;
+  if (info.task) group.task = info.task;
+  if (info.agentType) group.agentType = info.agentType;
+  if (info.status) group.status = info.status;
+
+  const nextKeys = [
+    group.id ? `id:${group.id}` : '',
+    info.id ? `id:${info.id}` : '',
+    info.toolId ? `tool:${info.toolId}` : '',
+    group.name ? `name:${group.name}` : '',
+    info.name ? `name:${info.name}` : '',
+  ].filter(Boolean);
+  for (const key of nextKeys) {
+    groups[key] = group;
+  }
+
+  return group;
+}
+
+function subAgentInfoFromToolUse(block, toolId) {
+  const input = block.input || {};
+  if (input.kind !== 'subagent' && !isSubAgentToolId(toolId)) return null;
+  return {
+    id: input.subagent_id || subAgentIdFromToolId(toolId),
+    toolId,
+    name: input.subagent_name || block.name || input.display_name,
+    task: input.task,
+    agentType: input.agent_type,
+    status: input.status || 'running',
+  };
+}
+
+function subAgentEventFromBlock(block, text) {
+  const metadata = block.metadata || block.payload || {};
+  const hasMetadata = metadata.kind === 'subagent_event' || metadata.subagent_id || metadata.subagent_event_type;
+  if (hasMetadata) {
+    const name = metadata.subagent_name || parseSubAgentPrefix(text)?.name;
+    return {
+      id: metadata.subagent_id,
+      toolId: metadata.subagent_id ? `subagent:${metadata.subagent_id}` : undefined,
+      name,
+      task: metadata.subagent_task,
+      agentType: metadata.agent_type,
+      status: metadata.subagent_status,
+      eventType: metadata.subagent_event_type,
+      text: stripSubAgentPrefix(text, name),
+    };
+  }
+
+  const prefixed = parseSubAgentPrefix(text);
+  if (!prefixed) return null;
+  return {
+    name: prefixed.name,
+    text: prefixed.text,
+  };
+}
+
+function parseSubAgentPrefix(text) {
+  const match = String(text || '').trim().match(/^\[(子agent\d+|sub-[^\]\s]+)\]\s*(.*)$/);
+  if (!match) return null;
+  return {
+    name: match[1],
+    text: match[2] || '',
+  };
+}
+
+function stripSubAgentPrefix(text, name) {
+  const value = String(text || '').trim();
+  if (name && value.startsWith(`[${name}]`)) {
+    return value.slice(name.length + 2).trim();
+  }
+  const parsed = parseSubAgentPrefix(value);
+  return parsed ? parsed.text : value;
+}
+
+function isSubAgentToolId(toolId) {
+  return typeof toolId === 'string' && toolId.startsWith('subagent:');
+}
+
+function subAgentIdFromToolId(toolId) {
+  return isSubAgentToolId(toolId) ? toolId.slice('subagent:'.length) : '';
 }
 
 function workingTextContent(text) {
@@ -181,11 +331,14 @@ function messageContentText(content, fallback = '') {
 function contentBlocksFromMessage(msg) {
   const storedBlocks = Array.isArray(msg?.content_blocks) ? msg.content_blocks : [];
   if (storedBlocks.length > 0) {
-    return storedBlocks;
+    return storedBlocks.map((block) => ({
+      ...block,
+      metadata: block.metadata || msg?.metadata || null,
+    }));
   }
 
   if (msg?.type === 'thinking') {
-    return [{ type: 'thinking', thinking: messageContentText(msg.content) }];
+    return [{ type: 'thinking', thinking: messageContentText(msg.content), metadata: msg.metadata || null }];
   }
   if (msg?.type === 'tool_use') {
     return [{
@@ -193,6 +346,7 @@ function contentBlocksFromMessage(msg) {
       id: msg.metadata?.id || msg.metadata?.tool_call_id || msg.metadata?.tool_use_id,
       name: messageContentText(msg.content, 'Tool'),
       input: msg.metadata?.input,
+      metadata: msg.metadata || null,
     }];
   }
   if (msg?.type === 'tool_result') {
@@ -201,6 +355,7 @@ function contentBlocksFromMessage(msg) {
       tool_use_id: msg.metadata?.tool_use_id || msg.metadata?.id || msg.metadata?.tool_call_id,
       content: messageContentText(msg.content),
       is_error: !!msg.metadata?.is_error,
+      metadata: msg.metadata || null,
     }];
   }
   if (msg?.type === 'text' && typeof msg.content === 'string' && msg.content.trim().startsWith(WORKING_TEXT_PREFIX)) {
@@ -223,6 +378,92 @@ function escapeHtml(text) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function subAgentStatusText(status, isError) {
+  if (isError) return '失败';
+  switch (status) {
+    case 'completed':
+      return '已完成';
+    case 'failed':
+      return '失败';
+    case 'stopped':
+      return '已停止';
+    case 'waiting_for_input':
+      return '等待输入';
+    default:
+      return '运行中';
+  }
+}
+
+function NestedWorkingStep({ item }) {
+  if (item.type === 'thinking' || item.type === 'assistant_text') {
+    return (
+      <div className="v3-wpi-thinking">
+        <Brain size={14} className="v3-wpi-icon" />
+        <span className="v3-wpi-text">{item.text}</span>
+      </div>
+    );
+  }
+
+  if (item.type === 'tool_pair') {
+    return (
+      <div className="v3-wpi-tool">
+        <div className="v3-wpi-tool-header">
+          <Terminal size={14} className="v3-wpi-icon" />
+          <span className="v3-wpi-tool-name">{item.name}</span>
+          <span className="oc-wpi-tool-input" style={{ marginLeft: 8, opacity: 0.7, fontSize: 11 }}>
+            {toolInputSummary(item.name, item.input)}
+          </span>
+        </div>
+        {item.result != null && (
+          <div className="v3-wpi-tool-result">
+            <div className="v3-wpi-code-block result">
+              <pre><code>{typeof item.result === 'string' ? item.result : JSON.stringify(item.result, null, 2)}</code></pre>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (item.type === 'tool_result_orphan') {
+    return (
+      <div className="v3-wpi-tool-result">
+        <div className="v3-wpi-code-block result">
+          <pre><code>{typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)}</code></pre>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function SubAgentWorkingGroup({ item }) {
+  const [open, setOpen] = useState(false);
+  const steps = item.steps || [];
+  const status = subAgentStatusText(item.status, item.isError);
+
+  return (
+    <div className="v3-wpi-subagent">
+      <button className="v3-wpi-subagent-toggle" type="button" onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <span className="v3-wpi-subagent-name">{item.name}</span>
+        {item.agentType && <span className="v3-wpi-subagent-type">{item.agentType}</span>}
+        <span className={`v3-wpi-subagent-status ${item.status || 'running'}`}>{status}</span>
+        {!open && steps.length > 0 && <span className="v3-wpi-subagent-count">{steps.length} 步</span>}
+      </button>
+      {item.task && <div className="v3-wpi-subagent-task">{item.task}</div>}
+      {open && (
+        <div className="v3-wpi-subagent-steps">
+          {steps.map((step, index) => (
+            <NestedWorkingStep key={index} item={step} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function WorkingProcess({ blocks }) {
@@ -254,6 +495,9 @@ function WorkingProcess({ blocks }) {
                   <span className="v3-wpi-text">{item.text}</span>
                 </div>
               );
+            }
+            if (item.type === 'subagent_group') {
+              return <SubAgentWorkingGroup key={i} item={item} />;
             }
             if (item.type === 'tool_pair') {
               return (

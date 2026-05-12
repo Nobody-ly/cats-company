@@ -2807,6 +2807,74 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+.v3-wpi-subagent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.v3-wpi-subagent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--v3-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.v3-wpi-subagent-toggle:hover {
+  color: var(--v3-text-main);
+}
+
+.v3-wpi-subagent-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.v3-wpi-subagent-type,
+.v3-wpi-subagent-status,
+.v3-wpi-subagent-count {
+  flex-shrink: 0;
+  color: var(--v3-text-muted);
+  font-size: 11px;
+}
+
+.v3-wpi-subagent-status.completed {
+  color: #10b981;
+}
+
+.v3-wpi-subagent-status.failed {
+  color: #ef4444;
+}
+
+.v3-wpi-subagent-status.stopped {
+  color: #f59e0b;
+}
+
+.v3-wpi-subagent-task {
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-left: 20px;
+  word-break: break-word;
+}
+
+.v3-wpi-subagent-steps {
+  border-left: 1px solid var(--v3-border);
+  margin-left: 6px;
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
 .v3-wpi-code-block {
   background: #1e1e1e;
   border: 1px solid var(--v3-border);
