@@ -3010,3 +3010,48 @@ body {
   background: var(--v3-bg-message-hover) !important;
   color: var(--v3-text-name) !important;
 }
+
+/* --- Profile Avatar & Group Settings Modal Fixes --- */
+.v3-profile-avatar {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.v3-profile-avatar.oc-avatar {
+  margin-right: 12px;
+}
+
+.oc-group-settings-modal {
+  width: min(560px, calc(100vw - 32px)) !important;
+  max-width: 560px !important;
+  max-height: calc(100vh - 32px) !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden !important;
+}
+
+.oc-group-settings-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.oc-group-settings-modal .oc-settings-list {
+  max-height: min(280px, 34vh);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.oc-group-settings-modal .oc-settings-actions-split {
+  flex-shrink: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--v3-border);
+  background: var(--v3-bg-sidebar);
+}
+
+@media (max-height: 720px) {
+  .oc-group-settings-modal .oc-settings-list {
+    max-height: 220px;
+  }
+}

@@ -6,6 +6,7 @@ import FriendsView from './friends-view';
 import MessagesView from './messages-view';
 import ProfileEditor from '../widgets/profile-editor';
 import FeedbackModal from '../widgets/feedback-modal';
+import Avatar from '../widgets/avatar';
 import { Bug, Settings, LogOut } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
 import '../css/openchat-theme.css';
@@ -14,13 +15,25 @@ const TABS = {
   CHATS: 'chats'
 };
 
+function normalizeUserProfile(raw) {
+  if (!raw) return null;
+  const username = raw.username || '';
+  return {
+    uid: raw.uid || raw.id,
+    username,
+    display_name: raw.display_name || username,
+    avatar_url: raw.avatar_url || '',
+    account_type: raw.account_type || 'human',
+  };
+}
+
 function getInitialUser() {
   const token = getToken();
   if (!token) return null;
 
   try {
     const saved = localStorage.getItem('oc_user');
-    return saved ? JSON.parse(saved) : null;
+    return saved ? normalizeUserProfile(JSON.parse(saved)) : null;
   } catch (error) {
     console.warn('Failed to restore saved user from localStorage:', error);
     localStorage.removeItem('oc_user');
@@ -101,16 +114,30 @@ export default function TinodeWeb() {
     };
   }, [user, handleWSMessage]);
 
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    let cancelled = false;
+    api.getMe()
+      .then((profile) => {
+        if (!cancelled) {
+          const normalized = normalizeUserProfile(profile);
+          if (normalized) persistUser(normalized);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to refresh current user profile:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid, persistUser]);
+
   const handleLogin = async (account, password) => {
     const res = await api.login({ account, password });
     setToken(res.token);
-    persistUser({
-      uid: res.uid,
-      username: res.username,
-      display_name: res.display_name || res.username,
-      avatar_url: res.avatar_url || '',
-      account_type: res.account_type || 'human',
-    });
+    persistUser(normalizeUserProfile(res));
   };
 
   const handleRegister = async (email, password, loginName, code) => {
@@ -140,13 +167,7 @@ export default function TinodeWeb() {
   };
 
   const handleUserUpdated = (nextUser) => {
-    persistUser({
-      uid: nextUser.uid,
-      username: nextUser.username,
-      display_name: nextUser.display_name || nextUser.username,
-      avatar_url: nextUser.avatar_url || '',
-      account_type: nextUser.account_type || 'human',
-    });
+    persistUser(normalizeUserProfile(nextUser));
     window.dispatchEvent(new Event('cc:data-changed'));
   };
 
@@ -237,13 +258,12 @@ function SidebarContent({ activeTopic, onSelectTopic, user, onlineUsers }) {
 
 function ProfileFooter({ user, wsStatus, onTogglePopover }) {
   const statusClass = wsStatus === 'connected' ? 'online' : 'offline';
+  const displayName = user.display_name || user.username;
   return (
     <div className="v3-profile-footer" onClick={onTogglePopover} style={{cursor: 'pointer'}}>
-      <div className="v3-profile-avatar">
-        {user.display_name ? user.display_name.charAt(0).toUpperCase() : 'U'}
-      </div>
+      <Avatar name={displayName} src={user.avatar_url} size={32} className="v3-profile-avatar" />
       <div className="v3-profile-info">
-        <div className="v3-profile-name">{user.display_name || user.username}</div>
+        <div className="v3-profile-name">{displayName}</div>
         <div className="v3-profile-roles">
            <span className={`v3-status-dot ${statusClass}`} style={{marginLeft: 0, marginRight: 6}}></span>
            {wsStatus === 'connected' ? 'Online' : 'Offline'}

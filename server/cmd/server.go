@@ -48,6 +48,34 @@ func configureJWTSecret() error {
 	return nil
 }
 
+func buildMySQLPoolConfig(cfg DBConfig) mysql.PoolConfig {
+	pool := mysql.DefaultPoolConfig()
+	if cfg.MaxOpenConns > 0 {
+		pool.MaxOpenConns = cfg.MaxOpenConns
+	}
+	if cfg.MaxIdleConns > 0 {
+		pool.MaxIdleConns = cfg.MaxIdleConns
+	}
+	if pool.MaxOpenConns > 0 && pool.MaxIdleConns > pool.MaxOpenConns {
+		pool.MaxIdleConns = pool.MaxOpenConns
+	}
+	if cfg.ConnMaxLifetime != "" {
+		if duration, err := time.ParseDuration(cfg.ConnMaxLifetime); err == nil {
+			pool.ConnMaxLifetime = duration
+		} else {
+			log.Printf("ignoring invalid database.conn_max_lifetime=%q", cfg.ConnMaxLifetime)
+		}
+	}
+	if cfg.ConnMaxIdleTime != "" {
+		if duration, err := time.ParseDuration(cfg.ConnMaxIdleTime); err == nil {
+			pool.ConnMaxIdleTime = duration
+		} else {
+			log.Printf("ignoring invalid database.conn_max_idle_time=%q", cfg.ConnMaxIdleTime)
+		}
+	}
+	return pool
+}
+
 func main() {
 	cfgPath := "tinode.conf"
 	if len(os.Args) > 1 {
@@ -66,9 +94,16 @@ func main() {
 
 	// Initialize database
 	db := &mysql.Adapter{}
-	if err := db.Open(cfg.Database.DSN); err != nil {
+	dbPool := buildMySQLPoolConfig(cfg.Database)
+	if err := db.OpenWithConfig(cfg.Database.DSN, dbPool); err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}
+	log.Printf("database pool configured: max_open=%d max_idle=%d conn_max_lifetime=%s conn_max_idle_time=%s",
+		dbPool.MaxOpenConns,
+		dbPool.MaxIdleConns,
+		dbPool.ConnMaxLifetime,
+		dbPool.ConnMaxIdleTime,
+	)
 	defer db.Close()
 
 	if err := db.CreateSchema(); err != nil {
@@ -218,8 +253,10 @@ func main() {
 	// Note: no ReadTimeout/WriteTimeout here — WebSocket connections are long-lived.
 	// The WS pump handles its own deadlines (writeWait, pongWait).
 	httpServer := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: server.CORSMiddleware(mux),
+		Addr:              cfg.Listen,
+		Handler:           server.CORSMiddleware(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       90 * time.Second,
 	}
 
 	// Start gRPC server

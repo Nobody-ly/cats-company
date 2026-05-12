@@ -21,8 +21,8 @@ type PoolConfig struct {
 // DefaultPoolConfig returns sensible defaults for connection pool.
 func DefaultPoolConfig() PoolConfig {
 	return PoolConfig{
-		MaxOpenConns:    64,
-		MaxIdleConns:    16,
+		MaxOpenConns:    128,
+		MaxIdleConns:    32,
 		ConnMaxLifetime: 10 * time.Minute,
 		ConnMaxIdleTime: 5 * time.Minute,
 	}
@@ -38,9 +38,9 @@ type Adapter struct {
 
 // Config holds MySQL connection configuration.
 type Config struct {
-	DSN        string     `json:"dsn"`
-	Prefix     string     `json:"prefix"`
-	Pool       PoolConfig `json:"pool"`
+	DSN    string     `json:"dsn"`
+	Prefix string     `json:"prefix"`
+	Pool   PoolConfig `json:"pool"`
 }
 
 // Open initializes the database connection with default pool settings.

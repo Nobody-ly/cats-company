@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { resolveMediaURL } from '../api';
 
 const palette = ['#f59e0b', '#ef4444', '#14b8a6', '#07C160', '#06b6d4', '#3b82f6', '#8b5cf6', '#a16207'];
 
@@ -12,8 +13,7 @@ function hashName(name) {
 
 function resolveSrc(src) {
   if (!src) return null;
-  if (/^https?:\/\//.test(src)) return src;
-  return src;
+  return resolveMediaURL(src);
 }
 
 export default function Avatar({ name, src, size = 40, isGroup = false, isBot = false, className = '' }) {
@@ -22,6 +22,11 @@ export default function Avatar({ name, src, size = 40, isGroup = false, isBot = 
   const background = palette[hashName(label) % palette.length];
   const finalClassName = ['oc-avatar', className].filter(Boolean).join(' ');
   const resolvedSrc = resolveSrc(src);
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [resolvedSrc]);
 
   return (
     <div
@@ -33,8 +38,15 @@ export default function Avatar({ name, src, size = 40, isGroup = false, isBot = 
         background,
       }}
     >
-      {resolvedSrc ? (
-        <img src={resolvedSrc} alt={label} className="oc-avatar-img" />
+      {resolvedSrc && !imageFailed ? (
+        <img
+          src={resolvedSrc}
+          alt={label}
+          className="oc-avatar-img"
+          loading="lazy"
+          decoding="async"
+          onError={() => setImageFailed(true)}
+        />
       ) : isGroup ? (
         <span className="oc-avatar-icon" aria-label="group">群</span>
       ) : isBot ? (

@@ -5,19 +5,25 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // Config holds the server configuration.
 type Config struct {
-	Listen    string      `json:"listen"`
-	GRPCPort  string      `json:"grpc_port"`
-	Database  DBConfig    `json:"database"`
-	WebSocket WSConfig    `json:"websocket"`
+	Listen    string       `json:"listen"`
+	GRPCPort  string       `json:"grpc_port"`
+	Database  DBConfig     `json:"database"`
+	WebSocket WSConfig     `json:"websocket"`
 	Static    StaticConfig `json:"static"`
 }
 
 type DBConfig struct {
-	DSN string `json:"dsn"`
+	DSN             string `json:"dsn"`
+	MaxOpenConns    int    `json:"max_open_conns"`
+	MaxIdleConns    int    `json:"max_idle_conns"`
+	ConnMaxLifetime string `json:"conn_max_lifetime"`
+	ConnMaxIdleTime string `json:"conn_max_idle_time"`
 }
 
 type WSConfig struct {
@@ -60,6 +66,30 @@ func defaultConfig() *Config {
 func applyEnvOverrides(cfg *Config) {
 	if dsn := os.Getenv("OC_DB_DSN"); dsn != "" {
 		cfg.Database.DSN = dsn
+	}
+	applyEnvInt("OC_DB_MAX_OPEN_CONNS", &cfg.Database.MaxOpenConns)
+	applyEnvInt("OC_DB_MAX_IDLE_CONNS", &cfg.Database.MaxIdleConns)
+	applyEnvString("OC_DB_CONN_MAX_LIFETIME", &cfg.Database.ConnMaxLifetime)
+	applyEnvString("OC_DB_CONN_MAX_IDLE_TIME", &cfg.Database.ConnMaxIdleTime)
+}
+
+func applyEnvInt(name string, target *int) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		log.Printf("ignoring invalid %s=%q", name, raw)
+		return
+	}
+	*target = value
+}
+
+func applyEnvString(name string, target *string) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw != "" {
+		*target = raw
 	}
 }
 

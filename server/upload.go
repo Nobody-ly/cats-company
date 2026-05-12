@@ -199,10 +199,18 @@ func (h *UploadHandler) HandleServeFile(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", cacheControlForUpload(subDir))
 	if subDir == "files" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
 	}
 	http.ServeFile(w, r, fullPath)
+}
+
+func cacheControlForUpload(subDir string) string {
+	if subDir == "images" || subDir == "feedback" {
+		return "public, max-age=31536000, immutable"
+	}
+	return "private, max-age=86400"
 }
 
 func generateFileKey(ext string) string {

@@ -1,7 +1,10 @@
 // Package mysql - schema initialization for Cats Company.
 package mysql
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // CreateSchema creates all required database tables and runs migrations.
 func (a *Adapter) CreateSchema() error {
@@ -33,11 +36,13 @@ func (a *Adapter) CreateSchema() error {
 		migrateMessagesAddCodeMode,
 		migrateGroupsAddAnnouncement,
 		migrateGroupMembersAddMuted,
+		migrateFriendsAddFromStatusIndex,
+		migrateMessagesAddTopicIDIndex,
 	}
 	for _, m := range migrations {
 		if _, err := a.db.Exec(m); err != nil {
-			// Ignore "duplicate column" errors for idempotent migrations
-			if !isDuplicateColumnError(err) {
+			// Ignore duplicate column/index errors for idempotent migrations.
+			if !isIgnorableMigrationError(err) {
 				return fmt.Errorf("migration failed: %w", err)
 			}
 		}
@@ -45,25 +50,15 @@ func (a *Adapter) CreateSchema() error {
 	return nil
 }
 
-// isDuplicateColumnError checks if the error is a MySQL duplicate column error (1060).
-func isDuplicateColumnError(err error) bool {
-	return err != nil && (fmt.Sprintf("%v", err) == "" ||
-		len(fmt.Sprintf("%v", err)) > 0 &&
-			(contains(fmt.Sprintf("%v", err), "1060") ||
-				contains(fmt.Sprintf("%v", err), "Duplicate column")))
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func isIgnorableMigrationError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return false
+	msg := err.Error()
+	return strings.Contains(msg, "1060") ||
+		strings.Contains(msg, "Duplicate column") ||
+		strings.Contains(msg, "1061") ||
+		strings.Contains(msg, "Duplicate key name")
 }
 
 const createUsersTable = `
@@ -95,6 +90,7 @@ CREATE TABLE IF NOT EXISTS friends (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_friend_pair (from_user_id, to_user_id),
+    INDEX idx_friends_from_status (from_user_id, status),
     INDEX idx_friends_to_user (to_user_id, status),
     INDEX idx_friends_status (status),
     FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -123,6 +119,7 @@ CREATE TABLE IF NOT EXISTS messages (
     msg_type ENUM('text','image','voice','file') NOT NULL DEFAULT 'text',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_messages_topic (topic_id, created_at),
+    INDEX idx_messages_topic_id (topic_id, id),
     FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
     FOREIGN KEY (from_uid) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -244,4 +241,14 @@ ALTER TABLE ` + "`groups`" + ` ADD COLUMN announcement TEXT DEFAULT NULL;
 // Migration: add per-member mute state.
 const migrateGroupMembersAddMuted = `
 ALTER TABLE group_members ADD COLUMN muted TINYINT(1) NOT NULL DEFAULT 0;
+`
+
+// Migration: speed up friend list lookups by user and accepted status.
+const migrateFriendsAddFromStatusIndex = `
+ALTER TABLE friends ADD INDEX idx_friends_from_status (from_user_id, status);
+`
+
+// Migration: speed up latest-message and missed-message lookups by topic.
+const migrateMessagesAddTopicIDIndex = `
+ALTER TABLE messages ADD INDEX idx_messages_topic_id (topic_id, id);
 `

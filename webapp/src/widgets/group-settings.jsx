@@ -199,123 +199,125 @@ export default function GroupSettings({ groupId, currentUser, onClose, onSaved }
 
   return (
     <div className="oc-modal-overlay" onClick={onClose}>
-      <div className="oc-modal oc-modal-wide" onClick={(e) => e.stopPropagation()}>
+      <div className="oc-modal oc-modal-wide oc-group-settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="oc-modal-title">{t('group_settings')}</div>
-        <div className="oc-settings-avatar-block">
-          <Avatar name={name || group?.name || t('contacts_groups')} src={avatarUrl} size={88} isGroup />
-          {canEditGroup && (
-            <button className="oc-btn oc-btn-default" onClick={() => fileInputRef.current?.click()}>
-              {t('group_avatar_pick')}
-            </button>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={handleSelectAvatar}
-          />
-        </div>
-        <input
-          className="oc-auth-input"
-          placeholder={t('group_name_placeholder')}
-          value={name}
-          disabled={!canEditGroup}
-          onChange={(e) => setName(e.target.value)}
-        />
-
-        <div className="oc-settings-section">
-          <div className="oc-settings-section-title">{t('group_announcement')}</div>
-          <textarea
-            className="oc-auth-input oc-settings-textarea"
-            placeholder={t('group_announcement_placeholder')}
-            value={announcement}
-            disabled={!canEditGroup}
-            onChange={(e) => setAnnouncement(e.target.value)}
-          />
-        </div>
-
-        <div className="oc-settings-section">
-          <div className="oc-settings-section-title">{t('group_members')} ({members.length})</div>
-          <div className="oc-settings-list">
-            {members.map((member) => (
-              <div key={member.user_id} className="oc-settings-list-item oc-settings-member-item">
-                <Avatar
-                  name={member.display_name || member.username}
-                  src={member.avatar_url}
-                  size={32}
-                  isBot={member.is_bot}
-                />
-                <div className="oc-settings-list-text">
-                  <div>{member.display_name || member.username}</div>
-                  <div className="oc-settings-secondary">
-                    @{member.username} · {roleLabel(member.role)}
-                    {member.muted ? ` · ${t('group_muted')}` : ''}
-                  </div>
-                </div>
-                <div className="oc-settings-member-actions">
-                  {canChangeRole(member) && (
-                    <button
-                      type="button"
-                      className="oc-btn oc-btn-default oc-settings-small-btn"
-                      disabled={saving}
-                      onClick={() => handleRoleChange(member)}
-                    >
-                      {member.role === 'admin' ? t('group_demote_member') : t('group_set_admin')}
-                    </button>
-                  )}
-                  {canManageMember(member) && (
-                    <button
-                      type="button"
-                      className="oc-btn oc-btn-default oc-settings-small-btn"
-                      disabled={saving}
-                      onClick={() => handleMuteToggle(member)}
-                    >
-                      {member.muted ? t('group_unmute') : t('group_mute')}
-                    </button>
-                  )}
-                  {canManageMember(member) && (
-                    <button
-                      type="button"
-                      className="oc-btn oc-btn-danger oc-settings-small-btn"
-                      disabled={saving}
-                      onClick={() => handleKick(member)}
-                    >
-                      {t('group_kick')}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
+        <div className="oc-group-settings-body">
+          <div className="oc-settings-avatar-block">
+            <Avatar name={name || group?.name || t('contacts_groups')} src={avatarUrl} size={88} isGroup />
+            {canEditGroup && (
+              <button className="oc-btn oc-btn-default" onClick={() => fileInputRef.current?.click()}>
+                {t('group_avatar_pick')}
+              </button>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleSelectAvatar}
+            />
           </div>
-        </div>
+          <input
+            className="oc-auth-input"
+            placeholder={t('group_name_placeholder')}
+            value={name}
+            disabled={!canEditGroup}
+            onChange={(e) => setName(e.target.value)}
+          />
 
-        {canEditGroup && (
           <div className="oc-settings-section">
-            <div className="oc-settings-section-title">{t('group_add_members')}</div>
+            <div className="oc-settings-section-title">{t('group_announcement')}</div>
+            <textarea
+              className="oc-auth-input oc-settings-textarea"
+              placeholder={t('group_announcement_placeholder')}
+              value={announcement}
+              disabled={!canEditGroup}
+              onChange={(e) => setAnnouncement(e.target.value)}
+            />
+          </div>
+
+          <div className="oc-settings-section">
+            <div className="oc-settings-section-title">{t('group_members')} ({members.length})</div>
             <div className="oc-settings-list">
-              {availableFriends.length === 0 ? (
-                <div className="oc-settings-empty">{t('group_no_invitable_members')}</div>
-              ) : availableFriends.map((friend) => (
-                <button
-                  key={friend.id}
-                  type="button"
-                  className="oc-settings-list-item oc-settings-list-button"
-                  onClick={() => toggleInvite(friend.id)}
-                >
-                  <Avatar name={friend.display_name || friend.username} src={friend.avatar_url} size={32} isBot={friend.account_type === 'bot'} />
+              {members.map((member) => (
+                <div key={member.user_id} className="oc-settings-list-item oc-settings-member-item">
+                  <Avatar
+                    name={member.display_name || member.username}
+                    src={member.avatar_url}
+                    size={32}
+                    isBot={member.is_bot}
+                  />
                   <div className="oc-settings-list-text">
-                    <div>{friend.display_name || friend.username}</div>
-                    <div className="oc-settings-secondary">@{friend.username}</div>
+                    <div>{member.display_name || member.username}</div>
+                    <div className="oc-settings-secondary">
+                      @{member.username} · {roleLabel(member.role)}
+                      {member.muted ? ` · ${t('group_muted')}` : ''}
+                    </div>
                   </div>
-                  <div className="oc-settings-check">{selected.has(friend.id) ? '✓' : ''}</div>
-                </button>
+                  <div className="oc-settings-member-actions">
+                    {canChangeRole(member) && (
+                      <button
+                        type="button"
+                        className="oc-btn oc-btn-default oc-settings-small-btn"
+                        disabled={saving}
+                        onClick={() => handleRoleChange(member)}
+                      >
+                        {member.role === 'admin' ? t('group_demote_member') : t('group_set_admin')}
+                      </button>
+                    )}
+                    {canManageMember(member) && (
+                      <button
+                        type="button"
+                        className="oc-btn oc-btn-default oc-settings-small-btn"
+                        disabled={saving}
+                        onClick={() => handleMuteToggle(member)}
+                      >
+                        {member.muted ? t('group_unmute') : t('group_mute')}
+                      </button>
+                    )}
+                    {canManageMember(member) && (
+                      <button
+                        type="button"
+                        className="oc-btn oc-btn-danger oc-settings-small-btn"
+                        disabled={saving}
+                        onClick={() => handleKick(member)}
+                      >
+                        {t('group_kick')}
+                      </button>
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
-        )}
 
-        {error && <div className="oc-form-error">{error}</div>}
+          {canEditGroup && (
+            <div className="oc-settings-section">
+              <div className="oc-settings-section-title">{t('group_add_members')}</div>
+              <div className="oc-settings-list">
+                {availableFriends.length === 0 ? (
+                  <div className="oc-settings-empty">{t('group_no_invitable_members')}</div>
+                ) : availableFriends.map((friend) => (
+                  <button
+                    key={friend.id}
+                    type="button"
+                    className="oc-settings-list-item oc-settings-list-button"
+                    onClick={() => toggleInvite(friend.id)}
+                  >
+                    <Avatar name={friend.display_name || friend.username} src={friend.avatar_url} size={32} isBot={friend.account_type === 'bot'} />
+                    <div className="oc-settings-list-text">
+                      <div>{friend.display_name || friend.username}</div>
+                      <div className="oc-settings-secondary">@{friend.username}</div>
+                    </div>
+                    <div className="oc-settings-check">{selected.has(friend.id) ? '✓' : ''}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && <div className="oc-form-error">{error}</div>}
+        </div>
         <div className="oc-settings-actions oc-settings-actions-split">
           <div>
             {currentRole === 'owner' ? (
