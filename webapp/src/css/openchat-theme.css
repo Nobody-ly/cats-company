@@ -2776,6 +2776,94 @@ body {
   min-width: 0;
 }
 
+.v3-runtime-plan-card {
+  width: min(720px, calc(100% - 40px));
+  margin: 8px 20px 12px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  color: var(--v3-text-main);
+  overflow: hidden;
+}
+
+.v3-runtime-plan-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 11px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.v3-runtime-plan-toggle:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.v3-runtime-plan-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.v3-runtime-plan-count {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.07);
+  color: var(--v3-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.v3-runtime-plan-current {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--v3-text-muted);
+  font-size: 12px;
+}
+
+.v3-runtime-plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 11px 33px;
+}
+
+.v3-runtime-plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.v3-runtime-plan-step svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.v3-runtime-plan-step.completed {
+  color: rgba(139, 148, 158, 0.8);
+}
+
+.v3-runtime-plan-step.in_progress {
+  color: var(--v3-text-main);
+}
+
+.v3-runtime-plan-step-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .v3-wpi-thinking {
   display: flex;
   gap: 8px;

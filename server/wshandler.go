@@ -431,6 +431,22 @@ func (h *Hub) handlePub(client *Client, msg *MsgClientPub) {
 	// Ensure topic exists
 	h.db.CreateTopic(topic, "p2p", uid)
 
+	if isTransientRuntimePayload(payload) {
+		h.SendToClient(client, &ServerMessage{
+			Ctrl: &MsgServerCtrl{
+				ID:    msg.ID,
+				Topic: topic,
+				Code:  200,
+				Text:  "ok",
+				Params: map[string]interface{}{
+					"seq": 0,
+				},
+			},
+		})
+		h.fanoutNormalizedMessage(uid, topic, msg.ReplyTo, payload, 0, client)
+		return
+	}
+
 	msgID, err := saveNormalizedMessage(h.db, topic, uid, msg.ReplyTo, payload)
 	if err != nil {
 		log.Printf("save message error: %v", err)
@@ -615,6 +631,22 @@ func (h *Hub) handleGroupPub(client *Client, msg *MsgClientPub, topic string, pa
 		h.SendToClient(client, &ServerMessage{
 			Ctrl: &MsgServerCtrl{ID: msg.ID, Code: 403, Text: "you are muted in this group"},
 		})
+		return
+	}
+
+	if isTransientRuntimePayload(payload) {
+		h.SendToClient(client, &ServerMessage{
+			Ctrl: &MsgServerCtrl{
+				ID:    msg.ID,
+				Topic: topic,
+				Code:  200,
+				Text:  "ok",
+				Params: map[string]interface{}{
+					"seq": 0,
+				},
+			},
+		})
+		h.fanoutNormalizedMessage(uid, topic, msg.ReplyTo, payload, 0, client)
 		return
 	}
 

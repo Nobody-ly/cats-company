@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { MoreHorizontal, SendHorizontal, Square } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, MoreHorizontal, SendHorizontal, Square } from 'lucide-react';
 import { api, wsSendMessage, wsSendStreamCancel, wsSendTyping, wsSendRead, onWSMessage, updateTopicSeq } from '../api';
 import t from '../i18n';
 import ChatMessage from '../widgets/chat-message';
@@ -21,6 +21,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
+  const [runtimePlan, setRuntimePlan] = useState(null);
   const [members, setMembers] = useState([]);
   const [groupInfo, setGroupInfo] = useState(null);
   const [peerProfile, setPeerProfile] = useState(null);
@@ -55,6 +56,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setIsDragActive(false);
     dragDepthRef.current = 0;
     setPeerTyping(false);
+    setRuntimePlan(null);
     setReplyTo(null);
     setMembers([]);
     setGroupInfo(null);
@@ -128,6 +130,12 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           if (streamId) {
             setMessages((prev) => prev.filter((message) => message._stream_id !== streamId));
           }
+          setRuntimePlan(null);
+          return;
+        }
+
+        if (isRuntimePlanMessage(msg.data)) {
+          setRuntimePlan(normalizeRuntimePlan(msg.data.content));
           return;
         }
 
@@ -191,6 +199,9 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           }
           return mergeMessages(prev, [serverMsg]);
         });
+        if (fromUid !== user.uid && isFinalTextMessage(serverMsg)) {
+          setRuntimePlan(null);
+        }
         updateTopicSeq(topic, serverMsg.id);
 
         // Send read receipt if message is from peer
@@ -811,6 +822,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             />
           );
         })}
+          {runtimePlan && <RuntimePlanCard plan={runtimePlan} />}
           {peerTyping && (
             <div style={{padding:'4px 20px', fontSize:'12px', color:'var(--v3-text-muted)'}}>
               {t('typing')}...
@@ -1105,6 +1117,83 @@ function isStreamDelta(data) {
 
 function isStreamCancel(data) {
   return data?.type === 'stream_cancel' || data?.metadata?.stream_event === 'cancel';
+}
+
+function isRuntimePlanMessage(data) {
+  return data?.type === 'runtime_plan' || data?.msg_type === 'runtime_plan';
+}
+
+function normalizeRuntimePlan(content) {
+  let value = content;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch (err) {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) {
+    return null;
+  }
+  const steps = value.steps
+    .map((step) => ({
+      text: String(step?.text || '').trim(),
+      status: normalizePlanStatus(step?.status),
+    }))
+    .filter((step) => step.text);
+  if (steps.length === 0) return null;
+  return {
+    revision: Number(value.revision || 0),
+    updatedAt: Number(value.updatedAt || value.updated_at || Date.now()),
+    steps,
+  };
+}
+
+function normalizePlanStatus(status) {
+  if (status === 'completed' || status === 'in_progress' || status === 'pending') {
+    return status;
+  }
+  return 'pending';
+}
+
+function isFinalTextMessage(message) {
+  const type = message?.type || message?.msg_type || '';
+  if (type !== 'text') return false;
+  if (isWorkingTextMessage(message)) return false;
+  return typeof message?.content === 'string' && message.content.trim().length > 0;
+}
+
+function RuntimePlanCard({ plan }) {
+  const [open, setOpen] = useState(false);
+  if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) return null;
+
+  const completed = plan.steps.filter((step) => step.status === 'completed').length;
+  const current = plan.steps.find((step) => step.status === 'in_progress') || plan.steps.find((step) => step.status === 'pending');
+
+  return (
+    <div className="v3-runtime-plan-card" role="status">
+      <button className="v3-runtime-plan-toggle" type="button" onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span className="v3-runtime-plan-title">计划</span>
+        <span className="v3-runtime-plan-count">{completed}/{plan.steps.length}</span>
+        {!open && current && <span className="v3-runtime-plan-current">{current.text}</span>}
+      </button>
+      {open && (
+        <div className="v3-runtime-plan-steps">
+          {plan.steps.map((step, index) => (
+            <div className={`v3-runtime-plan-step ${step.status}`} key={`${index}-${step.text}`}>
+              {step.status === 'completed'
+                ? <CheckCircle2 size={14} />
+                : step.status === 'in_progress'
+                  ? <CircleDot size={14} />
+                  : <Circle size={14} />}
+              <span className="v3-runtime-plan-step-text">{step.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function getStreamId(message) {

@@ -60,3 +60,24 @@ func TestPubMessageNormalizesLikeHTTPRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimePlanMessageIsTransient(t *testing.T) {
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_1_2",
+		Type:    "runtime_plan",
+		Content: json.RawMessage(`{"revision":1,"steps":[{"text":"检查链路","status":"in_progress"}]}`),
+		Metadata: map[string]interface{}{
+			"transient": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize runtime plan: %v", err)
+	}
+
+	if !isTransientRuntimePayload(payload) {
+		t.Fatalf("runtime_plan with transient metadata should not be stored")
+	}
+	if payload.DisplayType != "runtime_plan" {
+		t.Fatalf("DisplayType = %q, want runtime_plan", payload.DisplayType)
+	}
+}

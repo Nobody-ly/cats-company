@@ -63,6 +63,20 @@ func (h *MessageHandler) HandleSendMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if isTransientRuntimePayload(payload) {
+		h.fanoutMessage(uid, req.TopicID, req.ReplyTo, payload, 0)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":       0,
+			"seq_id":   0,
+			"topic_id": req.TopicID,
+			"from_uid": uid,
+			"msg_type": payload.StoredType,
+			"type":     payload.DisplayType,
+			"metadata": payload.Metadata,
+		})
+		return
+	}
+
 	if !isGroupTopic(req.TopicID) {
 		// Ensure p2p topic exists before saving.
 		h.db.CreateTopic(req.TopicID, "p2p", uid)
@@ -304,6 +318,13 @@ func normalizeStoredMsgType(displayType string) string {
 	default:
 		return "text"
 	}
+}
+
+func isTransientRuntimePayload(payload *normalizedMessagePayload) bool {
+	if payload == nil {
+		return false
+	}
+	return payload.DisplayType == "runtime_plan" && metadataBool(payload.Metadata, "transient")
 }
 
 func isStructuredDisplayType(displayType string) bool {
