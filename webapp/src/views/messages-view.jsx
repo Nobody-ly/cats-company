@@ -17,7 +17,7 @@ const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bm
 export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
-  const [pendingAttachment, setPendingAttachment] = useState(null);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
@@ -89,7 +89,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   useEffect(() => {
     if (!topic) return;
     setMessages([]);
-    setPendingAttachment(null);
+    setPendingAttachments([]);
     setIsUploadingAttachment(false);
     setIsDragActive(false);
     dragDepthRef.current = 0;
@@ -343,7 +343,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     }
   }, [activeBotWorking]);
 
-  const hasComposerDraft = input.trim().length > 0 || Boolean(pendingAttachment);
+  const hasComposerDraft = input.trim().length > 0 || pendingAttachments.length > 0;
   const showStopButton = activeBotWorking && !hasComposerDraft && !isUploadingAttachment;
 
   const finalizeOptimisticMessage = useCallback((tempId, result) => {
@@ -368,86 +368,51 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text && !pendingAttachment) return;
+    if (!text && pendingAttachments.length === 0) return;
     if (isUploadingAttachment) return;
 
     clearRuntimePlan();
-    const attachmentToSend = pendingAttachment;
+    const attachmentsToSend = pendingAttachments;
     setInput('');
     const currentReplyTo = replyTo;
     setReplyTo(null);
-    setPendingAttachment(null);
+    setPendingAttachments([]);
 
-    const optimisticMessages = [];
-    const textTempId = text ? Date.now() : null;
-    const attachmentTempId = attachmentToSend ? Date.now() + (text ? 1 : 0) : null;
-
-    if (textTempId) {
-      optimisticMessages.push({
-        id: textTempId,
-        seq_id: textTempId,
-        topic_id: topic,
-        from_uid: user.uid,
-        content: text,
-        type: 'text',
-        msg_type: 'text',
-        reply_to: currentReplyTo ? currentReplyTo.id : 0,
-        created_at: new Date().toISOString(),
-        _pending: true,
-      });
-    }
-
-    if (attachmentTempId) {
-      optimisticMessages.push({
-        id: attachmentTempId,
-        seq_id: attachmentTempId,
-        topic_id: topic,
-        from_uid: user.uid,
-        content: attachmentToSend.content,
-        type: attachmentToSend.type,
-        msg_type: attachmentToSend.type,
-        reply_to: currentReplyTo && !text ? currentReplyTo.id : 0,
-        created_at: new Date().toISOString(),
-        _pending: true,
-      });
-    }
-
-    if (optimisticMessages.length > 0) {
-      setMessages((prev) => mergeMessages(prev, optimisticMessages));
-    }
-
-    if (textTempId) {
-      try {
-        const result = await api.sendMessage(topic, text, currentReplyTo ? currentReplyTo.id : undefined);
-        finalizeOptimisticMessage(textTempId, result);
-      } catch (err) {
-        removeOptimisticMessage(textTempId);
-        setInput(text);
-        if (attachmentToSend) {
-          setPendingAttachment(attachmentToSend);
+    const contentBlocks = buildAtomicContentBlocks(text, attachmentsToSend);
+    const displayContent = text || summarizeAttachments(attachmentsToSend);
+    const payload = attachmentsToSend.length > 0
+      ? {
+          type: 'text',
+          content: displayContent,
+          content_blocks: contentBlocks,
         }
-        setReplyTo(currentReplyTo);
-        return;
-      }
-    }
+      : text;
 
-    if (attachmentTempId) {
-      try {
-        const result = await api.sendMessage(
-          topic,
-          attachmentToSend.content,
-          !text && currentReplyTo ? currentReplyTo.id : undefined,
-        );
-        finalizeOptimisticMessage(attachmentTempId, result);
-      } catch (err) {
-        removeOptimisticMessage(attachmentTempId);
-        setPendingAttachment(attachmentToSend);
-        if (!text) {
-          setReplyTo(currentReplyTo);
-        }
-      }
+    const tempId = Date.now();
+    setMessages((prev) => mergeMessages(prev, [{
+      id: tempId,
+      seq_id: tempId,
+      topic_id: topic,
+      from_uid: user.uid,
+      content: displayContent,
+      content_blocks: attachmentsToSend.length > 0 ? contentBlocks : undefined,
+      type: 'text',
+      msg_type: 'text',
+      reply_to: currentReplyTo ? currentReplyTo.id : 0,
+      created_at: new Date().toISOString(),
+      _pending: true,
+    }]));
+
+    try {
+      const result = await api.sendMessage(topic, payload, currentReplyTo ? currentReplyTo.id : undefined);
+      finalizeOptimisticMessage(tempId, result);
+    } catch (err) {
+      removeOptimisticMessage(tempId);
+      setInput(text);
+      setPendingAttachments(attachmentsToSend);
+      setReplyTo(currentReplyTo);
     }
-  }, [clearRuntimePlan, finalizeOptimisticMessage, input, isUploadingAttachment, pendingAttachment, removeOptimisticMessage, replyTo, topic, user.uid]);
+  }, [clearRuntimePlan, finalizeOptimisticMessage, input, isUploadingAttachment, pendingAttachments, removeOptimisticMessage, replyTo, topic, user.uid]);
 
   const handleStopGeneration = useCallback(async () => {
     if (!activeBotWorking || isStopRequested) return;
@@ -555,14 +520,15 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
         content.payload.thumbnail = data.url;
       }
 
-      setPendingAttachment({
+      const attachment = {
         type,
         name: data.name,
         size: data.size,
         content,
-      });
+      };
+      setPendingAttachments((prev) => [...prev, attachment]);
       setTimeout(() => textareaRef.current?.focus(), 0);
-      return true;
+      return attachment;
     } catch (err) {
       // Fallback: If the server returns a raw Nginx HTML 413 instead of JSON, 
       // res.json() will throw a generic SyntaxError. We explicitly alert the user.
@@ -570,17 +536,26 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
         ? 'Upload failed: Server rejected the file (likely Payload Too Large / 413).'
         : `Upload failed: ${err.message}`;
       window.alert(errorMsg);
-      return false;
+      return null;
     } finally {
       setIsUploadingAttachment(false);
     }
   };
 
+  const uploadAttachmentFiles = async (files, requestedType) => {
+    const fileList = Array.from(files || []).filter(Boolean);
+    if (fileList.length === 0) return;
+    for (const file of fileList.slice(0, MAX_DROPPED_FILES)) {
+      const uploaded = await uploadAttachmentFile(file, requestedType);
+      if (!uploaded) break;
+    }
+  };
+
   const handleFileUpload = async (e, type) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     e.target.value = ''; // reset input
-    await uploadAttachmentFile(file, type);
+    await uploadAttachmentFiles(files, type);
   };
 
   const handleDragEnter = (e) => {
@@ -620,20 +595,13 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       window.alert('Upload in progress. Please wait before dropping another file.');
       return;
     }
-    if (pendingAttachment && !window.confirm('Replace the current pending attachment with the dropped file?')) {
-      return;
-    }
-
     const files = await collectDroppedFiles(e.dataTransfer);
     if (files.length === 0) {
       window.alert('No uploadable files were found in this drop.');
       return;
     }
-    if (files.length > 1) {
-      window.alert(`Dropped ${files.length} files. The current composer supports one attachment at a time, so only "${files[0].name}" will be prepared.`);
-    }
 
-    await uploadAttachmentFile(files[0]);
+    await uploadAttachmentFiles(files);
   };
 
   const handlePaste = async (e) => {
@@ -647,15 +615,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       window.alert('Upload in progress. Please wait before pasting another file.');
       return;
     }
-    if (pendingAttachment && !window.confirm('Replace the current pending attachment with the pasted file?')) {
-      return;
-    }
-
-    if (files.length > 1) {
-      window.alert(`Pasted ${files.length} files. The current composer supports one attachment at a time, so only "${files[0].name || 'pasted file'}" will be prepared.`);
-    }
-
-    await uploadAttachmentFile(files[0]);
+    await uploadAttachmentFiles(files);
   };
 
   // Find the display name for a uid in group context
@@ -946,24 +906,28 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             onPaste={handlePaste}
           />
 
-          {(isUploadingAttachment || pendingAttachment) && (
+          {(isUploadingAttachment || pendingAttachments.length > 0) && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', marginTop: 10, borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--v3-border)', color: 'var(--v3-text-main)' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>
-                  {isUploadingAttachment ? 'Uploading attachment...' : pendingAttachment.type === 'image' ? 'Image ready to send' : 'File ready to send'}
+                  {isUploadingAttachment ? 'Uploading attachment...' : `${pendingAttachments.length} attachment${pendingAttachments.length === 1 ? '' : 's'} ready to send`}
                 </div>
-                {!isUploadingAttachment && pendingAttachment && (
-                  <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {pendingAttachment.name}
-                    {pendingAttachment.size ? ` • ${formatFileSize(pendingAttachment.size)}` : ''}
+                {!isUploadingAttachment && pendingAttachments.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {pendingAttachments.map((attachment, index) => (
+                      <div key={`${attachment.name}-${index}`} style={{ fontSize: 12, color: 'var(--v3-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {attachment.type === 'image' ? 'Image' : 'File'}: {attachment.name}
+                        {attachment.size ? ` • ${formatFileSize(attachment.size)}` : ''}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-              {pendingAttachment && !isUploadingAttachment && (
+              {pendingAttachments.length > 0 && !isUploadingAttachment && (
                 <button
                   className="v3-action-btn"
-                  aria-label="Remove attachment"
-                  onClick={() => setPendingAttachment(null)}
+                  aria-label="Remove attachments"
+                  onClick={() => setPendingAttachments([])}
                   type="button"
                 >
                   x
@@ -975,8 +939,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           <div className="v3-composer-footer">
             <span><strong>Return</strong> to send, <strong>Shift + Return</strong> to add a new line</span>
             <button
-              className={`v3-send${showStopButton ? ' stop' : ''}`}
-              disabled={showStopButton ? isStopRequested : isUploadingAttachment || (!input.trim() && !pendingAttachment)}
+className={`v3-send${showStopButton ? ' stop' : ''}`}
+              disabled={showStopButton ? isStopRequested : isUploadingAttachment || (!input.trim() && pendingAttachments.length === 0)}
               onClick={showStopButton ? handleStopGeneration : handleSend}
               aria-label={showStopButton ? '停止当前工作' : t('chat_send')}
               title={showStopButton ? '停止当前工作' : t('chat_send')}
@@ -989,8 +953,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             </button>
           </div>
           
-          <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'image')} />
-          <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'file')} />
+          <input ref={imageInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'image')} />
+          <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'file')} />
         </div>
       </div>
       {showGroupSettings && isGroup && groupId && (
@@ -1016,6 +980,32 @@ function inferAttachmentType(file, requestedType) {
   const name = file?.name?.toLowerCase() || '';
   const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
   return IMAGE_EXTENSIONS.has(extension) ? 'image' : 'file';
+}
+
+function buildAtomicContentBlocks(text, attachments) {
+  const blocks = [];
+  if (text) {
+    blocks.push({ type: 'text', text });
+  }
+  for (const attachment of attachments || []) {
+    const payload = attachment?.content?.payload;
+    if (!payload) continue;
+    blocks.push({
+      type: attachment.type === 'image' ? 'image' : 'file',
+      payload,
+    });
+  }
+  return blocks;
+}
+
+function summarizeAttachments(attachments) {
+  const list = attachments || [];
+  if (list.length === 0) return '';
+  if (list.length === 1) {
+    const item = list[0];
+    return `[${item.type === 'image' ? '图片' : '文件'}] ${item.name || 'attachment'}`;
+  }
+  return `[附件] ${list.map((item) => item.name || 'attachment').join(', ')}`;
 }
 
 async function collectDroppedFiles(dataTransfer) {

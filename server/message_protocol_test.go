@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/openchat/openchat/server/store/types"
 )
 
 func TestPubMessageNormalizesLikeHTTPRequest(t *testing.T) {
@@ -79,5 +81,35 @@ func TestRuntimePlanMessageIsTransient(t *testing.T) {
 	}
 	if payload.DisplayType != "runtime_plan" {
 		t.Fatalf("DisplayType = %q, want runtime_plan", payload.DisplayType)
+	}
+}
+
+func TestContentBlocksKeepAttachmentPayload(t *testing.T) {
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "grp_80",
+		Type:    "text",
+		Content: json.RawMessage(`"帮我看这张图"`),
+		ContentBlocks: []types.ContentBlock{
+			{Type: "text", Text: "帮我看这张图"},
+			{
+				Type: "image",
+				Payload: map[string]interface{}{
+					"file_key": "images/a.png",
+					"url":      "/uploads/images/a.png",
+					"name":     "a.png",
+					"size":     float64(12),
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+
+	if len(payload.ContentBlocks) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(payload.ContentBlocks))
+	}
+	if got := payload.ContentBlocks[1].Payload["url"]; got != "/uploads/images/a.png" {
+		t.Fatalf("attachment payload url was not preserved: %#v", got)
 	}
 }

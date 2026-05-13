@@ -100,6 +100,7 @@ function groupContentBlocks(blocks) {
   const pendingTools = {};
   const hiddenToolIds = new Set();
   let hiddenToolWithoutId = false;
+
   const subAgentGroups = {};
 
   for (let i = 0; i < blocks.length; i++) {
@@ -136,6 +137,7 @@ function groupContentBlocks(blocks) {
         else hiddenToolWithoutId = true;
         continue;
       }
+
       const pair = {
         type: 'tool_pair',
         name: block.name || 'Tool',
@@ -549,6 +551,9 @@ function ChatMessageComponent({ message, workingMessages = null, isSelf, isGroup
     }
     return [];
   }, [effectiveWorkingMessages, storedBlocks]);
+  const richBlocks = useMemo(() => (
+    storedBlocks.filter((block) => block.type === 'image' || block.type === 'file')
+  ), [storedBlocks]);
   const renderedTextContent = useMemo(() => {
     if (storedBlocks.length === 0) return content;
     return storedBlocks
@@ -583,7 +588,7 @@ function ChatMessageComponent({ message, workingMessages = null, isSelf, isGroup
   ), [message.created_at]);
   const displayName = senderName || message.from_name || `User ${message.from_uid || ''}`;
 
-  if (!hasText && workingBlocks.length === 0) return null;
+  if (!hasText && richBlocks.length === 0 && workingBlocks.length === 0) return null;
 
   return (
     <div className={`v3-message ${isConsecutive ? 'grouped' : ''}`}>
@@ -634,9 +639,12 @@ function ChatMessageComponent({ message, workingMessages = null, isSelf, isGroup
 
         {!isSelf && showThinking && <WorkingProcess blocks={workingBlocks} />}
 
-        {hasText && (
+        {(hasText || richBlocks.length > 0) && (
           <div style={{lineHeight: 1.46}}>
-            {parsed ? <RichContent content={parsed} /> : <TextContent content={renderedTextContent} isGroup={isGroup} />}
+            {hasText && (parsed ? <RichContent content={parsed} /> : <TextContent content={renderedTextContent} isGroup={isGroup} />)}
+            {richBlocks.map((block, index) => (
+              <RichContent key={`${block.type}-${index}`} content={block} />
+            ))}
             {message._streaming && <span className="oc-streaming-cursor" aria-hidden="true">|</span>}
           </div>
         )}
