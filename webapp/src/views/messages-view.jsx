@@ -46,6 +46,44 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const imageInputRef = useRef(null);
   const textareaRef = useRef(null);
   const dragDepthRef = useRef(0);
+  const runtimePlanRef = useRef(null);
+  const runtimePlanClearTimer = useRef(null);
+
+  const clearRuntimePlan = useCallback(() => {
+    if (runtimePlanClearTimer.current) {
+      clearTimeout(runtimePlanClearTimer.current);
+      runtimePlanClearTimer.current = null;
+    }
+    runtimePlanRef.current = null;
+    setRuntimePlan(null);
+  }, []);
+
+  const applyRuntimePlan = useCallback((plan) => {
+    if (runtimePlanClearTimer.current) {
+      clearTimeout(runtimePlanClearTimer.current);
+      runtimePlanClearTimer.current = null;
+    }
+    runtimePlanRef.current = plan;
+    setRuntimePlan(plan);
+  }, []);
+
+  const clearCompletedRuntimePlanSoon = useCallback(() => {
+    if (!isRuntimePlanComplete(runtimePlanRef.current)) return;
+    if (runtimePlanClearTimer.current) {
+      clearTimeout(runtimePlanClearTimer.current);
+    }
+    runtimePlanClearTimer.current = setTimeout(() => {
+      runtimePlanRef.current = null;
+      runtimePlanClearTimer.current = null;
+      setRuntimePlan(null);
+    }, 1800);
+  }, []);
+
+  useEffect(() => () => {
+    if (runtimePlanClearTimer.current) {
+      clearTimeout(runtimePlanClearTimer.current);
+    }
+  }, []);
 
   // Load message history and group members when topic changes
   useEffect(() => {
@@ -56,7 +94,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setIsDragActive(false);
     dragDepthRef.current = 0;
     setPeerTyping(false);
-    setRuntimePlan(null);
+    clearRuntimePlan();
     setReplyTo(null);
     setMembers([]);
     setGroupInfo(null);
@@ -130,12 +168,12 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           if (streamId) {
             setMessages((prev) => prev.filter((message) => message._stream_id !== streamId));
           }
-          setRuntimePlan(null);
+          clearRuntimePlan();
           return;
         }
 
         if (isRuntimePlanMessage(msg.data)) {
-          setRuntimePlan(normalizeRuntimePlan(msg.data.content));
+          applyRuntimePlan(normalizeRuntimePlan(msg.data.content));
           return;
         }
 
@@ -200,7 +238,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           return mergeMessages(prev, [serverMsg]);
         });
         if (fromUid !== user.uid && isFinalTextMessage(serverMsg)) {
-          setRuntimePlan(null);
+          clearCompletedRuntimePlanSoon();
         }
         updateTopicSeq(topic, serverMsg.id);
 
@@ -333,6 +371,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     if (!text && !pendingAttachment) return;
     if (isUploadingAttachment) return;
 
+    clearRuntimePlan();
     const attachmentToSend = pendingAttachment;
     setInput('');
     const currentReplyTo = replyTo;
@@ -408,7 +447,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
         }
       }
     }
-  }, [finalizeOptimisticMessage, input, isUploadingAttachment, pendingAttachment, removeOptimisticMessage, replyTo, topic, user.uid]);
+  }, [clearRuntimePlan, finalizeOptimisticMessage, input, isUploadingAttachment, pendingAttachment, removeOptimisticMessage, replyTo, topic, user.uid]);
 
   const handleStopGeneration = useCallback(async () => {
     if (!activeBotWorking || isStopRequested) return;
@@ -1154,6 +1193,15 @@ function normalizePlanStatus(status) {
     return status;
   }
   return 'pending';
+}
+
+function isRuntimePlanComplete(plan) {
+  return Boolean(
+    plan &&
+    Array.isArray(plan.steps) &&
+    plan.steps.length > 0 &&
+    plan.steps.every((step) => step.status === 'completed'),
+  );
 }
 
 function isFinalTextMessage(message) {
