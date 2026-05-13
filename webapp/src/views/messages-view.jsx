@@ -12,6 +12,7 @@ const WORKING_MESSAGE_TYPES = new Set(['thinking', 'tool_use', 'tool_result']);
 const WORKING_TEXT_PREFIX = 'AI文本:';
 const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024; // 100MB
 const MAX_DROPPED_FILES = 200;
+const HISTORY_AUTO_LOAD_THRESHOLD = 120;
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']);
 
 export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
@@ -28,7 +29,6 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [replyTo, setReplyTo] = useState(null);
-  const [historyOffset, setHistoryOffset] = useState(0);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
@@ -48,6 +48,9 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const dragDepthRef = useRef(0);
   const runtimePlanRef = useRef(null);
   const runtimePlanClearTimer = useRef(null);
+  const historyOffsetRef = useRef(0);
+  const hasMoreHistoryRef = useRef(false);
+  const loadingOlderRef = useRef(false);
 
   const clearRuntimePlan = useCallback(() => {
     if (runtimePlanClearTimer.current) {
@@ -99,8 +102,11 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setMembers([]);
     setGroupInfo(null);
     setPeerProfile(null);
-    setHistoryOffset(0);
+    historyOffsetRef.current = 0;
+    hasMoreHistoryRef.current = false;
+    loadingOlderRef.current = false;
     setHasMoreHistory(false);
+    setLoadingOlder(false);
     setIsStopRequested(false);
     loadHistory();
     if (isGroup && groupId) {
@@ -287,15 +293,16 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       if (res.messages) {
         const normalizedMessages = res.messages.map(normalizeIncomingMessage);
         setMessages(normalizedMessages);
-        setHistoryOffset(normalizedMessages.length);
+        historyOffsetRef.current = normalizedMessages.length;
         setHasMoreHistory(normalizedMessages.length === PAGE_SIZE);
+        hasMoreHistoryRef.current = normalizedMessages.length === PAGE_SIZE;
       }
     } catch (e) {
     }
   };
 
-  const loadOlderHistory = async () => {
-    if (loadingOlder || !hasMoreHistory) return;
+  const loadOlderHistory = useCallback(async () => {
+    if (loadingOlderRef.current || !hasMoreHistoryRef.current) return;
     
     // Capture the absolute scroll geometry BEFORE rendering the older batch
     if (timelineRef.current) {
@@ -305,18 +312,30 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       };
     }
     
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
-      const res = await api.getMessages(topic, PAGE_SIZE, historyOffset, true);
+      const res = await api.getMessages(topic, PAGE_SIZE, historyOffsetRef.current, true);
       const older = (res.messages || []).map(normalizeIncomingMessage);
       setMessages((prev) => mergeMessages(older, prev));
-      setHistoryOffset((prev) => prev + older.length);
-      setHasMoreHistory(older.length === PAGE_SIZE);
+      historyOffsetRef.current += older.length;
+      const hasMore = older.length === PAGE_SIZE;
+      hasMoreHistoryRef.current = hasMore;
+      setHasMoreHistory(hasMore);
     } catch (e) {
     } finally {
+      loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  };
+  }, [topic]);
+
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el || !hasMoreHistory || loadingOlder) return;
+    if (el.scrollHeight <= el.clientHeight + HISTORY_AUTO_LOAD_THRESHOLD) {
+      loadOlderHistory();
+    }
+  }, [messages.length, hasMoreHistory, loadingOlder, loadOlderHistory]);
 
   const activeBotWorking = useMemo(() => {
     let lastWorkingIndex = -1;
@@ -741,8 +760,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   const handleTimelineScroll = (e) => {
     const el = e.target;
-    // Trigger infinite fetch when within 100 pixels of the top
-    if (el.scrollTop < 100 && hasMoreHistory && !loadingOlder) {
+    if (el.scrollTop <= HISTORY_AUTO_LOAD_THRESHOLD) {
       loadOlderHistory();
     }
   };
@@ -778,11 +796,9 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             <span>Chat History</span>
           </div>
         
-        {hasMoreHistory && (
+        {loadingOlder && (
           <div className="oc-history-load" style={{textAlign:'center', padding:'10px 0 24px 0'}}>
-            <button className="v3-btn-secondary" onClick={loadOlderHistory} disabled={loadingOlder}>
-              {loadingOlder ? t('loading') : t('chat_load_older')}
-            </button>
+            <span>{t('loading')}</span>
           </div>
         )}
         
