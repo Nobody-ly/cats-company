@@ -11,6 +11,28 @@ compose_file="$compose_dir/docker-compose.yml"
 health_api="${TEST_HEALTH_API:-http://127.0.0.1:16061/health}"
 health_web="${TEST_HEALTH_WEB:-http://127.0.0.1:18080/health}"
 
+wait_for_health() {
+  local name="$1"
+  local url="$2"
+  local attempts="${3:-30}"
+  local delay="${4:-2}"
+
+  for attempt in $(seq 1 "$attempts"); do
+    if curl -fsS -m 10 "$url" >/dev/null; then
+      echo "$name health ok"
+      return 0
+    fi
+
+    echo "waiting for $name health ($attempt/$attempts): $url"
+    sleep "$delay"
+  done
+
+  echo "$name health check failed after $attempts attempts: $url" >&2
+  curl -sS -m 10 "$url" >&2 || true
+  echo >&2
+  return 1
+}
+
 if [ -z "$revision" ]; then
   echo "usage: $0 <stack-root> <revision>" >&2
   exit 1
@@ -89,7 +111,7 @@ cd "$compose_dir"
 
 printf '%s\n' "$revision" > "$root/CURRENT_REVISION"
 
-curl -fsS "$health_api" >/dev/null
-curl -fsS "$health_web" >/dev/null
+wait_for_health "api" "$health_api"
+wait_for_health "web" "$health_web"
 
 echo "deployed revision $revision to $root"
