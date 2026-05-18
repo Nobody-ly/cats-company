@@ -7,6 +7,7 @@ import MessagesView from './messages-view';
 import ProfileEditor from '../widgets/profile-editor';
 import FeedbackModal from '../widgets/feedback-modal';
 import CatsCoDownloadModal from '../widgets/catsco-download-modal';
+import PasswordResetForm from '../widgets/password-reset-form';
 import Avatar from '../widgets/avatar';
 import { Bug, Download, Settings, LogOut } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
@@ -22,6 +23,7 @@ function normalizeUserProfile(raw) {
   return {
     uid: raw.uid || raw.id,
     username,
+    email: raw.email || '',
     display_name: raw.display_name || username,
     avatar_url: raw.avatar_url || '',
     account_type: raw.account_type || 'human',
@@ -409,86 +411,110 @@ function AuthView({ mode, setMode, onLogin, onRegister }) {
     }
   };
 
-  return (
+  const authShell = (content) => (
     <div className="oc-auth">
       <div className="oc-auth-cat">
         <CatOrb hue={0} backgroundColor="#050505" hoverIntensity={0.3} rotateOnHover={false} />
       </div>
-      <form className="oc-auth-card" onSubmit={handleSubmit}>
-        <div className="oc-auth-logo">CatsCo</div>
-        {error && <div style={{ color: '#FA5151', marginBottom: 12, fontSize: 13 }}>{error}</div>}
+      {content}
+    </div>
+  );
 
+  if (mode === 'reset') {
+    return authShell(
+      <div className="oc-auth-card">
+        <div className="oc-auth-logo">CatsCo</div>
+        <div className="oc-settings-secondary" style={{ marginBottom: 14 }}>
+          输入注册邮箱，验证后设置新密码。
+        </div>
+        <PasswordResetForm />
+        <div className="oc-auth-link">
+          <span>想起密码了？<a href="#" onClick={(e) => { e.preventDefault(); setMode('login'); }}>返回登录</a></span>
+        </div>
+      </div>
+    );
+  }
+
+  return authShell(
+    <form className="oc-auth-card" onSubmit={handleSubmit}>
+      <div className="oc-auth-logo">CatsCo</div>
+      {error && <div style={{ color: '#FA5151', marginBottom: 12, fontSize: 13 }}>{error}</div>}
+
+      {mode === 'login' ? (
+        <>
+          <input
+            className="oc-auth-input"
+            placeholder={t('username')}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <input
+            className="oc-auth-input"
+            type="password"
+            placeholder={t('password')}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </>
+      ) : (
+        <>
+          <input
+            className="oc-auth-input"
+            type="email"
+            placeholder="邮箱地址"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              className="oc-auth-input"
+              placeholder="邮箱验证码"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="oc-auth-btn"
+              onClick={handleSendCode}
+              disabled={countdown > 0}
+              style={{ width: '120px', fontSize: '13px' }}
+            >
+              {countdown > 0 ? `${countdown}秒` : '发送验证码'}
+            </button>
+          </div>
+          <input
+            className="oc-auth-input"
+            placeholder="登录名称（可用于登录）"
+            value={loginName}
+            onChange={(e) => setLoginName(e.target.value)}
+          />
+          <input
+            className="oc-auth-input"
+            type="password"
+            placeholder="设置密码（至少6位）"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </>
+      )}
+
+      <button className="oc-auth-btn" type="submit">
+        {mode === 'login' ? t('login') : t('register')}
+      </button>
+      <div className="oc-auth-link">
         {mode === 'login' ? (
           <>
-            <input
-              className="oc-auth-input"
-              placeholder={t('username')}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-            <input
-              className="oc-auth-input"
-              type="password"
-              placeholder={t('password')}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <span>还没有账号？<a href="#" onClick={(e) => { e.preventDefault(); setMode('register'); }}>立即注册</a></span>
+            <span style={{ marginLeft: 12 }}>
+              <a href="#" onClick={(e) => { e.preventDefault(); setMode('reset'); }}>忘记密码？</a>
+            </span>
           </>
         ) : (
-          <>
-            <input
-              className="oc-auth-input"
-              type="email"
-              placeholder="邮箱地址"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input
-                className="oc-auth-input"
-                placeholder="邮箱验证码"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <button
-                type="button"
-                className="oc-auth-btn"
-                onClick={handleSendCode}
-                disabled={countdown > 0}
-                style={{ width: '120px', fontSize: '13px' }}
-              >
-                {countdown > 0 ? `${countdown}秒` : '发送验证码'}
-              </button>
-            </div>
-            <input
-              className="oc-auth-input"
-              placeholder="登录名称（可用于登录）"
-              value={loginName}
-              onChange={(e) => setLoginName(e.target.value)}
-            />
-            <input
-              className="oc-auth-input"
-              type="password"
-              placeholder="设置密码（至少6位）"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </>
+          <span>已有账号？<a href="#" onClick={(e) => { e.preventDefault(); setMode('login'); }}>立即登录</a></span>
         )}
-
-        <button className="oc-auth-btn" type="submit">
-          {mode === 'login' ? t('login') : t('register')}
-        </button>
-        <div className="oc-auth-link">
-          {mode === 'login' ? (
-            <span>还没有账号？<a href="#" onClick={(e) => { e.preventDefault(); setMode('register'); }}>立即注册</a></span>
-          ) : (
-            <span>已有账号？<a href="#" onClick={(e) => { e.preventDefault(); setMode('login'); }}>立即登录</a></span>
-          )}
-        </div>
-      </form>
-    </div>
+      </div>
+    </form>
   );
 }
 

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { api } from '../api';
 import t from '../i18n';
 import Avatar from './avatar';
+import PasswordResetForm from './password-reset-form';
 
 export default function ProfileEditor({ user, onClose, onSaved }) {
   const fileInputRef = useRef(null);
@@ -13,6 +14,8 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
+  const resetEmail = user?.email || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user?.username || '') ? user.username : '');
 
   const handleSelectAvatar = async (event) => {
     const file = event.target.files?.[0];
@@ -80,6 +83,19 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
             />
             <span style={{ color: 'var(--v3-text-main)' }}>显示 AI 思考过程 (Code Mode)</span>
           </label>
+        </div>
+        <div className="oc-settings-section">
+          <div className="oc-settings-section-title">账号安全</div>
+          {showPasswordReset ? (
+            <PasswordResetForm defaultEmail={resetEmail} />
+          ) : (
+            <button type="button" className="oc-settings-list-item oc-settings-list-button" onClick={() => setShowPasswordReset(true)}>
+              <div className="oc-settings-list-text">
+                <div>重置登录密码</div>
+                <div className="oc-settings-secondary">通过注册邮箱验证码设置新密码。</div>
+              </div>
+            </button>
+          )}
         </div>
         {error && <div className="oc-form-error">{error}</div>}
         <div className="oc-settings-actions">

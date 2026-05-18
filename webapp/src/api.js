@@ -77,6 +77,8 @@ async function tokenRequest(method, path, body) {
 
 export const api = {
   sendVerificationCode: (email) => request('POST', '/api/auth/send-code', { email }),
+  sendPasswordResetCode: (email) => request('POST', '/api/auth/reset-password/send-code', { email }),
+  resetPassword: (data) => request('POST', '/api/auth/reset-password', data),
   register: (data) => request('POST', '/api/auth/register', data),
   login: (data) => request('POST', '/api/auth/login', data),
   getMe: () => request('GET', '/api/me'),

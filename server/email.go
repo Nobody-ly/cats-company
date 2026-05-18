@@ -23,6 +23,11 @@ type verificationCode struct {
 	Expires int64
 }
 
+const (
+	verificationPurposeRegister      = "register"
+	verificationPurposePasswordReset = "password_reset"
+)
+
 var (
 	verificationCodes = make(map[string]*verificationCode)
 	codesMutex        sync.RWMutex
@@ -32,7 +37,7 @@ func generateCode() string {
 	return fmt.Sprintf("%06d", rand.Intn(900000)+100000)
 }
 
-func sendEmailViaResend(email, code, apiKey string) error {
+func sendEmailViaResend(email, code, apiKey, subject string) error {
 	emailFrom := os.Getenv("EMAIL_FROM")
 	if emailFrom == "" {
 		emailFrom = "onboarding@resend.dev"
@@ -41,7 +46,7 @@ func sendEmailViaResend(email, code, apiKey string) error {
 	payload := map[string]interface{}{
 		"from":    emailFrom,
 		"to":      []string{email},
-		"subject": "Cats Company 注册验证码",
+		"subject": subject,
 		"html":    fmt.Sprintf("<p>您的 Cats Company 验证码是：<strong>%s</strong></p><p>验证码 5 分钟内有效，请勿泄露给他人。</p>", code),
 	}
 
@@ -195,7 +200,7 @@ func buildTencentCloudAuthorization(secretID, secretKey, service, host, action, 
 	return fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s", algorithm, secretID, credentialScope, signedHeaders, signature)
 }
 
-func sendEmailViaTencentSES(email, code string) error {
+func sendEmailViaTencentSES(email, code, subject string) error {
 	secretID, secretKey, region, fromEmail, templateIDRaw, err := tencentSESRequiredConfig()
 	if err != nil {
 		return err
@@ -207,9 +212,8 @@ func sendEmailViaTencentSES(email, code string) error {
 	}
 
 	templateData, _ := json.Marshal(map[string]string{"code": code})
-	subject := envTrim("TENCENT_SES_SUBJECT")
-	if subject == "" {
-		subject = "Cats Company 注册验证码"
+	if envSubject := envTrim("TENCENT_SES_SUBJECT"); envSubject != "" {
+		subject = envSubject
 	}
 	replyTo := envTrim("TENCENT_SES_REPLY_TO")
 	if replyTo == "" {
@@ -300,28 +304,40 @@ func exposeVerificationCodeInResponse() bool {
 	return !isProductionLikeEnv()
 }
 
-func deleteVerificationCode(email string) {
+func verificationCodeKey(email, purpose string) string {
+	return purpose + ":" + strings.ToLower(strings.TrimSpace(email))
+}
+
+func deleteVerificationCode(email, purpose string) {
 	codesMutex.Lock()
-	delete(verificationCodes, email)
+	delete(verificationCodes, verificationCodeKey(email, purpose))
 	codesMutex.Unlock()
 }
 
-func storeVerificationCode(email, code string, expires int64) {
+func storeVerificationCode(email, code string, expires int64, purpose string) {
 	codesMutex.Lock()
-	verificationCodes[email] = &verificationCode{
+	verificationCodes[verificationCodeKey(email, purpose)] = &verificationCode{
 		Code:    code,
 		Expires: expires,
 	}
 	codesMutex.Unlock()
 }
 
-func sendCodeEmail(email, code string) error {
+func verificationEmailSubject(purpose string) string {
+	if purpose == verificationPurposePasswordReset {
+		return "Cats Company 重置密码验证码"
+	}
+	return "Cats Company 注册验证码"
+}
+
+func sendCodeEmail(email, code, purpose string) error {
+	subject := verificationEmailSubject(purpose)
 	if hasTencentSESConfig() {
-		return sendEmailViaTencentSES(email, code)
+		return sendEmailViaTencentSES(email, code, subject)
 	}
 
 	if resendAPIKey := envTrim("RESEND_API_KEY"); resendAPIKey != "" {
-		return sendEmailViaResend(email, code, resendAPIKey)
+		return sendEmailViaResend(email, code, resendAPIKey, subject)
 	}
 
 	if isProductionLikeEnv() {
@@ -333,8 +349,12 @@ func sendCodeEmail(email, code string) error {
 }
 
 func verifyCode(email, code string) bool {
+	return verifyCodeForPurpose(email, code, verificationPurposeRegister)
+}
+
+func verifyCodeForPurpose(email, code, purpose string) bool {
 	codesMutex.RLock()
-	stored, exists := verificationCodes[email]
+	stored, exists := verificationCodes[verificationCodeKey(email, purpose)]
 	codesMutex.RUnlock()
 
 	if !exists {
@@ -342,7 +362,7 @@ func verifyCode(email, code string) bool {
 	}
 
 	if time.Now().Unix() > stored.Expires {
-		deleteVerificationCode(email)
+		deleteVerificationCode(email, purpose)
 		return false
 	}
 
@@ -350,18 +370,22 @@ func verifyCode(email, code string) bool {
 		return false
 	}
 
-	deleteVerificationCode(email)
+	deleteVerificationCode(email, purpose)
 	return true
 }
 
 func sendVerificationCode(email string) (string, error) {
+	return sendVerificationCodeForPurpose(email, verificationPurposeRegister)
+}
+
+func sendVerificationCodeForPurpose(email, purpose string) (string, error) {
 	code := generateCode()
 	expires := time.Now().Add(5 * time.Minute).Unix()
 
-	storeVerificationCode(email, code, expires)
+	storeVerificationCode(email, code, expires, purpose)
 
-	if err := sendCodeEmail(email, code); err != nil {
-		deleteVerificationCode(email)
+	if err := sendCodeEmail(email, code, purpose); err != nil {
+		deleteVerificationCode(email, purpose)
 		return "", err
 	}
 

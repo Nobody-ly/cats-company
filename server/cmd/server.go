@@ -156,6 +156,8 @@ func main() {
 
 	// Auth
 	mux.HandleFunc("/api/auth/send-code", userHandler.HandleSendCode)
+	mux.HandleFunc("/api/auth/reset-password/send-code", userHandler.HandleResetPasswordSendCode)
+	mux.HandleFunc("/api/auth/reset-password", userHandler.HandleResetPassword)
 	mux.HandleFunc("/api/auth/register", userHandler.HandleRegister)
 	mux.HandleFunc("/api/auth/login", userHandler.HandleLogin)
 

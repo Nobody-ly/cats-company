@@ -38,6 +38,13 @@ type SendCodeRequest struct {
 	Email string `json:"email"`
 }
 
+// ResetPasswordRequest is the JSON body for resetting a password by email code.
+type ResetPasswordRequest struct {
+	Email    string `json:"email"`
+	Code     string `json:"code"`
+	Password string `json:"password"`
+}
+
 // LoginRequest is the JSON body for login.
 type LoginRequest struct {
 	Account  string `json:"account"` // 支持用户名或邮箱
@@ -87,6 +94,84 @@ func (h *UserHandler) HandleSendCode(w http.ResponseWriter, r *http.Request) {
 		resp["devCode"] = code
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// HandleResetPasswordSendCode handles POST /api/auth/reset-password/send-code.
+func (h *UserHandler) HandleResetPasswordSendCode(w http.ResponseWriter, r *http.Request) {
+	var req SendCodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	req.Email = strings.TrimSpace(req.Email)
+
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email required"})
+		return
+	}
+
+	existingUser, err := h.db.GetUserByEmail(req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	resp := map[string]interface{}{"success": true}
+	if existingUser != nil {
+		code, err := sendVerificationCodeForPurpose(req.Email, verificationPurposePasswordReset)
+		if err != nil {
+			fmt.Printf("[EMAIL_ERROR] Failed to send password reset code to %s: %v\n", req.Email, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send verification code"})
+			return
+		}
+		if exposeVerificationCodeInResponse() {
+			resp["devCode"] = code
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// HandleResetPassword handles POST /api/auth/reset-password.
+func (h *UserHandler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req ResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	req.Email = strings.TrimSpace(req.Email)
+	req.Code = strings.TrimSpace(req.Code)
+
+	if req.Email == "" || req.Code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email and code required"})
+		return
+	}
+	if len(req.Password) < 6 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password min 6 chars"})
+		return
+	}
+
+	user, err := h.db.GetUserByEmail(req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+	if user == nil || !verifyCodeForPurpose(req.Email, req.Code, verificationPurposePasswordReset) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired verification code"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if err := h.db.UpdateUserPasswordHash(user.ID, hash); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reset password"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }
 
 // HandleRegister handles POST /api/auth/register
@@ -301,6 +386,7 @@ func (h *UserHandler) HandleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"uid":          user.ID,
 		"username":     user.Username,
+		"email":        user.Email,
 		"display_name": user.DisplayName,
 		"avatar_url":   user.AvatarURL,
 		"account_type": user.AccountType,
@@ -338,6 +424,7 @@ func (h *UserHandler) HandleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"uid":          user.ID,
 		"username":     user.Username,
+		"email":        user.Email,
 		"display_name": user.DisplayName,
 		"avatar_url":   user.AvatarURL,
 		"account_type": user.AccountType,

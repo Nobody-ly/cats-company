@@ -75,6 +75,12 @@ func (a *Adapter) UpdateUserDisplayName(uid int64, displayName string) error {
 	return err
 }
 
+// UpdateUserPasswordHash updates a user's password hash.
+func (a *Adapter) UpdateUserPasswordHash(uid int64, passHash []byte) error {
+	_, err := a.db.Exec(`UPDATE users SET pass_hash = ? WHERE id = ?`, passHash, uid)
+	return err
+}
+
 // SearchUsers searches for users by username or display name (for adding friends).
 // Private bots are excluded from search results.
 func (a *Adapter) SearchUsers(query string, limit int) ([]*types.User, error) {
