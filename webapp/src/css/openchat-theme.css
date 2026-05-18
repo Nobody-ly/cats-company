@@ -1571,6 +1571,94 @@ body {
   background: rgba(250, 81, 81, 0.1);
 }
 
+.catsco-download-modal {
+  width: 640px;
+  max-width: 92vw;
+}
+
+.catsco-download-header {
+  align-items: flex-start;
+}
+
+.catsco-download-header p {
+  margin: 6px 0 0;
+  color: var(--v3-text-muted);
+  font-size: 13px;
+}
+
+.catsco-download-list {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px 22px;
+}
+
+.catsco-download-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto 32px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--v3-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--v3-text-name);
+  text-decoration: none;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.catsco-download-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+}
+
+.catsco-download-icon,
+.catsco-download-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--v3-accent);
+}
+
+.catsco-download-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(52, 199, 89, 0.12);
+}
+
+.catsco-download-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.catsco-download-title {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.catsco-download-desc,
+.catsco-download-meta {
+  color: var(--v3-text-muted);
+  font-size: 12px;
+}
+
+.catsco-download-meta {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .catsco-download-card {
+    grid-template-columns: 36px minmax(0, 1fr) 28px;
+  }
+
+  .catsco-download-meta {
+    grid-column: 2 / 4;
+  }
+}
+
 /* Agent Store grid layout */
 .v3-agent-grid {
   display: grid;
