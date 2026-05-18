@@ -42,19 +42,77 @@ function getInitialUser() {
   }
 }
 
+function lastTopicStorageKey(uid) {
+  return uid ? `v3_last_topic:${uid}` : 'v3_last_topic';
+}
+
+function normalizeActiveTopic(value) {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    if (!value || value === '[object Object]') return null;
+    return { topicId: value, name: '' };
+  }
+
+  if (typeof value === 'object' && value.topicId) {
+    return {
+      topicId: value.topicId,
+      name: value.name || '',
+      isGroup: Boolean(value.isGroup),
+      groupId: value.groupId,
+      avatar_url: value.avatar_url || '',
+      friendId: value.friendId,
+    };
+  }
+
+  return null;
+}
+
+function readStoredTopic(uid) {
+  const keys = [lastTopicStorageKey(uid), 'v3_last_topic'];
+  for (const key of keys) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+
+    try {
+      const parsed = JSON.parse(raw);
+      const topic = normalizeActiveTopic(parsed);
+      if (topic) return topic;
+    } catch (error) {
+      const topic = normalizeActiveTopic(raw);
+      if (topic) return topic;
+    }
+  }
+
+  return null;
+}
+
+function writeStoredTopic(uid, topic) {
+  const key = lastTopicStorageKey(uid);
+  const normalized = normalizeActiveTopic(topic);
+  if (!normalized) {
+    localStorage.removeItem(key);
+    localStorage.removeItem('v3_last_topic');
+    return;
+  }
+
+  localStorage.setItem(key, JSON.stringify(normalized));
+  localStorage.setItem('v3_last_topic', JSON.stringify(normalized));
+}
+
 export default function TinodeWeb() {
   const [user, setUser] = useState(() => getInitialUser());
   const [activeTab, setActiveTab] = useState(TABS.CHATS);
-  const [activeTopic, _setActiveTopic] = useState(() => localStorage.getItem('v3_last_topic') || null);
+  const [activeTopic, _setActiveTopic] = useState(null);
 
-  const setActiveTopic = useCallback((topicId) => {
-    _setActiveTopic(topicId);
-    if (topicId) {
-      localStorage.setItem('v3_last_topic', topicId);
-    } else {
-      localStorage.removeItem('v3_last_topic');
-    }
-  }, []);
+  const setActiveTopic = useCallback((nextValue) => {
+    _setActiveTopic((prev) => {
+      const next = typeof nextValue === 'function' ? nextValue(prev) : nextValue;
+      const normalized = normalizeActiveTopic(next);
+      writeStoredTopic(user?.uid, normalized);
+      return normalized;
+    });
+  }, [user?.uid]);
   const [authMode, setAuthMode] = useState('login');
   const [onlineUsers, setOnlineUsers] = useState({});
   const [wsStatus, setWsStatus] = useState('disconnected');
@@ -115,6 +173,15 @@ export default function TinodeWeb() {
       if (user) disconnectWS();
     };
   }, [user, handleWSMessage]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      _setActiveTopic(null);
+      return;
+    }
+
+    _setActiveTopic(readStoredTopic(user.uid));
+  }, [user?.uid]);
 
   useEffect(() => {
     if (!user?.uid) return;
