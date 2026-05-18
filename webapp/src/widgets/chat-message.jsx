@@ -255,7 +255,7 @@ function subAgentInfoFromToolUse(block, toolId) {
   return {
     id: input.subagent_id || subAgentIdFromToolId(toolId),
     toolId,
-    name: input.subagent_name || block.name || input.display_name,
+    name: input.subagent_name || input.display_name || block.name,
     task: input.task,
     agentType: input.agent_type,
     status: input.status || 'running',
@@ -266,14 +266,14 @@ function subAgentEventFromBlock(block, text) {
   const metadata = block.metadata || block.payload || {};
   const hasMetadata = metadata.kind === 'subagent_event' || metadata.subagent_id || metadata.subagent_event_type;
   if (hasMetadata) {
-    const name = metadata.subagent_name || parseSubAgentPrefix(text)?.name;
+    const name = metadata.subagent_name || metadata.display_name || parseSubAgentPrefix(text)?.name;
     return {
       id: metadata.subagent_id,
       toolId: metadata.subagent_id ? `subagent:${metadata.subagent_id}` : undefined,
       name,
-      task: metadata.subagent_task,
-      agentType: metadata.agent_type,
-      status: metadata.subagent_status,
+      task: metadata.subagent_task || metadata.task,
+      agentType: metadata.agent_type || metadata.skill_name,
+      status: metadata.subagent_status || metadata.status,
       eventType: metadata.subagent_event_type,
       text: stripSubAgentPrefix(text, name),
     };
