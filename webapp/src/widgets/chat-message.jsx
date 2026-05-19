@@ -323,6 +323,7 @@ function workingTextContent(text) {
 function messageContentText(content, fallback = '') {
   if (typeof content === 'string') return content;
   if (content == null) return fallback;
+  if (typeof content === 'object' && typeof content.text === 'string') return content.text;
   try {
     return JSON.stringify(content);
   } catch (e) {
@@ -669,9 +670,7 @@ const ChatMessage = memo(ChatMessageComponent, (prevProps, nextProps) => {
 export default ChatMessage;
 
 function TextContent({ content, isGroup }) {
-  const text = useMemo(() => (
-    typeof content === 'string' ? content : content?.text || String(content || '')
-  ), [content]);
+  const text = useMemo(() => messageContentText(content), [content]);
 
   const markdownHtml = useMemo(() => {
     const hasMarkdown = /(\*\*|__|`|#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|\[.*\]\(.*\))/m.test(text);

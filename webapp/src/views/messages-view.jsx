@@ -179,8 +179,12 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           return;
         }
 
-        if (isRuntimePlanMessage(msg.data)) {
-          applyRuntimePlan(normalizeRuntimePlan(msg.data.content));
+        const incomingRuntimePlan = runtimePlanFromMessage(msg.data);
+        if (incomingRuntimePlan) {
+          applyRuntimePlan(incomingRuntimePlan);
+          if (isRuntimePlanComplete(incomingRuntimePlan)) {
+            clearCompletedRuntimePlanSoon();
+          }
           return;
         }
 
@@ -292,11 +296,14 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     try {
       const res = await api.getMessages(topic, PAGE_SIZE, 0, true);
       if (res.messages) {
-        const normalizedMessages = res.messages.map(normalizeIncomingMessage);
-        setMessages(normalizedMessages);
-        historyOffsetRef.current = normalizedMessages.length;
-        setHasMoreHistory(normalizedMessages.length === PAGE_SIZE);
-        hasMoreHistoryRef.current = normalizedMessages.length === PAGE_SIZE;
+        const { visibleMessages, latestPlan } = normalizeHistoryMessages(res.messages);
+        setMessages(visibleMessages);
+        if (latestPlan && !isRuntimePlanComplete(latestPlan)) {
+          applyRuntimePlan(latestPlan);
+        }
+        historyOffsetRef.current = (res.messages || []).length;
+        setHasMoreHistory((res.messages || []).length === PAGE_SIZE);
+        hasMoreHistoryRef.current = (res.messages || []).length === PAGE_SIZE;
       }
     } catch (e) {
     }
@@ -317,10 +324,10 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setLoadingOlder(true);
     try {
       const res = await api.getMessages(topic, PAGE_SIZE, historyOffsetRef.current, true);
-      const older = (res.messages || []).map(normalizeIncomingMessage);
-      setMessages((prev) => mergeMessages(older, prev));
-      historyOffsetRef.current += older.length;
-      const hasMore = older.length === PAGE_SIZE;
+      const { visibleMessages } = normalizeHistoryMessages(res.messages);
+      setMessages((prev) => mergeMessages(visibleMessages, prev));
+      historyOffsetRef.current += (res.messages || []).length;
+      const hasMore = (res.messages || []).length === PAGE_SIZE;
       hasMoreHistoryRef.current = hasMore;
       setHasMoreHistory(hasMore);
     } catch (e) {
@@ -1154,7 +1161,8 @@ function normalizeIncomingMessage(message) {
   normalized.metadata = message?.metadata || null;
   normalized.msg_type = message?.msg_type || 'text';
 
-  let inferredType = message?.type;
+  const runtimePlan = normalizeRuntimePlan(message?.content);
+  let inferredType = runtimePlan ? 'runtime_plan' : message?.type;
   if (!inferredType) {
     inferredType = inferWorkingTypeFromBlocks(normalized.content_blocks);
   }
@@ -1187,8 +1195,12 @@ function isStreamCancel(data) {
   return data?.type === 'stream_cancel' || data?.metadata?.stream_event === 'cancel';
 }
 
-function isRuntimePlanMessage(data) {
-  return data?.type === 'runtime_plan' || data?.msg_type === 'runtime_plan';
+function runtimePlanFromMessage(data) {
+  if (!data) return null;
+  const explicitPlan = data.type === 'runtime_plan' || data.msg_type === 'runtime_plan';
+  const plan = normalizeRuntimePlan(data.content);
+  if (plan) return plan;
+  return explicitPlan ? normalizeRuntimePlan(data.payload || data.metadata?.plan || data) : null;
 }
 
 function normalizeRuntimePlan(content) {
@@ -1198,6 +1210,15 @@ function normalizeRuntimePlan(content) {
       value = JSON.parse(value);
     } catch (err) {
       return null;
+    }
+  }
+  if (value && typeof value === 'object') {
+    if (value.type === 'runtime_plan') {
+      value = value.payload || value.plan || value.content || value;
+    } else if (!Array.isArray(value.steps) && value.payload && Array.isArray(value.payload.steps)) {
+      value = value.payload;
+    } else if (!Array.isArray(value.steps) && value.plan && Array.isArray(value.plan.steps)) {
+      value = value.plan;
     }
   }
   if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) {
@@ -1231,6 +1252,21 @@ function isRuntimePlanComplete(plan) {
     plan.steps.length > 0 &&
     plan.steps.every((step) => step.status === 'completed'),
   );
+}
+
+function normalizeHistoryMessages(rawMessages) {
+  let latestPlan = null;
+  const visibleMessages = [];
+  for (const raw of rawMessages || []) {
+    const normalized = normalizeIncomingMessage(raw);
+    const plan = runtimePlanFromMessage(normalized);
+    if (plan) {
+      latestPlan = plan;
+      continue;
+    }
+    visibleMessages.push(normalized);
+  }
+  return { visibleMessages, latestPlan };
 }
 
 function isFinalTextMessage(message) {
