@@ -28,8 +28,8 @@ services:
       APP_ENV: production
       TZ: Asia/Shanghai
     ports:
-      - "${PROD_API_HOST_PORT:-26061}:6061"
-      - "${PROD_GRPC_HOST_PORT:-26062}:6062"
+      - "${PROD_API_BIND_HOST:-127.0.0.1}:${PROD_API_HOST_PORT:-26061}:6061"
+      - "${PROD_GRPC_BIND_HOST:-127.0.0.1}:${PROD_GRPC_HOST_PORT:-26062}:6062"
     volumes:
       - "${PROD_STACK_ROOT}/data/uploads:/app/uploads"
       - "${PROD_STACK_ROOT}/compose/tinode.prod.conf:/app/tinode.conf:ro"
@@ -50,7 +50,7 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "${PROD_WEB_HOST_PORT:-28080}:80"
+      - "${PROD_WEB_BIND_HOST:-127.0.0.1}:${PROD_WEB_HOST_PORT:-28080}:80"
     healthcheck:
       test: ["CMD-SHELL", "nginx -t && test -s /usr/share/nginx/html/index.html"]
       interval: 30s

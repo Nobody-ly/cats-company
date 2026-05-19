@@ -141,14 +141,14 @@ class Bot:
     def run(self):
         """Start the bot (blocking). Reconnects on disconnect."""
         self._running = True
-        url = f"{self.server_url}?api_key={self.api_key}"
 
         logger.info(f"bot starting, connecting to {self.server_url}")
 
         while self._running:
             try:
                 self._ws = websocket.WebSocketApp(
-                    url,
+                    self.server_url,
+                    header=[f"X-API-Key: {self.api_key}"],
                     on_open=self._on_open,
                     on_message=self._on_message,
                     on_error=self._on_error,

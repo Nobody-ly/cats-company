@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	maxImageSize = 1 << 30 // 1GB
-	maxFileSize  = 1 << 30 // 1GB
-	uploadDir    = "uploads"
+	maxUploadSizeMB = 300
+	maxImageSize    = maxUploadSizeMB << 20
+	maxFileSize     = maxUploadSizeMB << 20
+	uploadDir       = "uploads"
 )
 
 var allowedImageExts = map[string]bool{
@@ -84,7 +85,7 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxSize))
 	if err := r.ParseMultipartForm(int64(maxSize)); err != nil {
-		writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": "file too large"})
+		writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("file too large; maximum supported size is %dMB", maxUploadSizeMB)})
 		return
 	}
 

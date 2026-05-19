@@ -76,6 +76,13 @@ func buildMySQLPoolConfig(cfg DBConfig) mysql.PoolConfig {
 	return pool
 }
 
+func chainHTTP(handler http.HandlerFunc, middlewares ...func(http.HandlerFunc) http.HandlerFunc) http.HandlerFunc {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		handler = middlewares[i](handler)
+	}
+	return handler
+}
+
 func main() {
 	cfgPath := "tinode.conf"
 	if len(os.Args) > 1 {
@@ -112,6 +119,7 @@ func main() {
 
 	// Initialize components
 	rateLimiter := server.NewRateLimiter(server.DefaultRateLimits())
+	httpLimiter := server.NewHTTPRateLimiter()
 	hub := server.NewHub(db, rateLimiter)
 	go hub.Run()
 
@@ -134,6 +142,58 @@ func main() {
 	feedbackHandler := server.NewFeedbackHandler(db)
 	// usageHandler := server.NewUsageHandler(db)
 
+	authSendCodeIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "auth_send_code_ip", Limit: 20, Window: time.Minute, Burst: 5,
+	})
+	authSendCodeEmailLimit := httpLimiter.LimitJSONField(server.HTTPRateLimitConfig{
+		Name: "auth_send_code_email", Limit: 3, Window: 10 * time.Minute, Burst: 3,
+	}, "email")
+	authResetCodeIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "auth_reset_code_ip", Limit: 10, Window: time.Minute, Burst: 3,
+	})
+	authResetCodeEmailLimit := httpLimiter.LimitJSONField(server.HTTPRateLimitConfig{
+		Name: "auth_reset_code_email", Limit: 3, Window: 10 * time.Minute, Burst: 3,
+	}, "email")
+	authResetPasswordIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "auth_reset_password_ip", Limit: 20, Window: time.Minute, Burst: 5,
+	})
+	authResetPasswordEmailLimit := httpLimiter.LimitJSONField(server.HTTPRateLimitConfig{
+		Name: "auth_reset_password_email", Limit: 5, Window: 10 * time.Minute, Burst: 3,
+	}, "email")
+	authLoginIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "auth_login_ip", Limit: 60, Window: time.Minute, Burst: 10,
+	})
+	authLoginAccountLimit := httpLimiter.LimitJSONField(server.HTTPRateLimitConfig{
+		Name: "auth_login_account", Limit: 10, Window: 10 * time.Minute, Burst: 5,
+	}, "account")
+	authRegisterIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "auth_register_ip", Limit: 10, Window: time.Hour, Burst: 3,
+	})
+	authRegisterEmailLimit := httpLimiter.LimitJSONField(server.HTTPRateLimitConfig{
+		Name: "auth_register_email", Limit: 5, Window: time.Hour, Burst: 3,
+	}, "email")
+	authRegisterUsernameLimit := httpLimiter.LimitJSONField(server.HTTPRateLimitConfig{
+		Name: "auth_register_username", Limit: 5, Window: time.Hour, Burst: 3,
+	}, "username")
+	uploadIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "upload_ip", Limit: 60, Window: time.Minute, Burst: 20,
+	})
+	uploadUserLimit := httpLimiter.LimitUser(server.HTTPRateLimitConfig{
+		Name: "upload_user", Limit: 30, Window: time.Minute, Burst: 10,
+	})
+	readerIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "reader_ip", Limit: 20, Window: time.Minute, Burst: 5,
+	})
+	readerUserLimit := httpLimiter.LimitUser(server.HTTPRateLimitConfig{
+		Name: "reader_user", Limit: 10, Window: time.Minute, Burst: 3,
+	})
+	feedbackIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
+		Name: "feedback_ip", Limit: 20, Window: time.Minute, Burst: 5,
+	})
+	feedbackUserLimit := httpLimiter.LimitUser(server.HTTPRateLimitConfig{
+		Name: "feedback_user", Limit: 10, Window: 10 * time.Minute, Burst: 3,
+	})
+
 	// HTTP routes
 	mux := http.NewServeMux()
 
@@ -155,11 +215,11 @@ func main() {
 	})
 
 	// Auth
-	mux.HandleFunc("/api/auth/send-code", userHandler.HandleSendCode)
-	mux.HandleFunc("/api/auth/reset-password/send-code", userHandler.HandleResetPasswordSendCode)
-	mux.HandleFunc("/api/auth/reset-password", userHandler.HandleResetPassword)
-	mux.HandleFunc("/api/auth/register", userHandler.HandleRegister)
-	mux.HandleFunc("/api/auth/login", userHandler.HandleLogin)
+	mux.HandleFunc("/api/auth/send-code", chainHTTP(userHandler.HandleSendCode, authSendCodeIPLimit, authSendCodeEmailLimit))
+	mux.HandleFunc("/api/auth/reset-password/send-code", chainHTTP(userHandler.HandleResetPasswordSendCode, authResetCodeIPLimit, authResetCodeEmailLimit))
+	mux.HandleFunc("/api/auth/reset-password", chainHTTP(userHandler.HandleResetPassword, authResetPasswordIPLimit, authResetPasswordEmailLimit))
+	mux.HandleFunc("/api/auth/register", chainHTTP(userHandler.HandleRegister, authRegisterIPLimit, authRegisterEmailLimit, authRegisterUsernameLimit))
+	mux.HandleFunc("/api/auth/login", chainHTTP(userHandler.HandleLogin, authLoginIPLimit, authLoginAccountLimit))
 
 	// Friends (require auth — JWT or API Key for bot access)
 	authWithDB := server.AuthMiddlewareWithDB(db)
@@ -183,7 +243,7 @@ func main() {
 	mux.HandleFunc("/api/messages/send", authWithDB(msgHandler.HandleSendMessage))
 	mux.HandleFunc("/api/messages", authWithDB(msgHandler.HandleGetMessages))
 	mux.HandleFunc("/api/conversations", authWithDB(conversationHandler.HandleList))
-	mux.HandleFunc("/api/feedback", authWithDB(feedbackHandler.HandleCreateFeedback))
+	mux.HandleFunc("/api/feedback", chainHTTP(feedbackHandler.HandleCreateFeedback, feedbackIPLimit, authWithDB, feedbackUserLimit))
 
 	// Online status API
 	mux.HandleFunc("/api/users/online", server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -228,8 +288,8 @@ func main() {
 	mux.HandleFunc("/api/groups/role", server.AuthMiddleware(groupHandler.HandleUpdateRole))
 
 	// File upload (accepts both JWT and API Key for bot uploads)
-	mux.HandleFunc("/api/upload", authWithDB(uploadHandler.HandleUpload))
-	mux.HandleFunc("/api/reader/analyze", authWithDB(readerHandler.HandleAnalyze))
+	mux.HandleFunc("/api/upload", chainHTTP(uploadHandler.HandleUpload, uploadIPLimit, authWithDB, uploadUserLimit))
+	mux.HandleFunc("/api/reader/analyze", chainHTTP(readerHandler.HandleAnalyze, readerIPLimit, authWithDB, readerUserLimit))
 	mux.HandleFunc("/uploads/", uploadHandler.HandleServeFile)
 
 	if err := readerHandler.ConfigError(); err != nil {

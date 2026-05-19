@@ -8,8 +8,8 @@
 
 ## 服务地址
 
-- **WebSocket:** `ws://118.145.116.152:6061/v0/channels`
-- **HTTP API:** `http://118.145.116.152:6061/api`
+- **WebSocket:** `wss://app.catsco.cc/v0/channels`
+- **HTTP API:** `https://app.catsco.cc/api`
 
 ## 认证方式
 
@@ -23,7 +23,7 @@
 import { CatsBot } from '@catscompany/bot-sdk';
 
 const bot = new CatsBot({
-  serverUrl: 'ws://118.145.116.152:6061/v0/channels',
+  serverUrl: 'wss://app.catsco.cc/v0/channels',
   apiKey: 'your-api-key',
 });
 
@@ -36,7 +36,7 @@ bot.run();
 
 ### 直接使用 WebSocket
 ```javascript
-const ws = new WebSocket('ws://118.145.116.152:6061/v0/channels?api_key=xxx');
+const ws = new WebSocket('wss://app.catsco.cc/v0/channels?token=jwt-token');
 
 ws.onopen = () => {
   ws.send(JSON.stringify({ hi: { id: '1', ver: '0.1.0' } }));

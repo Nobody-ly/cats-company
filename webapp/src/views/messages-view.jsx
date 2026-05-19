@@ -10,7 +10,8 @@ const PAGE_SIZE = 50;
 const TYPING_TIMEOUT_MS = 10000;
 const WORKING_MESSAGE_TYPES = new Set(['thinking', 'tool_use', 'tool_result']);
 const WORKING_TEXT_PREFIX = 'AI文本:';
-const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_ATTACHMENT_SIZE_MB = 300;
+const MAX_ATTACHMENT_SIZE = MAX_ATTACHMENT_SIZE_MB * 1024 * 1024;
 const MAX_DROPPED_FILES = 200;
 const HISTORY_AUTO_LOAD_THRESHOLD = 120;
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']);
@@ -499,7 +500,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const uploadAttachmentFile = async (file, requestedType) => {
     const type = inferAttachmentType(file, requestedType);
     if (file.size > MAX_ATTACHMENT_SIZE) {
-      window.alert(`Upload failed: File is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum supported size is 100MB.`);
+      window.alert(`文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB。当前最多支持 ${MAX_ATTACHMENT_SIZE_MB}MB。`);
       return false;
     }
 

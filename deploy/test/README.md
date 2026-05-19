@@ -7,7 +7,7 @@ It is intentionally separated from production:
 
 - data lives under `<test-stack-root>/data`
 - compose runtime files live under `<test-stack-root>/compose`
-- ports are isolated:
+- ports are isolated and bind to `127.0.0.1` by default:
   - MySQL: `13306`
   - API: `16061`
   - gRPC: `16062`

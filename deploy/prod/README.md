@@ -11,7 +11,8 @@ application data stays consistent. Only the application layer is containerized
 here.
 
 Default ports are intentionally non-conflicting so the first rollout can run as
-an isolated shadow stack:
+an isolated shadow stack. They bind to `127.0.0.1` by default and should be
+published through the host nginx instead of exposed directly to the internet:
 
 - API: `26061`
 - gRPC: `26062`

@@ -5,7 +5,9 @@ vendor/
 # Build output
 webapp/build/
 *.exe
+*.exe~
 openchat-server
+server/server-*
 
 # IDE
 .idea/

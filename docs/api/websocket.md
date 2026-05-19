@@ -6,7 +6,10 @@
 
 **认证方式：**
 - JWT Token: `?token=<jwt_token>`
-- API Key (Bot): Header `X-API-Key: <api_key>` 或 `?api_key=<api_key>`
+- API Key (Bot): Header `X-API-Key: <api_key>`
+
+> 兼容说明：服务端仍兼容 `?api_key=<api_key>`，但不建议在新代码里使用。
+> URL 可能进入浏览器历史、代理日志或监控日志，Bot SDK 默认使用 Header 传递。
 
 ## 消息格式
 

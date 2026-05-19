@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,8 +81,9 @@ func (b *Bot) nextID() string {
 
 // Connect establishes the WebSocket connection and performs the handshake.
 func (b *Bot) Connect() error {
-	url := fmt.Sprintf("%s?api_key=%s", b.serverURL, b.apiKey)
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	headers := http.Header{}
+	headers.Set("X-API-Key", b.apiKey)
+	conn, _, err := websocket.DefaultDialer.Dial(b.serverURL, headers)
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)
 	}
