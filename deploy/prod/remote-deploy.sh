@@ -100,10 +100,11 @@ p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 
 allow_shared_db_user="$(sed -n 's/^ALLOW_SHARED_DB_USER=//p' "$env_file" | tail -n 1)"
+db_driver="$(sed -n 's/^OC_DB_DRIVER=//p' "$env_file" | tail -n 1)"
 db_dsn="$(sed -n 's/^OC_DB_DSN=//p' "$env_file" | tail -n 1)"
 db_user="${db_dsn%%:*}"
 
-if [ "${allow_shared_db_user:-0}" != "1" ] && [ "$db_user" = "openchat" ]; then
+if [ "${db_driver:-mysql}" = "mysql" ] && [ "${allow_shared_db_user:-0}" != "1" ] && [ "$db_user" = "openchat" ]; then
   cat >&2 <<EOF
 refusing deploy: OC_DB_DSN is using the legacy shared DB user "openchat"
 while ALLOW_SHARED_DB_USER is not enabled.
