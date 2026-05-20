@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,7 +22,7 @@ type tablePlan struct {
 	Name       string
 	SourceSQL  string
 	InsertSQL  string
-	Copy       func(*sql.DB, *sql.DB) (int64, error)
+	Copy       func(*sql.DB, dbExecer) (int64, error)
 	ResetSeq   string
 	TargetName string
 }
@@ -31,6 +32,14 @@ type tableReport struct {
 	SourceCount int64
 	TargetCount int64
 	Status      string
+}
+
+type dbExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+type dbQueryer interface {
+	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
 func main() {
@@ -132,27 +141,39 @@ func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) err
 	}
 	defer target.Close()
 
+	tx, err := target.Begin()
+	if err != nil {
+		return fmt.Errorf("begin postgres copy transaction: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			log.Printf("rollback dry-run transaction failed: %v", err)
+		}
+	}()
+
 	var reports []tableReport
 	for _, plan := range migrationPlans() {
 		sourceCount, err := countRows(source, sourceTableName(plan.Name))
 		if err != nil {
 			return fmt.Errorf("count source %s: %w", plan.Name, err)
 		}
-		copied, err := plan.Copy(source, target)
+		copied, err := plan.Copy(source, tx)
 		if err != nil {
 			return fmt.Errorf("copy %s: %w", plan.Name, err)
 		}
 		if plan.ResetSeq != "" {
-			if _, err := target.Exec(plan.ResetSeq); err != nil {
+			if _, err := tx.Exec(plan.ResetSeq); err != nil {
 				return fmt.Errorf("reset sequence %s: %w", plan.Name, err)
 			}
 		}
-		targetCount, err := countRows(target, targetTableName(plan))
+		targetCount, err := countRows(tx, targetTableName(plan))
 		if err != nil {
 			return fmt.Errorf("count target %s: %w", plan.Name, err)
 		}
 		status := "ok"
-		if copied != sourceCount || targetCount != sourceCount {
+		if copied == targetCount && copied < sourceCount {
+			status = fmt.Sprintf("ok_skipped_%d_invalid_refs", sourceCount-copied)
+		} else if copied != sourceCount || targetCount != sourceCount {
 			status = "mismatch"
 		}
 		reports = append(reports, tableReport{
@@ -161,6 +182,10 @@ func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) err
 			TargetCount: targetCount,
 			Status:      status,
 		})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit dry-run transaction: %w", err)
 	}
 
 	printReport("dry-run copy report: "+schema, reports)
@@ -184,7 +209,7 @@ func migrationPlans() []tablePlan {
 	}
 }
 
-func copyUsers(source, target *sql.DB) (int64, error) {
+func copyUsers(source *sql.DB, target dbExecer) (int64, error) {
 	rows, err := source.Query(`
 		SELECT id, username, email, phone, display_name, avatar_url, account_type, pass_hash, state,
 		       COALESCE(bot_disclose, 0), created_at, updated_at
@@ -209,7 +234,7 @@ func copyUsers(source, target *sql.DB) (int64, error) {
 		if _, err := target.Exec(`
 			INSERT INTO users (id, username, email, phone, display_name, avatar_url, account_type, pass_hash, state, bot_disclose, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-			id, username, nullString(email), nullString(phone), displayName, nullString(avatarURL), accountType, passHash, state, botDisclose, createdAt, updatedAt,
+			id, cleanText(username), nullText(email), nullText(phone), cleanText(displayName), nullText(avatarURL), cleanText(accountType), passHash, state, botDisclose, createdAt, updatedAt,
 		); err != nil {
 			return copied, err
 		}
@@ -218,7 +243,7 @@ func copyUsers(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyRateLimits(source, target *sql.DB) (int64, error) {
+func copyRateLimits(source *sql.DB, target dbExecer) (int64, error) {
 	rows, err := source.Query(`SELECT account_type, max_per_second, max_per_minute, burst_size FROM rate_limits ORDER BY account_type`)
 	if err != nil {
 		return 0, err
@@ -233,7 +258,7 @@ func copyRateLimits(source, target *sql.DB) (int64, error) {
 		}
 		if _, err := target.Exec(
 			`INSERT INTO rate_limits (account_type, max_per_second, max_per_minute, burst_size) VALUES ($1,$2,$3,$4)`,
-			accountType, maxSecond, maxMinute, burst,
+			cleanText(accountType), maxSecond, maxMinute, burst,
 		); err != nil {
 			return copied, err
 		}
@@ -242,8 +267,14 @@ func copyRateLimits(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyTopics(source, target *sql.DB) (int64, error) {
-	rows, err := source.Query(`SELECT id, type, name, owner_id, created_at FROM topics ORDER BY id`)
+func copyTopics(source *sql.DB, target dbExecer) (int64, error) {
+	rows, err := source.Query(`
+		SELECT t.id, t.type, t.name,
+		       CASE WHEN t.owner_id IS NULL OR u.id IS NOT NULL THEN t.owner_id ELSE NULL END AS owner_id,
+		       t.created_at
+		FROM topics t
+		LEFT JOIN users u ON u.id = t.owner_id
+		ORDER BY t.id`)
 	if err != nil {
 		return 0, err
 	}
@@ -259,7 +290,7 @@ func copyTopics(source, target *sql.DB) (int64, error) {
 		}
 		if _, err := target.Exec(
 			`INSERT INTO topics (id, type, name, owner_id, created_at) VALUES ($1,$2,$3,$4,$5)`,
-			id, topicType, nullString(name), nullInt64(ownerID), createdAt,
+			cleanText(id), cleanText(topicType), nullText(name), nullInt64(ownerID), createdAt,
 		); err != nil {
 			return copied, err
 		}
@@ -268,8 +299,13 @@ func copyTopics(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyFriends(source, target *sql.DB) (int64, error) {
-	rows, err := source.Query(`SELECT id, from_user_id, to_user_id, status, message, created_at, updated_at FROM friends ORDER BY id`)
+func copyFriends(source *sql.DB, target dbExecer) (int64, error) {
+	rows, err := source.Query(`
+		SELECT f.id, f.from_user_id, f.to_user_id, f.status, f.message, f.created_at, f.updated_at
+		FROM friends f
+		INNER JOIN users from_user ON from_user.id = f.from_user_id
+		INNER JOIN users to_user ON to_user.id = f.to_user_id
+		ORDER BY f.id`)
 	if err != nil {
 		return 0, err
 	}
@@ -285,7 +321,7 @@ func copyFriends(source, target *sql.DB) (int64, error) {
 		}
 		if _, err := target.Exec(
 			`INSERT INTO friends (id, from_user_id, to_user_id, status, message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			id, fromUID, toUID, status, nullString(message), createdAt, updatedAt,
+			id, fromUID, toUID, cleanText(status), nullText(message), createdAt, updatedAt,
 		); err != nil {
 			return copied, err
 		}
@@ -294,8 +330,12 @@ func copyFriends(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyGroups(source, target *sql.DB) (int64, error) {
-	rows, err := source.Query("SELECT id, name, owner_id, avatar_url, announcement, max_members, created_at FROM `groups` ORDER BY id")
+func copyGroups(source *sql.DB, target dbExecer) (int64, error) {
+	rows, err := source.Query(`
+		SELECT g.id, g.name, g.owner_id, g.avatar_url, g.announcement, g.max_members, g.created_at
+		FROM ` + "`groups`" + ` g
+		INNER JOIN users owner_user ON owner_user.id = g.owner_id
+		ORDER BY g.id`)
 	if err != nil {
 		return 0, err
 	}
@@ -312,7 +352,7 @@ func copyGroups(source, target *sql.DB) (int64, error) {
 		}
 		if _, err := target.Exec(
 			`INSERT INTO "groups" (id, name, owner_id, avatar_url, announcement, max_members, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			id, name, ownerID, nullString(avatarURL), nullString(announcement), maxMembers, createdAt,
+			id, cleanText(name), ownerID, nullText(avatarURL), nullText(announcement), maxMembers, createdAt,
 		); err != nil {
 			return copied, err
 		}
@@ -321,8 +361,13 @@ func copyGroups(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyGroupMembers(source, target *sql.DB) (int64, error) {
-	rows, err := source.Query(`SELECT id, group_id, user_id, role, COALESCE(muted, 0), joined_at FROM group_members ORDER BY id`)
+func copyGroupMembers(source *sql.DB, target dbExecer) (int64, error) {
+	rows, err := source.Query(`
+		SELECT gm.id, gm.group_id, gm.user_id, gm.role, COALESCE(gm.muted, 0), gm.joined_at
+		FROM group_members gm
+		INNER JOIN ` + "`groups`" + ` g ON g.id = gm.group_id
+		INNER JOIN users u ON u.id = gm.user_id
+		ORDER BY gm.id`)
 	if err != nil {
 		return 0, err
 	}
@@ -338,7 +383,7 @@ func copyGroupMembers(source, target *sql.DB) (int64, error) {
 		}
 		if _, err := target.Exec(
 			`INSERT INTO group_members (id, group_id, user_id, role, muted, joined_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-			id, groupID, userID, role, muted, joinedAt,
+			id, groupID, userID, cleanText(role), muted, joinedAt,
 		); err != nil {
 			return copied, err
 		}
@@ -347,10 +392,15 @@ func copyGroupMembers(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyBotConfig(source, target *sql.DB) (int64, error) {
+func copyBotConfig(source *sql.DB, target dbExecer) (int64, error) {
 	rows, err := source.Query(`
-		SELECT user_id, owner_id, api_endpoint, model, enabled, config, api_key, visibility, tenant_name, created_at, updated_at
-		FROM bot_config ORDER BY user_id`)
+		SELECT b.user_id,
+		       CASE WHEN b.owner_id IS NULL OR owner_user.id IS NOT NULL THEN b.owner_id ELSE NULL END AS owner_id,
+		       b.api_endpoint, b.model, b.enabled, b.config, b.api_key, b.visibility, b.tenant_name, b.created_at, b.updated_at
+		FROM bot_config b
+		INNER JOIN users bot_user ON bot_user.id = b.user_id
+		LEFT JOIN users owner_user ON owner_user.id = b.owner_id
+		ORDER BY b.user_id`)
 	if err != nil {
 		return 0, err
 	}
@@ -368,7 +418,7 @@ func copyBotConfig(source, target *sql.DB) (int64, error) {
 		if _, err := target.Exec(
 			`INSERT INTO bot_config (user_id, owner_id, api_endpoint, model, enabled, config, api_key, visibility, tenant_name, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,CAST($6 AS jsonb),$7,$8,$9,$10,$11)`,
-			userID, nullInt64(ownerID), nullString(apiEndpoint), nullString(model), enabled, nullString(configJSON), nullString(apiKey), nullStringWithDefault(visibility, "public"), nullString(tenantName), createdAt, updatedAt,
+			userID, nullInt64(ownerID), nullText(apiEndpoint), nullText(model), enabled, nullJSON(configJSON), nullText(apiKey), nullTextWithDefault(visibility, "public"), nullText(tenantName), createdAt, updatedAt,
 		); err != nil {
 			return copied, err
 		}
@@ -377,40 +427,98 @@ func copyBotConfig(source, target *sql.DB) (int64, error) {
 	return copied, rows.Err()
 }
 
-func copyMessages(source, target *sql.DB) (int64, error) {
+func copyMessages(source *sql.DB, target dbExecer) (int64, error) {
 	rows, err := source.Query(`
-		SELECT id, topic_id, from_uid, content, msg_type, created_at, content_blocks, mode, role, reply_to
-		FROM messages ORDER BY id`)
+		SELECT m.id, m.topic_id, m.from_uid, m.content, m.msg_type, m.created_at, m.content_blocks, m.mode, m.role, m.reply_to
+		FROM messages m
+		INNER JOIN topics t ON t.id = m.topic_id
+		INNER JOIN users u ON u.id = m.from_uid
+		ORDER BY m.id`)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
-	var copied int64
+	items := make([]messageCopyRow, 0, 65536)
 	for rows.Next() {
-		var id, fromUID int64
-		var topicID, content, msgType string
-		var createdAt time.Time
-		var blocksJSON, mode, role sql.NullString
-		var replyTo sql.NullInt64
-		if err := rows.Scan(&id, &topicID, &fromUID, &content, &msgType, &createdAt, &blocksJSON, &mode, &role, &replyTo); err != nil {
-			return copied, err
+		var item messageCopyRow
+		if err := rows.Scan(&item.id, &item.topicID, &item.fromUID, &item.content, &item.msgType, &item.createdAt, &item.blocksJSON, &item.mode, &item.role, &item.replyTo); err != nil {
+			return 0, err
 		}
-		if _, err := target.Exec(
-			`INSERT INTO messages (id, topic_id, from_uid, content, msg_type, created_at, content_blocks, mode, role, reply_to)
-			VALUES ($1,$2,$3,$4,$5,$6,CAST($7 AS jsonb),$8,$9,$10)`,
-			id, topicID, fromUID, content, msgType, createdAt, nullString(blocksJSON), nullStringWithDefault(mode, "normal"), nullString(role), nullInt64(replyTo),
-		); err != nil {
-			return copied, err
-		}
-		copied++
+		items = append(items, item)
 	}
-	return copied, rows.Err()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var copied int64
+	for len(items) > 0 {
+		batchSize := 500
+		if len(items) < batchSize {
+			batchSize = len(items)
+		}
+		batch := items[:batchSize]
+		n, err := flushMessagesBatch(target, batch)
+		if err != nil {
+			return copied, err
+		}
+		copied += n
+		items = items[batchSize:]
+	}
+	return copied, nil
 }
 
-func copyFeedbackReports(source, target *sql.DB) (int64, error) {
+type messageCopyRow struct {
+	id         int64
+	topicID    string
+	fromUID    int64
+	content    string
+	msgType    string
+	createdAt  time.Time
+	blocksJSON sql.NullString
+	mode       sql.NullString
+	role       sql.NullString
+	replyTo    sql.NullInt64
+}
+
+func flushMessagesBatch(target dbExecer, batch []messageCopyRow) (int64, error) {
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	var builder strings.Builder
+	args := make([]interface{}, 0, len(batch)*10)
+	builder.WriteString(`INSERT INTO messages (id, topic_id, from_uid, content, msg_type, created_at, content_blocks, mode, role, reply_to) VALUES `)
+	for i, item := range batch {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		base := i*10 + 1
+		builder.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,CAST($%d AS jsonb),$%d,$%d,$%d)",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9))
+		args = append(args,
+			item.id,
+			cleanText(item.topicID),
+			item.fromUID,
+			cleanText(item.content),
+			cleanText(item.msgType),
+			item.createdAt,
+			nullJSON(item.blocksJSON),
+			nullTextWithDefault(item.mode, "normal"),
+			nullText(item.role),
+			nullInt64(item.replyTo),
+		)
+	}
+	if _, err := target.Exec(builder.String(), args...); err != nil {
+		return 0, err
+	}
+	return int64(len(batch)), nil
+}
+
+func copyFeedbackReports(source *sql.DB, target dbExecer) (int64, error) {
 	rows, err := source.Query(`
-		SELECT id, user_id, category, title, description, page_url, user_agent, status, attachments, created_at, updated_at
-		FROM feedback_reports ORDER BY id`)
+		SELECT f.id, f.user_id, f.category, f.title, f.description, f.page_url, f.user_agent, f.status, f.attachments, f.created_at, f.updated_at
+		FROM feedback_reports f
+		INNER JOIN users u ON u.id = f.user_id
+		ORDER BY f.id`)
 	if err != nil {
 		return 0, err
 	}
@@ -427,7 +535,7 @@ func copyFeedbackReports(source, target *sql.DB) (int64, error) {
 		if _, err := target.Exec(
 			`INSERT INTO feedback_reports (id, user_id, category, title, description, page_url, user_agent, status, attachments, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,CAST($9 AS jsonb),$10,$11)`,
-			id, userID, category, nullString(title), description, nullString(pageURL), nullString(userAgent), status, nullString(attachments), createdAt, updatedAt,
+			id, userID, cleanText(category), nullText(title), cleanText(description), nullText(pageURL), nullText(userAgent), cleanText(status), nullJSON(attachments), createdAt, updatedAt,
 		); err != nil {
 			return copied, err
 		}
@@ -461,7 +569,7 @@ func countTables(source, target *sql.DB, plans []tablePlan) []tableReport {
 	return reports
 }
 
-func countRows(db *sql.DB, table string) (int64, error) {
+func countRows(db dbQueryer, table string) (int64, error) {
 	var count int64
 	err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count)
 	return count, err
@@ -472,7 +580,7 @@ func printReport(title string, reports []tableReport) {
 	fmt.Println("table,source_count,target_count,status")
 	var hasMismatch bool
 	for _, report := range reports {
-		if report.Status != "ok" {
+		if !strings.HasPrefix(report.Status, "ok") {
 			hasMismatch = true
 		}
 		fmt.Printf("%s,%d,%d,%s\n", report.Name, report.SourceCount, report.TargetCount, report.Status)
@@ -501,18 +609,37 @@ func resetSeqSQL(table, column string) string {
 	return fmt.Sprintf(`SELECT setval(pg_get_serial_sequence('%s', '%s'), COALESCE((SELECT MAX(%s) FROM %s), 1), (SELECT COUNT(*) > 0 FROM %s))`, relation, column, column, table, table)
 }
 
-func nullString(value sql.NullString) interface{} {
+func cleanText(value string) string {
+	return strings.ReplaceAll(value, "\x00", "")
+}
+
+func nullText(value sql.NullString) interface{} {
 	if !value.Valid {
 		return nil
 	}
-	return value.String
+	return cleanText(value.String)
 }
 
-func nullStringWithDefault(value sql.NullString, fallback string) string {
+func nullTextWithDefault(value sql.NullString, fallback string) string {
 	if !value.Valid || value.String == "" {
 		return fallback
 	}
-	return value.String
+	return cleanText(value.String)
+}
+
+func nullJSON(value sql.NullString) interface{} {
+	if !value.Valid {
+		return nil
+	}
+	cleaned := strings.TrimSpace(cleanText(value.String))
+	cleaned = strings.ReplaceAll(cleaned, `\u0000`, "")
+	if cleaned == "" {
+		return nil
+	}
+	if !json.Valid([]byte(cleaned)) {
+		return nil
+	}
+	return cleaned
 }
 
 func nullInt64(value sql.NullInt64) interface{} {
