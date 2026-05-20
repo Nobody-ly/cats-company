@@ -42,7 +42,9 @@ p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 
 cd "$root/compose"
-compose -f "$compose_file" --env-file "$env_file" pull server web
+if [ "${SKIP_IMAGE_PULL:-0}" != "1" ]; then
+  compose -f "$compose_file" --env-file "$env_file" pull server web
+fi
 compose -f "$compose_file" --env-file "$env_file" up -d
 compose -f "$compose_file" --env-file "$env_file" ps
 printf '%s\n' "$previous_revision" > "$root/CURRENT_REVISION"

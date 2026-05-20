@@ -75,7 +75,7 @@ p = Path(r"$env_file")
 text = p.read_text(encoding="utf-8", errors="replace").replace("\ufeff", "")
 
 updates = {
-    "GHCR_REGISTRY": "ghcr.io",
+    "GHCR_REGISTRY": "${GHCR_REGISTRY:-ghcr.io}",
     "GHCR_OWNER": "${GHCR_OWNER:-}",
     "IMAGE_TAG": "$revision",
 }
@@ -126,7 +126,9 @@ if [ -f "$root/CURRENT_REVISION" ]; then
 fi
 
 cd "$compose_dir"
-compose -f "$compose_file" --env-file "$env_file" pull server web
+if [ "${SKIP_IMAGE_PULL:-0}" != "1" ]; then
+  compose -f "$compose_file" --env-file "$env_file" pull server web
+fi
 compose -f "$compose_file" --env-file "$env_file" up -d
 compose -f "$compose_file" --env-file "$env_file" ps
 
