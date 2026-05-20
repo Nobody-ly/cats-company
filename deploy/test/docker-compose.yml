@@ -34,7 +34,7 @@ services:
         condition: service_healthy
     environment:
       OC_DB_DRIVER: "${OC_DB_DRIVER:-mysql}"
-      OC_DB_DSN: "${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(mysql:3306)/openchat?parseTime=true&charset=utf8mb4"
+      OC_DB_DSN: "${OC_DB_DSN}"
       OC_DB_MAX_OPEN_CONNS: "${OC_DB_MAX_OPEN_CONNS:-}"
       OC_DB_MAX_IDLE_CONNS: "${OC_DB_MAX_IDLE_CONNS:-}"
       OC_DB_CONN_MAX_LIFETIME: "${OC_DB_CONN_MAX_LIFETIME:-}"
