@@ -66,6 +66,19 @@
 - `/uploads/...` 文件已从旧服同步，并可通过 shadow web 返回 `200 OK`。
 - advanced-reader 绑定 `172.17.0.1:28110`，不对公网开放。
 - CatsCompany 容器可通过 `http://host.docker.internal:28110` 访问 advanced-reader。
+- PostgreSQL 备份脚本已通过 `cats_shadow_20260520` schema 验证，并可用
+  PostgreSQL 18 容器版 `pg_dump` 兼容腾讯云 PostgreSQL 18。
+- 上传清理脚本已 dry-run 验证，可用于 prod/test 上传目录。
+
+已同步但尚未启用：
+
+- Nginx app/API 配置和 HTTPS 证书已预置，`nginx -t` 通过；正式切流前再启用。
+- `cats-observability` 和 `ops-monitor` 已同步到新服务器，但旧配置仍按 MySQL
+  容器和旧端口检查，切换 PostgreSQL 后需要改检查项再启用。
+
+暂缓迁移：
+
+- cats-relay / Bifrost 中转服务暂不迁移，后续按新的 relay 方案重做。
 
 ## 必须迁移
 
@@ -86,7 +99,6 @@
 
 ## 建议一起迁移
 
-- cats-relay / Bifrost 中转相关服务
 - Prometheus / Grafana / node-exporter / cadvisor / blackbox-exporter 监控栈
 - 旧服务器上的 `/var/www/html/h5` 静态页面
 
