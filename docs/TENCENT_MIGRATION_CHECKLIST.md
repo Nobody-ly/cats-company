@@ -111,11 +111,17 @@
 5. 在腾讯云启动 shadow stack，只绑定本机端口。
 6. 通过本地 SSH tunnel 或临时 Nginx 内网路由验收 shadow stack。
 7. 合并 PostgreSQL 适配代码，等待 GitHub Actions 生成正式镜像。
-8. 更新 GitHub Actions secrets 指向腾讯云 CVM。
-9. 先部署 `/srv/catscompany-test`，再部署 `/srv/catscompany-prod`。
-10. 切 DNS 到腾讯云公网 IP。
-11. 观察登录、注册验证码、聊天、上传、反馈、CatsCo 桌面端连接和在线状态。
-12. 确认稳定后冻结旧服务器写入，再做最终增量迁移或停旧服务。
+8. 将 `/srv/catscompany-test/env/test.env` 改为 PostgreSQL：
+   - `COMPOSE_PROFILES=`，不要启动本地 MySQL profile。
+   - `OC_DB_DRIVER=postgres`
+   - `OC_DB_DSN=postgres://...@172.16.16.14:5432/catsco?sslmode=prefer`
+   - 可从 `deploy/test/env.test.postgres.example` 复制模板。
+9. 更新 GitHub Actions secrets 指向腾讯云 CVM。
+10. 先部署 `/srv/catscompany-test`，确认同一镜像可在 PostgreSQL 上通过验收。
+11. 再部署 `/srv/catscompany-prod`。
+12. 切 DNS 到腾讯云公网 IP。
+13. 观察登录、注册验证码、聊天、上传、反馈、CatsCo 桌面端连接和在线状态。
+14. 确认稳定后冻结旧服务器写入，再做最终增量迁移或停旧服务。
 
 ## 切换前检查
 

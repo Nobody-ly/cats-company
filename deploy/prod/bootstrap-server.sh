@@ -2,7 +2,6 @@
 set -euo pipefail
 
 root="${1:-/srv/catscompany-prod}"
-compose_bin="/usr/local/bin/docker-compose"
 
 mkdir -p \
   "$root/releases" \
@@ -11,11 +10,13 @@ mkdir -p \
   "$root/data/uploads" \
   "$root/logs"
 
-if [ ! -x "$compose_bin" ]; then
-  curl -L --fail \
-    https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-    -o "$compose_bin"
-  chmod +x "$compose_bin"
+if command -v docker-compose >/dev/null 2>&1; then
+  docker-compose version >/dev/null
+elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  :
+else
+  echo "docker compose is required. Install Docker Compose before deployment." >&2
+  exit 1
 fi
 
 if [ -f "$root/env/env.prod.example" ] && [ ! -f "$root/env/prod.env" ]; then
@@ -24,5 +25,4 @@ fi
 
 echo "Bootstrap ready:"
 echo "  root: $root"
-echo "  compose: $compose_bin"
 echo "  env: $root/env/prod.env"

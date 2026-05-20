@@ -73,6 +73,7 @@ jobs:
           scp deploy/test/tinode.test.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
           scp deploy/init-db.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
           scp deploy/test/env.test.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
+          scp deploy/test/env.test.postgres.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
 
       - name: Deploy isolated test stack
         env:

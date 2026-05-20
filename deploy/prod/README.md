@@ -52,8 +52,8 @@ Before enabling automatic production deploys:
 
 ```bash
 cd /srv/catscompany-prod/compose
-/usr/local/bin/docker-compose --env-file /srv/catscompany-prod/env/prod.env pull
-/usr/local/bin/docker-compose --env-file /srv/catscompany-prod/env/prod.env up -d
+docker compose --env-file /srv/catscompany-prod/env/prod.env pull
+docker compose --env-file /srv/catscompany-prod/env/prod.env up -d
 ```
 
 ## Manual rollback

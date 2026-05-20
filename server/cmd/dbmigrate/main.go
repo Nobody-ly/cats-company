@@ -34,6 +34,13 @@ type tableReport struct {
 	Status      string
 }
 
+type preflightIssue struct {
+	Check    string
+	Count    int64
+	Samples  string
+	Blocking bool
+}
+
 type dbExecer interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 }
@@ -47,8 +54,10 @@ func main() {
 		mode        = flag.String("mode", getenv("CATS_MIGRATION_MODE", "report"), "report or dry-run-copy")
 		mysqlDSN    = flag.String("mysql-dsn", getenv("CATS_MYSQL_DSN", ""), "source MySQL DSN")
 		postgresDSN = flag.String("postgres-dsn", getenv("CATS_POSTGRES_DSN", getenv("OC_DB_DSN", "")), "target PostgreSQL URL DSN")
-		schema      = flag.String("schema", getenv("CATS_MIGRATION_SCHEMA", ""), "target PostgreSQL schema for dry-run-copy")
+		schema      = flag.String("schema", getenv("CATS_MIGRATION_SCHEMA", ""), "target PostgreSQL schema for report or dry-run-copy")
 		keepSchema  = flag.Bool("keep-schema", getenvBool("CATS_MIGRATION_KEEP_SCHEMA"), "keep dry-run PostgreSQL schema after copy")
+		confirmDrop = flag.String("confirm-drop-schema", getenv("CATS_MIGRATION_CONFIRM_DROP_SCHEMA", ""), "schema name required before dropping an existing migration schema")
+		allowLossy  = flag.Bool("allow-lossy-cleanup", getenvBool("CATS_MIGRATION_ALLOW_LOSSY_CLEANUP"), "allow migration to clean NUL/invalid JSON and skip rows with invalid foreign keys")
 	)
 	flag.Parse()
 
@@ -72,7 +81,17 @@ func main() {
 
 	switch *mode {
 	case "report":
-		target, err := sql.Open("pgx", *postgresDSN)
+		targetDSN := *postgresDSN
+		if *schema != "" {
+			if err := validateSchemaName(*schema); err != nil {
+				log.Fatalf("invalid schema: %v", err)
+			}
+			targetDSN, err = dsnWithSearchPath(*postgresDSN, *schema)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		target, err := sql.Open("pgx", targetDSN)
 		if err != nil {
 			log.Fatalf("open postgres: %v", err)
 		}
@@ -80,8 +99,10 @@ func main() {
 		if err := target.Ping(); err != nil {
 			log.Fatalf("ping postgres: %v", err)
 		}
+		preflightIssues, fatalPreflight := runPreflightChecks(source, *allowLossy)
 		reports := countTables(source, target, migrationPlans())
-		printReport("migration report", reports)
+		printPreflightIssues(preflightIssues)
+		printReport("migration report", reports, fatalPreflight)
 	case "dry-run-copy":
 		if *schema == "" {
 			*schema = fmt.Sprintf("cats_migration_%s", time.Now().Format("20060102_150405"))
@@ -89,7 +110,7 @@ func main() {
 		if err := validateSchemaName(*schema); err != nil {
 			log.Fatalf("invalid schema: %v", err)
 		}
-		if err := runDryCopy(source, *postgresDSN, *schema, *keepSchema); err != nil {
+		if err := runDryCopy(source, *postgresDSN, *schema, *keepSchema, *confirmDrop, *allowLossy); err != nil {
 			log.Fatalf("dry-run copy failed: %v", err)
 		}
 	default:
@@ -97,7 +118,7 @@ func main() {
 	}
 }
 
-func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) error {
+func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool, confirmDrop string, allowLossy bool) error {
 	admin, err := sql.Open("pgx", postgresDSN)
 	if err != nil {
 		return fmt.Errorf("open postgres admin connection: %w", err)
@@ -108,8 +129,17 @@ func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) err
 	}
 
 	quotedSchema := quoteIdent(schema)
-	if _, err := admin.Exec(`DROP SCHEMA IF EXISTS ` + quotedSchema + ` CASCADE`); err != nil {
-		return fmt.Errorf("drop existing dry-run schema: %w", err)
+	exists, err := schemaExists(admin, schema)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if confirmDrop != schema {
+			return fmt.Errorf("schema %q already exists; pass -confirm-drop-schema=%s to drop it", schema, schema)
+		}
+		if _, err := admin.Exec(`DROP SCHEMA IF EXISTS ` + quotedSchema + ` CASCADE`); err != nil {
+			return fmt.Errorf("drop existing dry-run schema: %w", err)
+		}
 	}
 	if _, err := admin.Exec(`CREATE SCHEMA ` + quotedSchema); err != nil {
 		return fmt.Errorf("create dry-run schema: %w", err)
@@ -120,6 +150,12 @@ func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) err
 				log.Printf("cleanup dry-run schema %s failed: %v", schema, err)
 			}
 		}()
+	}
+
+	preflightIssues, fatalPreflight := runPreflightChecks(source, allowLossy)
+	printPreflightIssues(preflightIssues)
+	if fatalPreflight {
+		return errors.New("source preflight checks failed")
 	}
 
 	schemaDSN, err := dsnWithSearchPath(postgresDSN, schema)
@@ -172,7 +208,7 @@ func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) err
 		}
 		status := "ok"
 		if copied == targetCount && copied < sourceCount {
-			status = fmt.Sprintf("ok_skipped_%d_invalid_refs", sourceCount-copied)
+			status = fmt.Sprintf("skipped_%d_invalid_refs", sourceCount-copied)
 		} else if copied != sourceCount || targetCount != sourceCount {
 			status = "mismatch"
 		}
@@ -188,7 +224,7 @@ func runDryCopy(source *sql.DB, postgresDSN, schema string, keepSchema bool) err
 		return fmt.Errorf("commit dry-run transaction: %w", err)
 	}
 
-	printReport("dry-run copy report: "+schema, reports)
+	printReport("dry-run copy report: "+schema, reports, false)
 	if !keepSchema {
 		log.Printf("dry-run schema %s will be removed; rerun with -keep-schema to inspect it", schema)
 	}
@@ -564,6 +600,9 @@ func countTables(source, target *sql.DB, plans []tablePlan) []tableReport {
 		} else {
 			report.TargetCount = targetCount
 		}
+		if report.Status == "ok" && report.SourceCount != report.TargetCount {
+			report.Status = "mismatch"
+		}
 		reports = append(reports, report)
 	}
 	return reports
@@ -575,10 +614,10 @@ func countRows(db dbQueryer, table string) (int64, error) {
 	return count, err
 }
 
-func printReport(title string, reports []tableReport) {
+func printReport(title string, reports []tableReport, fatalPreflight bool) {
 	fmt.Println(title)
 	fmt.Println("table,source_count,target_count,status")
-	var hasMismatch bool
+	hasMismatch := fatalPreflight
 	for _, report := range reports {
 		if !strings.HasPrefix(report.Status, "ok") {
 			hasMismatch = true
@@ -588,6 +627,235 @@ func printReport(title string, reports []tableReport) {
 	if hasMismatch {
 		os.Exit(2)
 	}
+}
+
+func printPreflightIssues(issues []preflightIssue) {
+	if len(issues) == 0 {
+		fmt.Println("source preflight checks: ok")
+		return
+	}
+	fmt.Println("source preflight issues")
+	fmt.Println("check,count,blocking,samples")
+	for _, issue := range issues {
+		fmt.Printf("%s,%d,%t,%s\n", issue.Check, issue.Count, issue.Blocking, csvSafe(issue.Samples))
+	}
+}
+
+func runPreflightChecks(source *sql.DB, allowLossy bool) ([]preflightIssue, bool) {
+	checks := []struct {
+		name      string
+		countSQL  string
+		sampleSQL string
+		lossy     bool
+	}{
+		{
+			name: "duplicate_user_email",
+			countSQL: `SELECT COUNT(*) FROM (
+				SELECT LOWER(email) AS value FROM users
+				WHERE email IS NOT NULL AND email <> ''
+				GROUP BY LOWER(email) HAVING COUNT(*) > 1
+			) dup`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(CONCAT('email_hash:', SHA2(value, 256)) ORDER BY value SEPARATOR '; '), '') FROM (
+				SELECT LOWER(email) AS value FROM users
+				WHERE email IS NOT NULL AND email <> ''
+				GROUP BY LOWER(email) HAVING COUNT(*) > 1
+				LIMIT 10
+			) dup`,
+		},
+		{
+			name: "duplicate_bot_api_key",
+			countSQL: `SELECT COUNT(*) FROM (
+				SELECT api_key AS value FROM bot_config
+				WHERE api_key IS NOT NULL AND api_key <> ''
+				GROUP BY api_key HAVING COUNT(*) > 1
+			) dup`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(CONCAT('api_key_hash:', SHA2(value, 256)) ORDER BY value SEPARATOR '; '), '') FROM (
+				SELECT api_key AS value FROM bot_config
+				WHERE api_key IS NOT NULL AND api_key <> ''
+				GROUP BY api_key HAVING COUNT(*) > 1
+				LIMIT 10
+			) dup`,
+		},
+		{
+			name: "orphan_friends",
+			countSQL: `SELECT COUNT(*) FROM friends f
+				LEFT JOIN users from_user ON from_user.id = f.from_user_id
+				LEFT JOIN users to_user ON to_user.id = f.to_user_id
+				WHERE from_user.id IS NULL OR to_user.id IS NULL`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT f.id FROM friends f
+				LEFT JOIN users from_user ON from_user.id = f.from_user_id
+				LEFT JOIN users to_user ON to_user.id = f.to_user_id
+				WHERE from_user.id IS NULL OR to_user.id IS NULL
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "orphan_groups",
+			countSQL: `SELECT COUNT(*) FROM ` + "`groups`" + ` g
+				LEFT JOIN users owner_user ON owner_user.id = g.owner_id
+				WHERE owner_user.id IS NULL`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT g.id FROM ` + "`groups`" + ` g
+				LEFT JOIN users owner_user ON owner_user.id = g.owner_id
+				WHERE owner_user.id IS NULL
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "orphan_group_members",
+			countSQL: `SELECT COUNT(*) FROM group_members gm
+				LEFT JOIN ` + "`groups`" + ` g ON g.id = gm.group_id
+				LEFT JOIN users u ON u.id = gm.user_id
+				WHERE g.id IS NULL OR u.id IS NULL`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT gm.id FROM group_members gm
+				LEFT JOIN ` + "`groups`" + ` g ON g.id = gm.group_id
+				LEFT JOIN users u ON u.id = gm.user_id
+				WHERE g.id IS NULL OR u.id IS NULL
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "orphan_bot_config",
+			countSQL: `SELECT COUNT(*) FROM bot_config b
+				LEFT JOIN users bot_user ON bot_user.id = b.user_id
+				WHERE bot_user.id IS NULL`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(user_id ORDER BY user_id SEPARATOR '; '), '') FROM (
+				SELECT b.user_id FROM bot_config b
+				LEFT JOIN users bot_user ON bot_user.id = b.user_id
+				WHERE bot_user.id IS NULL
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "orphan_messages",
+			countSQL: `SELECT COUNT(*) FROM messages m
+				LEFT JOIN topics t ON t.id = m.topic_id
+				LEFT JOIN users u ON u.id = m.from_uid
+				WHERE t.id IS NULL OR u.id IS NULL`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT m.id FROM messages m
+				LEFT JOIN topics t ON t.id = m.topic_id
+				LEFT JOIN users u ON u.id = m.from_uid
+				WHERE t.id IS NULL OR u.id IS NULL
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "orphan_feedback_reports",
+			countSQL: `SELECT COUNT(*) FROM feedback_reports f
+				LEFT JOIN users u ON u.id = f.user_id
+				WHERE u.id IS NULL`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT f.id FROM feedback_reports f
+				LEFT JOIN users u ON u.id = f.user_id
+				WHERE u.id IS NULL
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "invalid_bot_config_json",
+			countSQL: `SELECT COUNT(*) FROM bot_config
+				WHERE config IS NOT NULL AND config <> '' AND JSON_VALID(REPLACE(REPLACE(config, CHAR(0), ''), '\\u0000', '')) = 0`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(user_id ORDER BY user_id SEPARATOR '; '), '') FROM (
+				SELECT user_id FROM bot_config
+				WHERE config IS NOT NULL AND config <> '' AND JSON_VALID(REPLACE(REPLACE(config, CHAR(0), ''), '\\u0000', '')) = 0
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "invalid_message_content_blocks_json",
+			countSQL: `SELECT COUNT(*) FROM messages
+				WHERE content_blocks IS NOT NULL AND content_blocks <> '' AND JSON_VALID(REPLACE(REPLACE(content_blocks, CHAR(0), ''), '\\u0000', '')) = 0`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT id FROM messages
+				WHERE content_blocks IS NOT NULL AND content_blocks <> '' AND JSON_VALID(REPLACE(REPLACE(content_blocks, CHAR(0), ''), '\\u0000', '')) = 0
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "invalid_feedback_attachments_json",
+			countSQL: `SELECT COUNT(*) FROM feedback_reports
+				WHERE attachments IS NOT NULL AND attachments <> '' AND JSON_VALID(REPLACE(REPLACE(attachments, CHAR(0), ''), '\\u0000', '')) = 0`,
+			sampleSQL: `SELECT COALESCE(GROUP_CONCAT(id ORDER BY id SEPARATOR '; '), '') FROM (
+				SELECT id FROM feedback_reports
+				WHERE attachments IS NOT NULL AND attachments <> '' AND JSON_VALID(REPLACE(REPLACE(attachments, CHAR(0), ''), '\\u0000', '')) = 0
+				LIMIT 10
+			) bad`,
+			lossy: true,
+		},
+		{
+			name: "text_nul_bytes",
+			countSQL: `SELECT
+				(SELECT COUNT(*) FROM users WHERE username LIKE CONCAT('%', CHAR(0), '%') OR display_name LIKE CONCAT('%', CHAR(0), '%') OR COALESCE(email, '') LIKE CONCAT('%', CHAR(0), '%') OR COALESCE(phone, '') LIKE CONCAT('%', CHAR(0), '%') OR COALESCE(avatar_url, '') LIKE CONCAT('%', CHAR(0), '%')) +
+				(SELECT COUNT(*) FROM topics WHERE id LIKE CONCAT('%', CHAR(0), '%') OR type LIKE CONCAT('%', CHAR(0), '%') OR COALESCE(name, '') LIKE CONCAT('%', CHAR(0), '%')) +
+				(SELECT COUNT(*) FROM messages WHERE topic_id LIKE CONCAT('%', CHAR(0), '%') OR content LIKE CONCAT('%', CHAR(0), '%') OR msg_type LIKE CONCAT('%', CHAR(0), '%') OR COALESCE(mode, '') LIKE CONCAT('%', CHAR(0), '%') OR COALESCE(role, '') LIKE CONCAT('%', CHAR(0), '%'))`,
+			sampleSQL: `SELECT 'see count'`,
+			lossy:     true,
+		},
+	}
+
+	var issues []preflightIssue
+	var fatal bool
+	for _, check := range checks {
+		count, samples, err := countPreflightIssue(source, check.countSQL, check.sampleSQL)
+		if err != nil {
+			issues = append(issues, preflightIssue{Check: check.name + "_check_error", Count: 1, Samples: err.Error(), Blocking: true})
+			fatal = true
+			continue
+		}
+		if count == 0 {
+			continue
+		}
+		blocking := !check.lossy || !allowLossy
+		issues = append(issues, preflightIssue{Check: check.name, Count: count, Samples: samples, Blocking: blocking})
+		if blocking {
+			fatal = true
+		}
+	}
+	return issues, fatal
+}
+
+func countPreflightIssue(db *sql.DB, countSQL, sampleSQL string) (int64, string, error) {
+	var count int64
+	if err := db.QueryRow(countSQL).Scan(&count); err != nil {
+		return 0, "", err
+	}
+	if count == 0 {
+		return 0, "", nil
+	}
+	var samples sql.NullString
+	if err := db.QueryRow(sampleSQL).Scan(&samples); err != nil {
+		return count, "", err
+	}
+	return count, samples.String, nil
+}
+
+func schemaExists(db *sql.DB, schema string) (bool, error) {
+	var exists bool
+	err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)`, schema).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check schema exists: %w", err)
+	}
+	return exists, nil
+}
+
+func csvSafe(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	if strings.ContainsAny(value, ",\"") {
+		return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+	}
+	return value
 }
 
 func sourceTableName(name string) string {
@@ -681,6 +949,13 @@ func normalizeMySQLDSN(rawDSN string) string {
 func validateSchemaName(schema string) error {
 	if schema == "" {
 		return errors.New("schema is empty")
+	}
+	lower := strings.ToLower(schema)
+	if lower == "public" || strings.HasPrefix(lower, "pg_") || lower == "information_schema" {
+		return errors.New("schema must not be a PostgreSQL system or application default schema")
+	}
+	if !strings.HasPrefix(lower, "cats_migration_") && !strings.HasPrefix(lower, "cats_shadow_") {
+		return errors.New("schema must start with cats_migration_ or cats_shadow_")
 	}
 	if len(schema) > 63 {
 		return errors.New("schema name is longer than PostgreSQL identifier limit")

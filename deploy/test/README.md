@@ -30,12 +30,31 @@ Before running the deploy workflow for the first time:
 
 The deploy workflow only touches the configured test stack root and uses:
 
-- `/usr/local/bin/docker-compose`
+- Docker Compose (`docker compose` plugin or legacy `docker-compose`)
 - `<test-stack-root>/compose`
 - `<test-stack-root>/env`
 - `<test-stack-root>/data`
 
 It does not touch production directories.
+
+## PostgreSQL cutover test
+
+For Tencent Cloud migration rehearsal, the test stack should run against the
+same PostgreSQL service as production will use. Copy
+`deploy/test/env.test.postgres.example` to `<test-stack-root>/env/test.env`,
+then fill real secrets.
+
+Important values:
+
+```env
+COMPOSE_PROFILES=
+OC_DB_DRIVER=postgres
+OC_DB_DSN=postgres://catsco:***@172.16.16.14:5432/catsco?sslmode=prefer
+```
+
+Leaving `COMPOSE_PROFILES` empty prevents the local MySQL profile from starting.
+The default `env.test.example` keeps the legacy MySQL profile only for local or
+legacy isolated tests.
 
 ## GitHub secrets
 
@@ -58,15 +77,15 @@ Run on the server:
 
 ```bash
 cd /srv/catscompany-test/compose
-/usr/local/bin/docker-compose --env-file /srv/catscompany-test/env/test.env pull
-/usr/local/bin/docker-compose --env-file /srv/catscompany-test/env/test.env up -d
+docker compose --env-file /srv/catscompany-test/env/test.env pull
+docker compose --env-file /srv/catscompany-test/env/test.env up -d
 ```
 
 ## Manual stop
 
 ```bash
 cd /srv/catscompany-test/compose
-/usr/local/bin/docker-compose --env-file /srv/catscompany-test/env/test.env down
+docker compose --env-file /srv/catscompany-test/env/test.env down
 ```
 
 ## Manual deploy of a revision

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -111,11 +112,15 @@ func openStore(cfg DBConfig) (store.Store, string, error) {
 	if driver == "" {
 		driver = "mysql"
 	}
+	dsn := strings.TrimSpace(cfg.DSN)
+	if dsn == "" {
+		return nil, driver, fmt.Errorf("database DSN is required for driver %s", driver)
+	}
 	switch driver {
 	case "mysql":
 		db := &mysql.Adapter{}
 		pool := buildMySQLPoolConfig(cfg)
-		if err := db.OpenWithConfig(cfg.DSN, pool); err != nil {
+		if err := db.OpenWithConfig(dsn, pool); err != nil {
 			return nil, driver, err
 		}
 		log.Printf("database pool configured: driver=%s max_open=%d max_idle=%d conn_max_lifetime=%s conn_max_idle_time=%s",
@@ -127,9 +132,16 @@ func openStore(cfg DBConfig) (store.Store, string, error) {
 		)
 		return db, driver, nil
 	case "postgres", "postgresql", "pg":
+		parsed, err := url.Parse(dsn)
+		if err != nil || parsed.Scheme == "" {
+			return nil, driver, fmt.Errorf("PostgreSQL DSN must be a URL DSN")
+		}
+		if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+			return nil, driver, fmt.Errorf("PostgreSQL DSN scheme must be postgres or postgresql")
+		}
 		db := &postgres.Adapter{}
 		pool := buildPostgresPoolConfig(cfg)
-		if err := db.OpenWithConfig(cfg.DSN, pool); err != nil {
+		if err := db.OpenWithConfig(dsn, pool); err != nil {
 			return nil, driver, err
 		}
 		log.Printf("database pool configured: driver=%s max_open=%d max_idle=%d conn_max_lifetime=%s conn_max_idle_time=%s",
