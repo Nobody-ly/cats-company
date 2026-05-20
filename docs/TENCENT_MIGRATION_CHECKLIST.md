@@ -72,6 +72,16 @@
 - `/srv/catscompany-test` 正式 test stack 已用本地迁移镜像预演通过：
   server/web 均健康，`/ready` 显示 PostgreSQL 连接正常，容器内可访问
   advanced-reader。
+- `/srv/catscompany-prod` 已用同一套本地迁移镜像做 prod-shadow 预演：
+  server/web 均健康，`/ready` 显示 PostgreSQL 连接正常，服务只绑定
+  `127.0.0.1:26061/26062/28080`，Nginx 未启用，未切公网流量。
+- prod-shadow 已复制 `/srv/catscompany-shadow/data/uploads` 到
+  `/srv/catscompany-prod/data/uploads`，历史反馈图片可通过 prod web 返回
+  `200 OK`。
+
+注意：`cats_shadow_20260520` 是迁移预演 schema，数据量已经落后于旧线上
+MySQL。正式切换前必须冻结写入或重新拉取最新 MySQL 备份，再导入新的
+PostgreSQL schema 并重新校验行数。
 
 已同步但尚未启用：
 
