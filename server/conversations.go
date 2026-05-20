@@ -5,18 +5,18 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
 // ConversationHandler serves chat-list summaries without per-topic N+1 fetches.
 type ConversationHandler struct {
-	db  *mysql.Adapter
+	db  store.Store
 	hub *Hub
 }
 
 // NewConversationHandler creates a new ConversationHandler.
-func NewConversationHandler(db *mysql.Adapter, hub *Hub) *ConversationHandler {
+func NewConversationHandler(db store.Store, hub *Hub) *ConversationHandler {
 	return &ConversationHandler{db: db, hub: hub}
 }
 

@@ -11,18 +11,18 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
 // BotHandler handles bot management API requests.
 type BotHandler struct {
-	db       *mysql.Adapter
+	db       store.Store
 	deployer *Deployer // nil = deploy functionality not available
 }
 
 // NewBotHandler creates a new BotHandler.
-func NewBotHandler(db *mysql.Adapter, deployer *Deployer) *BotHandler {
+func NewBotHandler(db store.Store, deployer *Deployer) *BotHandler {
 	return &BotHandler{db: db, deployer: deployer}
 }
 

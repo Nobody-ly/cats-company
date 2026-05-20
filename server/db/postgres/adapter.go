@@ -1,13 +1,14 @@
-// Package mysql implements MySQL database adapter for Cats Company.
-package mysql
+// Package postgres implements PostgreSQL database adapter for Cats Company.
+package postgres
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/openchat/openchat/server/store"
 )
@@ -30,22 +31,14 @@ func DefaultPoolConfig() PoolConfig {
 	}
 }
 
-// Adapter is the MySQL database adapter.
+// Adapter is the PostgreSQL database adapter.
 type Adapter struct {
 	db         *sql.DB
 	dsn        string
-	prefix     string
 	poolConfig PoolConfig
 }
 
 var _ store.Store = (*Adapter)(nil)
-
-// Config holds MySQL connection configuration.
-type Config struct {
-	DSN    string     `json:"dsn"`
-	Prefix string     `json:"prefix"`
-	Pool   PoolConfig `json:"pool"`
-}
 
 // Open initializes the database connection with default pool settings.
 func (a *Adapter) Open(dsn string) error {
@@ -57,12 +50,11 @@ func (a *Adapter) OpenWithConfig(dsn string, pool PoolConfig) error {
 	var err error
 	a.dsn = dsn
 	a.poolConfig = pool
-	a.db, err = sql.Open("mysql", dsn)
+	a.db, err = sql.Open("pgx", dsn)
 	if err != nil {
 		return err
 	}
 
-	// Apply connection pool settings
 	a.db.SetMaxOpenConns(pool.MaxOpenConns)
 	a.db.SetMaxIdleConns(pool.MaxIdleConns)
 	a.db.SetConnMaxLifetime(pool.ConnMaxLifetime)
@@ -91,36 +83,6 @@ func (a *Adapter) IsConnected() bool {
 	return a.db.PingContext(ctx) == nil
 }
 
-// PoolStats returns current connection pool statistics.
-func (a *Adapter) PoolStats() *PoolStats {
-	if a.db == nil {
-		return nil
-	}
-	stats := a.db.Stats()
-	return &PoolStats{
-		MaxOpenConnections: stats.MaxOpenConnections,
-		OpenConnections:    stats.OpenConnections,
-		InUse:              stats.InUse,
-		Idle:               stats.Idle,
-		WaitCount:          stats.WaitCount,
-		WaitDuration:       stats.WaitDuration.String(),
-		MaxIdleClosed:      stats.MaxIdleClosed,
-		MaxLifetimeClosed:  stats.MaxLifetimeClosed,
-	}
-}
-
-// PoolStats holds connection pool statistics for monitoring.
-type PoolStats struct {
-	MaxOpenConnections int    `json:"max_open_connections"`
-	OpenConnections    int    `json:"open_connections"`
-	InUse              int    `json:"in_use"`
-	Idle               int    `json:"idle"`
-	WaitCount          int64  `json:"wait_count"`
-	WaitDuration       string `json:"wait_duration"`
-	MaxIdleClosed      int64  `json:"max_idle_closed"`
-	MaxLifetimeClosed  int64  `json:"max_lifetime_closed"`
-}
-
 // HealthCheck returns detailed health status for monitoring.
 func (a *Adapter) HealthCheck() map[string]interface{} {
 	connected := a.IsConnected()
@@ -138,8 +100,6 @@ func (a *Adapter) HealthCheck() map[string]interface{} {
 			"max_open":         stats.MaxOpenConnections,
 			"wait_count":       stats.WaitCount,
 		}
-
-		// Warn if pool is under pressure
 		if stats.WaitCount > 1000 {
 			result["status"] = "warning"
 			result["message"] = fmt.Sprintf("high wait count: %d", stats.WaitCount)
@@ -154,4 +114,15 @@ func (a *Adapter) HealthCheck() map[string]interface{} {
 	}
 
 	return result
+}
+
+func inPlaceholders(start, count int) string {
+	if count <= 0 {
+		return ""
+	}
+	parts := make([]string, count)
+	for i := 0; i < count; i++ {
+		parts[i] = fmt.Sprintf("$%d", start+i)
+	}
+	return strings.Join(parts, ",")
 }

@@ -13,7 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
@@ -30,7 +30,7 @@ type Hub struct {
 	register    chan *Client
 	unregister  chan *Client
 	presence    chan presenceEvent
-	db          *mysql.Adapter
+	db          store.Store
 	rateLimiter *RateLimiter
 	botStats    *BotStats
 	botConvo    botConvoTracker
@@ -55,7 +55,7 @@ type Client struct {
 }
 
 // NewHub creates a new Hub.
-func NewHub(db *mysql.Adapter, rl *RateLimiter) *Hub {
+func NewHub(db store.Store, rl *RateLimiter) *Hub {
 	hub := &Hub{
 		clients:     make(map[int64]map[*Client]struct{}),
 		register:    make(chan *Client, 256),
@@ -120,7 +120,7 @@ func (h *Hub) GetOnlineUIDs() []int64 {
 
 // BuildOnlineStatusList returns online status for accepted friends plus bots
 // owned by the current user, so the web sidebar can show AI Apps status.
-func BuildOnlineStatusList(db *mysql.Adapter, hub *Hub, uid int64) ([]map[string]interface{}, error) {
+func BuildOnlineStatusList(db store.Store, hub *Hub, uid int64) ([]map[string]interface{}, error) {
 	friends, err := db.GetFriends(uid)
 	if err != nil {
 		return nil, err
