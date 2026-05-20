@@ -19,6 +19,38 @@
 - 工具脚本：`/opt/catscompany/bin`
 - 服务器本地密钥：`/opt/catscompany/secrets`
 
+## CI/CD 约定
+
+旧服务器和新服务器都应该保持同一套部署模型：
+
+1. GitHub Actions 构建 `cats-company-server` 和 `cats-company-web` 镜像。
+2. 镜像推送到 GHCR。
+3. 服务器只执行 `docker compose pull server web` 和 `docker compose up -d`。
+
+不要在生产服务器上本地构建正式镜像。服务器本地构建只允许用于 shadow
+预演，因为它会依赖 Docker Hub 基础镜像和网络状态。
+
+旧服务器当前线上镜像形态：
+
+- `ghcr.io/buildsense-ai/cats-company-server:<commit-sha>`
+- `ghcr.io/buildsense-ai/cats-company-web:<commit-sha>`
+
+## 服务器间同步
+
+大文件迁移不要经过本机。腾讯云服务器上保留了以下运维工具：
+
+- `/opt/catscompany/bin/sync-uploads-from-old-prod`
+- `/opt/catscompany/bin/pull-mysql-backup-from-old-prod`
+- `/opt/catscompany/bin/refresh-shadow-from-backup`
+
+这些脚本使用腾讯云服务器上的临时迁移 key：
+
+- `/opt/catscompany/secrets/cats-prod-sync_ed25519`
+
+旧服务器只允许腾讯云公网 IP 使用这把 key 登录。正式迁移完成后应删除旧服务器
+`authorized_keys` 中包含 `cats-prod-sync-20260520` 的条目，并删除腾讯云上的
+这把临时 key。
+
 ## 必须迁移
 
 - CatsCompany web + server 容器
@@ -68,4 +100,3 @@
 - PostgreSQL 只允许 VPC 内网访问。
 - Nginx `client_max_body_size` 和后端上传限制一致。
 - 证书续期命令在新服务器上可执行。
-
