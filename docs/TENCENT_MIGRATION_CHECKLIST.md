@@ -69,6 +69,9 @@
 - PostgreSQL 备份脚本已通过 `cats_shadow_20260520` schema 验证，并可用
   PostgreSQL 18 容器版 `pg_dump` 兼容腾讯云 PostgreSQL 18。
 - 上传清理脚本已 dry-run 验证，可用于 prod/test 上传目录。
+- `/srv/catscompany-test` 正式 test stack 已用本地迁移镜像预演通过：
+  server/web 均健康，`/ready` 显示 PostgreSQL 连接正常，容器内可访问
+  advanced-reader。
 
 已同步但尚未启用：
 
