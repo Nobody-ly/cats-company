@@ -51,6 +51,22 @@
 `authorized_keys` 中包含 `cats-prod-sync-20260520` 的条目，并删除腾讯云上的
 这把临时 key。
 
+## Shadow 验证状态
+
+腾讯云 shadow 当前用途：
+
+- CatsCompany web/server：临时运行在 `/srv/catscompany-shadow`
+- PostgreSQL shadow schema：`cats_shadow_20260520`
+- advanced-reader：临时运行在 `/srv/advanced-reader-prod`
+
+已验证：
+
+- CatsCompany shadow web/API 健康检查正常。
+- PostgreSQL shadow schema 已可承载历史用户和消息数据。
+- `/uploads/...` 文件已从旧服同步，并可通过 shadow web 返回 `200 OK`。
+- advanced-reader 绑定 `172.17.0.1:28110`，不对公网开放。
+- CatsCompany 容器可通过 `http://host.docker.internal:28110` 访问 advanced-reader。
+
 ## 必须迁移
 
 - CatsCompany web + server 容器
@@ -66,10 +82,10 @@
 - 企业微信相关环境变量（如果仍保留对应入口）
 - 上传文件清理任务
 - 数据库备份任务
+- advanced-reader 内部服务，供图片/文件阅读代理使用
 
 ## 建议一起迁移
 
-- advanced-reader 内部服务，供图片/文件阅读代理使用
 - cats-relay / Bifrost 中转相关服务
 - Prometheus / Grafana / node-exporter / cadvisor / blackbox-exporter 监控栈
 - 旧服务器上的 `/var/www/html/h5` 静态页面
