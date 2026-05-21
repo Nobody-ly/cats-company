@@ -248,8 +248,10 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           }
           return mergeMessages(prev, [serverMsg]);
         });
-        if (fromUid !== user.uid && isFinalTextMessage(serverMsg)) {
-          clearCompletedRuntimePlanSoon();
+        if (fromUid === user.uid && isFinalTextMessage(serverMsg)) {
+          clearRuntimePlan();
+        } else if (fromUid !== user.uid && isFinalTextMessage(serverMsg)) {
+          clearRuntimePlan();
         }
         updateTopicSeq(topic, serverMsg.id);
 
@@ -296,11 +298,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     try {
       const res = await api.getMessages(topic, PAGE_SIZE, 0, true);
       if (res.messages) {
-        const { visibleMessages, latestPlan } = normalizeHistoryMessages(res.messages);
+        const { visibleMessages } = normalizeHistoryMessages(res.messages);
         setMessages(visibleMessages);
-        if (latestPlan && !isRuntimePlanComplete(latestPlan)) {
-          applyRuntimePlan(latestPlan);
-        }
         historyOffsetRef.current = (res.messages || []).length;
         setHasMoreHistory((res.messages || []).length === PAGE_SIZE);
         hasMoreHistoryRef.current = (res.messages || []).length === PAGE_SIZE;
@@ -1255,18 +1254,15 @@ function isRuntimePlanComplete(plan) {
 }
 
 function normalizeHistoryMessages(rawMessages) {
-  let latestPlan = null;
   const visibleMessages = [];
   for (const raw of rawMessages || []) {
     const normalized = normalizeIncomingMessage(raw);
-    const plan = runtimePlanFromMessage(normalized);
-    if (plan) {
-      latestPlan = plan;
+    if (runtimePlanFromMessage(normalized)) {
       continue;
     }
     visibleMessages.push(normalized);
   }
-  return { visibleMessages, latestPlan };
+  return { visibleMessages };
 }
 
 function isFinalTextMessage(message) {
