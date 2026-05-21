@@ -33,8 +33,8 @@ go run ./server/cmd/dbmigrate \
 ```
 
 Do not run this against the public PostgreSQL schema for rehearsal. Use the
-temporary schema flow first. Migration schemas must start with `cats_migration_`
-or `cats_shadow_`; existing schemas are not dropped unless
+temporary schema flow first. Migration schemas must start with `cats_migration_`,
+`cats_shadow_`, or `cats_prod_`; existing schemas are not dropped unless
 `-confirm-drop-schema <name>` matches exactly.
 
 The helper fails by default when it detects source rows that would be skipped or

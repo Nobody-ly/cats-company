@@ -954,8 +954,8 @@ func validateSchemaName(schema string) error {
 	if lower == "public" || strings.HasPrefix(lower, "pg_") || lower == "information_schema" {
 		return errors.New("schema must not be a PostgreSQL system or application default schema")
 	}
-	if !strings.HasPrefix(lower, "cats_migration_") && !strings.HasPrefix(lower, "cats_shadow_") {
-		return errors.New("schema must start with cats_migration_ or cats_shadow_")
+	if !strings.HasPrefix(lower, "cats_migration_") && !strings.HasPrefix(lower, "cats_shadow_") && !strings.HasPrefix(lower, "cats_prod_") {
+		return errors.New("schema must start with cats_migration_, cats_shadow_, or cats_prod_")
 	}
 	if len(schema) > 63 {
 		return errors.New("schema name is longer than PostgreSQL identifier limit")

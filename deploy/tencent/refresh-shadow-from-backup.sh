@@ -17,6 +17,7 @@ trap cleanup EXIT
 
 if [ -z "$backup" ]; then
   echo "usage: $0 /srv/cats-backups/mysql/openchat_YYYYMMDD_HHMMSS.sql.gz cats_shadow_YYYYMMDD_HHMMSS" >&2
+  echo "       final cutover may use cats_prod_YYYYMMDD_HHMMSS" >&2
   exit 2
 fi
 if [ ! -f "$backup" ]; then
@@ -26,8 +27,8 @@ fi
 gzip -t "$backup"
 
 case "$schema" in
-  cats_shadow_*|cats_migration_*) ;;
-  *) echo "schema must start with cats_shadow_ or cats_migration_: $schema" >&2; exit 1 ;;
+  cats_shadow_*|cats_migration_*|cats_prod_*) ;;
+  *) echo "schema must start with cats_shadow_, cats_migration_, or cats_prod_: $schema" >&2; exit 1 ;;
 esac
 
 cleanup

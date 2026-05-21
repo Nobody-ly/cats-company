@@ -35,3 +35,6 @@ sudo /opt/catscompany/bin/sync-uploads-from-old-prod /srv/catscompany-shadow/dat
 `CATS_MIGRATION_ALLOW_LOSSY_CLEANUP=1` must be set only after reviewing the
 preflight report. It allows the migration tool to clean known legacy dirty data
 such as NUL bytes and invalid JSON samples.
+
+For the final cutover import, use a `cats_prod_YYYYMMDD_HHMMSS` schema and then
+point `OC_DB_DSN` at that schema through the `search_path` query parameter.
