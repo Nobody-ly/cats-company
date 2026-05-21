@@ -38,22 +38,6 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.GHCR_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Prepare deploy image bundle
-        run: |
-          docker pull ghcr.io/${{ github.repository_owner }}/cats-company-server:${IMAGE_TAG}
-          docker pull ghcr.io/${{ github.repository_owner }}/cats-company-web:${IMAGE_TAG}
-          docker save \
-            ghcr.io/${{ github.repository_owner }}/cats-company-server:${IMAGE_TAG} \
-            ghcr.io/${{ github.repository_owner }}/cats-company-web:${IMAGE_TAG} \
-            | gzip -1 > cats-company-images-${IMAGE_TAG}.tar.gz
-
       - name: Upload prod stack files
         timeout-minutes: 8
         run: |
@@ -74,7 +58,6 @@ jobs:
           rm -rf "${tmpdir}"
 
           ssh ${SSH_OPTS} "${REMOTE}" "tar -xzf - -C ${PROD_STACK_ROOT}" < prod-stack-files.tar.gz
-          ssh ${SSH_OPTS} "${REMOTE}" "cat > ${PROD_STACK_ROOT}/releases/cats-company-images-${IMAGE_TAG}.tar.gz" < cats-company-images-${IMAGE_TAG}.tar.gz
 
       - name: Deploy prod stack
         env:
@@ -86,13 +69,30 @@ jobs:
 
           root="${PROD_STACK_ROOT}"
           revision="${IMAGE_TAG}"
+          owner="${GHCR_OWNER}"
+          source_root="$root/source/$revision"
           chmod +x "$root/compose/bootstrap-server.sh" "$root/compose/remote-deploy.sh" "$root/compose/remote-rollback.sh" "$root/compose/remote-status.sh"
           "$root/compose/bootstrap-server.sh" "$root"
-          image_bundle="$root/releases/cats-company-images-${revision}.tar.gz"
-          if [ -f "$image_bundle" ]; then
-            gzip -dc "$image_bundle" | docker load
-            export SKIP_IMAGE_PULL=1
+
+          rm -rf "$source_root"
+          mkdir -p "$root/source"
+          git clone --depth 1 "https://github.com/${owner}/cats-company.git" "$source_root"
+          cd "$source_root"
+          git fetch --depth 1 origin "$revision"
+          git checkout --detach "$revision"
+          docker build \
+            --build-arg GOPROXY="${REMOTE_GOPROXY:-https://goproxy.cn,direct}" \
+            -f deploy/Dockerfile.server \
+            -t "ghcr.io/${owner}/cats-company-server:${revision}" \
+            .
+
+          if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
+            printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
           fi
+          timeout 300 docker pull "ghcr.io/${owner}/cats-company-web:${revision}"
+          find "$root/source" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} +
+
+          export SKIP_IMAGE_PULL=1
           "$root/compose/remote-deploy.sh" "$root" "$revision"
           "$root/compose/remote-status.sh" "$root"
           EOF
