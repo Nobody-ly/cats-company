@@ -6,6 +6,7 @@ const WS_URL = process.env.REACT_APP_WS_URL || `${DEFAULT_WS_SCHEME}://${window.
 let token = localStorage.getItem('oc_token');
 let wsConn = null;
 let wsReconnectTimer = null;
+let wsGeneration = 0;
 let msgHandlers = [];
 let wsConnected = false;
 let topicLastSeq = {};
@@ -201,20 +202,32 @@ function nextMsgId() {
 }
 
 export function connectWS(onMessage) {
-  if (wsConn) {
-    wsConn.close();
-    wsConn = null;
-  }
   if (wsReconnectTimer) {
     clearTimeout(wsReconnectTimer);
     wsReconnectTimer = null;
   }
+  const generation = ++wsGeneration;
+  if (wsConn) {
+    const staleConn = wsConn;
+    wsConn = null;
+    staleConn.onopen = null;
+    staleConn.onclose = null;
+    staleConn.onerror = null;
+    staleConn.onmessage = null;
+    staleConn.close();
+  }
   if (!token) return;
 
   const url = `${WS_URL}?token=${token}`;
-  wsConn = new WebSocket(url);
+  const conn = new WebSocket(url);
+  wsConn = conn;
+  const isCurrent = () => wsConn === conn && wsGeneration === generation;
 
-  wsConn.onopen = () => {
+  conn.onopen = () => {
+    if (!isCurrent()) {
+      conn.close();
+      return;
+    }
     console.log('WebSocket connected');
     wsConnected = true;
     // Send handshake
@@ -228,19 +241,29 @@ export function connectWS(onMessage) {
     onMessage({ _type: 'ws_open' });
   };
 
-  wsConn.onclose = () => {
+  conn.onclose = () => {
+    if (!isCurrent()) return;
     console.log('WebSocket disconnected');
     wsConnected = false;
+    wsConn = null;
     onMessage({ _type: 'ws_close' });
     // Reconnect after 3s
-    wsReconnectTimer = setTimeout(() => connectWS(onMessage), 3000);
+    if (token) {
+      wsReconnectTimer = setTimeout(() => {
+        if (wsGeneration === generation) {
+          connectWS(onMessage);
+        }
+      }, 3000);
+    }
   };
 
-  wsConn.onerror = (err) => {
+  conn.onerror = (err) => {
+    if (!isCurrent()) return;
     console.error('WebSocket error:', err);
   };
 
-  wsConn.onmessage = (evt) => {
+  conn.onmessage = (evt) => {
+    if (!isCurrent()) return;
     try {
       const msg = JSON.parse(evt.data);
       onMessage(msg);
@@ -252,13 +275,19 @@ export function connectWS(onMessage) {
 }
 
 export function disconnectWS() {
+  wsGeneration += 1;
   if (wsReconnectTimer) {
     clearTimeout(wsReconnectTimer);
     wsReconnectTimer = null;
   }
   if (wsConn) {
-    wsConn.close();
+    const staleConn = wsConn;
     wsConn = null;
+    staleConn.onopen = null;
+    staleConn.onclose = null;
+    staleConn.onerror = null;
+    staleConn.onmessage = null;
+    staleConn.close();
   }
   wsConnected = false;
 }
