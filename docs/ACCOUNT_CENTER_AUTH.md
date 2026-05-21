@@ -8,7 +8,7 @@
 
 原因：
 
-- CatsCompany 已经有用户表、邮箱注册、密码重置、JWT、API Key、限流和 PostgreSQL 数据。
+- CatsCompany 已经有用户表、邮箱注册、密码重置、JWT、Bot/API Key、限流和 PostgreSQL 数据。
 - 当前最急的是让其他业务能“验证这个用户是谁、有没有权限”，而不是完整第三方 OAuth 授权生态。
 - 内置实现上线风险更低，能复用现有登录页和账号数据。
 - 只要接口边界设计成账号中心风格，后续可以平滑迁到独立 `auth.catsco.cc` 服务。
@@ -58,7 +58,7 @@
 
 ### User
 
-真实用户账号。用于登录 CatsCompany、管理 CatsCo 桌面端、管理 relay key、访问其他业务。
+真实用户账号。用于登录 CatsCompany、管理 CatsCo 桌面端、进入 relay/Bifrost 门户、访问其他业务。
 
 ### Service
 
@@ -80,14 +80,11 @@ Service 不直接读取用户密码，也不自己保存登录态。它只通过
 
 Service Token 必须只保存在服务器环境变量或 secret 中，不给前端。
 
-### API Key
+### Relay / Bifrost Virtual Key
 
-给自动化程序、机器人、relay 客户端使用的长期凭证。API Key 应该：
+中转站自己的调用凭证。它不属于 CatsCompany 账号中心的职责范围。
 
-- 只展示一次明文。
-- 数据库只存 hash。
-- 支持撤销、限流、scope。
-- 能绑定用户或 service。
+账号中心只回答“这个 CatsCo 用户是谁、状态是否正常、内部服务是否可信”。relay/Bifrost 负责把这个用户映射到自己的 Virtual Key、模型权限、预算、限流和供应商 key。
 
 ## 推荐接入链路
 
@@ -202,71 +199,17 @@ Authorization: Service <service_token>
 
 建议只给内部服务使用，普通前端仍使用 `GET /api/me`。
 
-### 4. 服务自己的 API Key
+### 4. Relay / Bifrost 接入边界
 
-例如 relay 需要给用户创建“中转 key”：
+relay/Bifrost 作为独立服务接入账号中心：
 
-```http
-POST /api/account/api-keys
-Authorization: Bearer <user_jwt>
-Content-Type: application/json
+1. 用户在 relay 门户或 CatsCompany 登录，拿到 CatsCo 用户 JWT。
+2. relay 后端使用自己的 `Service Token` 调用 `/api/account/introspect`。
+3. 账号中心返回 `uid`、账号状态和基础资料。
+4. relay/Bifrost 用 `uid` 映射自己的 customer、team、Virtual Key、模型权限、预算和限流。
+5. provider key、模型路由、OpenAI/Anthropic 兼容层留在 Bifrost，不写入 CatsCompany 账号中心。
 
-{
-  "name": "relay default key",
-  "service": "cats-relay",
-  "scopes": ["relay.chat", "relay.models.read"],
-  "expires_at": null
-}
-```
-
-返回：
-
-```json
-{
-  "id": "key_123",
-  "key": "cat_sk_xxx",
-  "name": "relay default key",
-  "service": "cats-relay",
-  "scopes": ["relay.chat", "relay.models.read"],
-  "created_at": "2026-05-21T12:00:00Z"
-}
-```
-
-注意：`key` 明文只返回这一次，后续只能重新生成或撤销。
-
-调用时：
-
-```http
-Authorization: Bearer cat_sk_xxx
-```
-
-relay 收到后可以本地查自己的 key 表，也可以调用账号中心 introspect API Key：
-
-```http
-POST /api/account/api-keys/introspect
-Authorization: Service <service_token>
-Content-Type: application/json
-
-{
-  "key": "cat_sk_xxx",
-  "required_scope": "relay.chat"
-}
-```
-
-返回：
-
-```json
-{
-  "active": true,
-  "uid": 2,
-  "service": "cats-relay",
-  "scopes": ["relay.chat", "relay.models.read"],
-  "rate_limit": {
-    "rpm": 60,
-    "daily": 1000
-  }
-}
-```
+这样其他业务共用 CatsCo 账号，但每个业务仍然保留自己的权限、配额和业务凭证。
 
 ## 推荐数据库表
 
@@ -288,25 +231,6 @@ Content-Type: application/json
 - `state`
 - `created_at`
 - `updated_at`
-
-### auth_api_keys
-
-记录用户或 service 创建的长期 API Key。
-
-字段建议：
-
-- `id`
-- `owner_user_id`
-- `service_id`
-- `name`
-- `key_prefix`
-- `key_hash`
-- `scopes`
-- `state`
-- `last_used_at`
-- `expires_at`
-- `created_at`
-- `revoked_at`
 
 ### auth_sessions（可选）
 
@@ -363,9 +287,10 @@ V0 可以先不做 refresh token，继续用 7 天 JWT。
 流程：
 
 1. 后端环境变量配置 `CATS_ACCOUNT_CENTER_URL` 和 `CATS_SERVICE_TOKEN`。
-2. 收到用户 token 或 API key。
+2. 收到用户 JWT。
 3. 调账号中心验证。
-4. 按返回的 `uid`、`scopes`、`state` 决定是否放行。
+4. 按返回的 `uid`、`account_type`、`state` 决定是否放行。
+5. 如果业务自己有 key、配额或 scope，例如 relay/Bifrost Virtual Key，在业务自己的存储和策略层处理。
 
 ### CatsCo 桌面端
 
@@ -380,10 +305,11 @@ V0 可以先不做 refresh token，继续用 7 天 JWT。
 必须做到：
 
 - 生产环境必须配置固定 `OC_JWT_SECRET`。
-- Service Token、API Key 只存 hash，不存明文。
+- Service Token 只存 hash，不存明文。
 - Service Token 不进入前端。
 - Introspection 接口必须要求 `Authorization: Service <service_token>`。
 - URL query 中的 `token`、`api_key` 后续应逐步废弃，优先 header。
+- Relay/Bifrost 的 Virtual Key、provider key、模型配额不写入 CatsCompany 账号中心。
 - 所有认证相关接口必须有限流。
 - 所有 key 创建、撤销、验证失败次数过多都进入审计日志。
 
@@ -418,11 +344,10 @@ V0 可以先不做 refresh token，继续用 7 天 JWT。
 2. 新增 `GET /api/account/users/{uid}`。
 3. 先用 `OC_ACCOUNT_SERVICE_TOKENS` 配置 service token，形成最小服务间鉴权闭环。
 4. 新增 `auth_services` 表，把 service token 从环境变量迁到数据库。
-5. 新增用户 API key 创建、列表、撤销接口。
-6. 给 relay 写最小接入示例。
-7. 给同事提供本文档和 curl 示例。
+5. 给 relay/Bifrost 写最小接入示例：用 `Service Token` 验证 CatsCo 用户 JWT，再在 relay/Bifrost 内部映射 Virtual Key。
+6. 给同事提供本文档和 curl 示例。
 
-这样第一版上线后，其他业务就可以先通过“token introspection + service token”接入统一账号。
+这样第一版上线后，其他业务就可以先通过“token introspection + service token”接入统一账号，不需要直接读取 CatsCompany 数据库，也不需要 CatsCompany 管理各业务自己的调用 key。
 
 ## V0 环境变量配置
 
