@@ -438,3 +438,31 @@ OC_ACCOUNT_SERVICE_TOKENS="cats-relay=replace-with-secret;internal-tool=sha256:<
 - `service=sha256:<hex>`：只把 token 的 SHA-256 hash 放进环境变量。
 
 生产推荐使用 `sha256:<hex>`，避免环境变量里出现 service token 明文。
+
+## 本地后台管理页
+
+V0 提供一个只读的本地后台页面，用于通过 SSH 隧道查看账号状态。它不走公网入口，不需要在公网 nginx 上暴露后台路径。
+
+访问方式：
+
+```bash
+ssh -L 26061:127.0.0.1:26061 <server-alias>
+```
+
+然后在本机浏览器打开：
+
+```text
+http://127.0.0.1:26061/local/account-admin
+```
+
+第一版能力：
+
+- 按 UID 查询账号。
+- 查看用户名、邮箱、显示名、头像、账号类型、状态和创建时间。
+- 查看 service token 是否已在服务端配置。
+
+注意：
+
+- 后台页面只接受本机/内网隧道来源请求。
+- 文档和页面示例只写本地访问方式，不写服务器公网 IP。
+- 目前后台只读，不提供删除、改密码、封禁等高风险操作；这些等审计日志和权限模型补齐后再加。
