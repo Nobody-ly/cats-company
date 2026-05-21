@@ -144,6 +144,21 @@
 13. 观察登录、注册验证码、聊天、上传、反馈、CatsCo 桌面端连接和在线状态。
 14. 确认稳定后冻结旧服务器写入，再做最终增量迁移或停旧服务。
 
+## 简化 cutover 策略
+
+当前业务可以接受极少量迁移窗口内的新消息差异，因此不做复杂的双写或增量
+binlog 同步。正式切换建议采用短暂停写流程：
+
+1. 在旧服务器进入维护窗口，临时停止 CatsCompany web/server 写入。
+2. 从旧 MySQL 拉取最后一份备份。
+3. 导入腾讯云 PostgreSQL 的 `cats_prod_YYYYMMDD_HHMMSS` schema。
+4. 将 `/srv/catscompany-prod/env/prod.env` 的 `OC_DB_DSN` 切到最终
+   `search_path=cats_prod_YYYYMMDD_HHMMSS`。
+5. 重新部署 `/srv/catscompany-prod`，确认 `/ready`、登录、聊天、上传、
+   反馈、CatsCo 桌面端连接正常。
+6. 启用腾讯云 Nginx app/API 站点并切 DNS。
+7. 观察稳定后保留旧服务器只读一段时间，再下线旧服务。
+
 ## 切换前检查
 
 - `go test ./server/...` 通过。
