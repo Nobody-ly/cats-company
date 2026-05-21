@@ -92,7 +92,7 @@
     }
 
     #service-form {
-      grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+      grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
     }
 
     input {
@@ -136,6 +136,62 @@
       margin-top: 12px;
       font-size: 13px;
       color: var(--muted);
+    }
+
+    .scope-panel {
+      grid-column: 1 / -1;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.012);
+    }
+
+    .scope-title {
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .scope-options {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .scope-option {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      min-height: 72px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      cursor: pointer;
+    }
+
+    .scope-option input {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      flex: 0 0 auto;
+    }
+
+    .scope-option strong {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 14px;
+    }
+
+    .scope-option span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .scope-custom {
+      margin-top: 10px;
     }
 
     .result {
@@ -274,6 +330,10 @@
         gap: 12px;
       }
 
+      .scope-options {
+        grid-template-columns: 1fr;
+      }
+
       .service-item {
         grid-template-columns: 1fr;
       }
@@ -309,10 +369,27 @@
     <section>
       <h2>Service Token</h2>
       <form id="service-form">
-        <input id="service-slug" name="slug" autocomplete="off" placeholder="服务标识，例如 cats-relay" />
-        <input id="service-name" name="name" autocomplete="off" placeholder="显示名称，例如 Cats Relay" />
-        <input id="service-scopes" name="scopes" autocomplete="off" placeholder="scope，用逗号分隔，例如 account.introspect" />
+        <input id="service-slug" name="slug" autocomplete="off" placeholder="服务标识，例如 bifrost-gateway" />
+        <input id="service-name" name="name" autocomplete="off" placeholder="显示名称，例如 Bifrost 中转" />
         <button id="service-button" type="submit">生成</button>
+        <div class="scope-panel">
+          <div class="scope-title">权限范围（可选）：不确定就先不选，后续可以用同一个服务标识重新生成。</div>
+          <div class="scope-options">
+            <label class="scope-option">
+              <input type="checkbox" data-scope="account.introspect" />
+              <span><strong>验证用户登录</strong>确认用户 token 是否有效。</span>
+            </label>
+            <label class="scope-option">
+              <input type="checkbox" data-scope="account.users.read" />
+              <span><strong>读取用户资料</strong>按 UID 查询用户名、邮箱、头像等基础资料。</span>
+            </label>
+            <label class="scope-option">
+              <input type="checkbox" data-scope="bifrost.gateway" />
+              <span><strong>Bifrost 中转接入</strong>给模型中转服务做用户映射。</span>
+            </label>
+          </div>
+          <input class="scope-custom" id="service-scopes" name="scopes" autocomplete="off" placeholder="高级：自定义 scope，可留空，用逗号分隔" />
+        </div>
       </form>
       <div class="hint">token 明文只在创建或轮换时展示一次。重新使用同一个服务标识会轮换旧 token。</div>
       <div id="service-error" class="error"></div>
@@ -429,6 +506,23 @@ http://127.0.0.1:26061/local/account-admin</code>
       serviceToken.classList.add('visible');
     }
 
+    const scopeLabels = {
+      'account.introspect': '验证用户登录',
+      'account.users.read': '读取用户资料',
+      'bifrost.gateway': 'Bifrost 中转接入',
+    };
+
+    function formatScope(scope) {
+      const label = scopeLabels[scope];
+      return label ? `${label} (${scope})` : scope;
+    }
+
+    function collectServiceScopes() {
+      const selected = Array.from(document.querySelectorAll('[data-scope]:checked')).map((item) => item.dataset.scope);
+      const custom = document.querySelector('#service-scopes').value.split(',').map((item) => item.trim()).filter(Boolean);
+      return Array.from(new Set([...selected, ...custom]));
+    }
+
     function renderServices(items) {
       const services = Array.isArray(items) ? items : [];
       if (!services.length) {
@@ -437,12 +531,12 @@ http://127.0.0.1:26061/local/account-admin</code>
       }
       serviceList.innerHTML = services.map((service) => {
         const active = Number(service.state || 0) === 0;
-        const scopes = Array.isArray(service.scopes) && service.scopes.length ? service.scopes.join(', ') : '-';
+        const scopes = Array.isArray(service.scopes) && service.scopes.length ? service.scopes.map(formatScope).join('；') : '未指定';
         return `<div class="service-item">
           <div>
             <strong>${escapeHTML(service.name || service.slug)}</strong>
             <div class="service-meta">
-              slug=${escapeHTML(service.slug)} · prefix=${escapeHTML(service.token_prefix || '-')} · scopes=${escapeHTML(scopes)} · ${active ? '启用' : '已撤销'}
+              slug=${escapeHTML(service.slug)} · prefix=${escapeHTML(service.token_prefix || '-')} · 权限=${escapeHTML(scopes)} · ${active ? '启用' : '已撤销'}
             </div>
           </div>
           ${active ? `<button data-revoke="${escapeHTML(service.id)}">撤销</button>` : ''}
@@ -470,7 +564,7 @@ http://127.0.0.1:26061/local/account-admin</code>
       renderServiceToken('');
       const slug = document.querySelector('#service-slug').value.trim();
       const name = document.querySelector('#service-name').value.trim();
-      const scopes = document.querySelector('#service-scopes').value.split(',').map((item) => item.trim()).filter(Boolean);
+      const scopes = collectServiceScopes();
       if (!slug) {
         showServiceError('请输入服务标识。');
         return;
