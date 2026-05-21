@@ -1,130 +1,147 @@
-# CatsCo 账号中心与鉴权接入方案
+# CatsCo 账号中心接入文档
 
-本文面向 CatsCompany、CatsCo 桌面端、relay 中转站以及后续内部业务应用。目标是让多个业务共用同一套 CatsCo 账号，同时保持各业务独立部署、独立权限和可撤销的访问凭证。
+本文面向 CatsCompany、CatsCo relay/Bifrost、内部工具以及后续业务服务。当前版本的目标很简单：所有业务共用 CatsCo 账号登录，但各业务仍然独立部署、独立授权、独立管理自己的业务凭证。
 
-## 结论
+当前账号中心内置在 CatsCompany 中。后续如果业务数量变多，再拆成独立 `auth.catsco.cc` 或 OAuth/OIDC 服务。
 
-第一阶段建议把账号中心放在 CatsCompany 内部实现，而不是立刻拆成独立 OAuth 服务。
+## 当前版本能做什么
 
-原因：
+已支持：
 
-- CatsCompany 已经有用户表、邮箱注册、密码重置、JWT、Bot/API Key、限流和 PostgreSQL 数据。
-- 当前最急的是让其他业务能“验证这个用户是谁、有没有权限”，而不是完整第三方 OAuth 授权生态。
-- 内置实现上线风险更低，能复用现有登录页和账号数据。
-- 只要接口边界设计成账号中心风格，后续可以平滑迁到独立 `auth.catsco.cc` 服务。
+- 用户登录、注册、重置密码仍走 CatsCompany 现有接口。
+- 业务服务可以用 `Service Token` 调账号中心验证用户 JWT。
+- 业务服务可以按 UID 查询用户基础资料。
+- 本地后台可以通过 SSH 隧道创建、撤销 `Service Token`。
+- 数据库只保存 service token hash，不保存明文。
 
-推荐路线：
+当前版本不做：
 
-1. **V0：CatsCompany 内置账号中心**
-   - 继续使用 `app.catsco.cc` 登录。
-   - 提供标准化的用户 token 验证接口和服务间鉴权接口。
-   - relay、后续业务通过接口校验 CatsCo 用户身份。
+- 不做完整 OAuth 授权码流程。
+- 不做 refresh token / 设备管理。
+- 不在 CatsCompany 里管理 relay/Bifrost 的 Virtual Key。
+- 不在 CatsCompany 里保存模型供应商 key、模型路由、预算和限流策略。
+- 不让其他业务直接连 CatsCompany 数据库。
 
-2. **V1：账号中心能力抽象**
-   - 增加应用注册、service token、scope、审计日志、token 撤销。
-   - 给每个业务配置独立权限。
+## 核心边界
 
-3. **V2：独立 OAuth/OIDC 服务**
-   - 当有多个公开第三方应用、需要授权页、回调地址、refresh token、用户同意页时，再拆出去。
+### CatsCompany 账号中心
 
-## 现有能力
+负责回答：
 
-当前 CatsCompany 已有：
+- 这个用户 JWT 是否有效？
+- 这个用户是谁？
+- 这个用户账号状态是否正常？
+- 这个内部服务是否有资格查询账号中心？
 
-- 邮箱验证码注册：`POST /api/auth/send-code`、`POST /api/auth/register`
-- 邮箱重置密码：`POST /api/auth/reset-password/send-code`、`POST /api/auth/reset-password`
-- 登录：`POST /api/auth/login`
-- 当前用户信息：`GET /api/me`
-- 用户资料更新：`POST /api/me/update`
-- JWT：`Authorization: Bearer <token>`
-- Bot/API Key：`Authorization: ApiKey <key>`
-- 账号类型：`human`、`bot`、`service`
-- 登录、注册、重置密码、上传、reader、feedback 的限流
+### 业务服务
 
-现有 JWT payload 主要字段：
+例如 relay/Bifrost、写作工具、监控后台、内部管理工具。
 
-```json
-{
-  "userId": 2,
-  "username": "zhy8882",
-  "email": "example@qq.com",
-  "iss": "catscompany",
-  "iat": 1770000000,
-  "exp": 1770604800
-}
+负责自己业务内的：
+
+- 权限模型。
+- 业务角色。
+- 业务 API Key。
+- 业务限流和配额。
+- 业务数据。
+
+### Relay / Bifrost
+
+Bifrost 自己有 Virtual Keys / governance 机制，适合管理：
+
+- 用户或应用调用中转的 key。
+- provider key。
+- OpenAI / Anthropic 兼容层。
+- 模型路由。
+- 预算、限流、team/customer 映射。
+
+CatsCompany 账号中心只提供 CatsCo 用户身份。relay/Bifrost 用返回的 `uid` 去映射自己的 customer、team 或 Virtual Key。
+
+## 接入总流程
+
+```text
+用户登录 CatsCompany
+  -> 拿到用户 JWT
+  -> 业务前端或客户端请求自己的业务后端
+  -> 业务后端带 Service Token 调账号中心 introspect
+  -> 账号中心返回 active + user
+  -> 业务后端按 uid/account_type/state 放行或拒绝
 ```
 
-## 核心概念
+不要让前端直接拿 `Service Token`。`Service Token` 只能放在业务服务端环境变量或 secret 里。
 
-### User
+## 第一步：给业务服务创建 Service Token
 
-真实用户账号。用于登录 CatsCompany、管理 CatsCo 桌面端、进入 relay/Bifrost 门户、访问其他业务。
+当前版本推荐通过本地后台创建 service token。后台不走公网入口，只通过 SSH 隧道访问。
 
-### Service
+```bash
+ssh -L 26061:127.0.0.1:26061 <server-alias>
+```
 
-内部业务系统，例如：
+然后在本机浏览器打开：
 
-- CatsCompany
-- CatsCo relay
-- 未来的写作工具、监控平台、后台管理工具
+```text
+http://127.0.0.1:26061/local/account-admin
+```
 
-Service 不直接读取用户密码，也不自己保存登录态。它只通过账号中心验证用户 token 或 service token。
+在后台里创建服务，例如：
 
-### Access Token
+- `cats-relay`
+- `writing-app`
+- `ops-dashboard`
 
-用户登录后拿到的短期 JWT。用于浏览器、桌面端调用业务接口。
+创建后会显示一次性明文 token。立刻保存到对应服务的 secret 或环境变量里。CatsCompany 数据库只保存 hash 和 prefix，后续无法找回明文，只能重新生成。
 
-### Service Token
+也可以用环境变量配置固定 service token：
 
-业务服务调用账号中心的机器凭证。用于调用 token introspection、用户查询、权限验证等内部接口。
+```bash
+OC_ACCOUNT_SERVICE_TOKENS="cats-relay=replace-with-secret;internal-tool=sha256:<hex-sha256>"
+```
 
-Service Token 必须只保存在服务器环境变量或 secret 中，不给前端。
+支持两种形式：
 
-### Relay / Bifrost Virtual Key
+- `service=plain-token`：启动时在内存里计算 hash。
+- `service=sha256:<hex>`：只把 token 的 SHA-256 hash 放进环境变量。
 
-中转站自己的调用凭证。它不属于 CatsCompany 账号中心的职责范围。
+生产更推荐用本地后台生成并落库管理，方便撤销。
 
-账号中心只回答“这个 CatsCo 用户是谁、状态是否正常、内部服务是否可信”。relay/Bifrost 负责把这个用户映射到自己的 Virtual Key、模型权限、预算、限流和供应商 key。
+## 第二步：用户登录并拿到 JWT
 
-## 推荐接入链路
-
-### 1. Web 用户登录
-
-用户在 CatsCompany 登录：
+用户仍然使用 CatsCompany 登录。
 
 ```http
 POST /api/auth/login
 Content-Type: application/json
 
 {
-  "account": "3026804351@qq.com",
+  "account": "user@example.com",
   "password": "******"
 }
 ```
 
-返回：
+成功返回：
 
 ```json
 {
-  "token": "<jwt>",
+  "token": "<user_jwt>",
   "uid": 2,
   "username": "zhy8882",
-  "email": "3026804351@qq.com",
+  "email": "user@example.com",
   "display_name": "布鲁斯",
   "avatar_url": "/uploads/avatar.png",
   "account_type": "human"
 }
 ```
 
-业务前端保存 token，后续请求带：
+业务前端或客户端保存用户 JWT，请求自己的业务后端时带上：
 
 ```http
-Authorization: Bearer <jwt>
+Authorization: Bearer <user_jwt>
 ```
 
-### 2. 业务服务验证用户 token
+## 第三步：业务后端验证用户 JWT
 
-新增账号中心接口：
+业务后端收到用户 JWT 后，调用账号中心：
 
 ```http
 POST /api/account/introspect
@@ -136,7 +153,7 @@ Content-Type: application/json
 }
 ```
 
-返回：
+成功返回：
 
 ```json
 {
@@ -144,7 +161,7 @@ Content-Type: application/json
   "user": {
     "uid": 2,
     "username": "zhy8882",
-    "email": "3026804351@qq.com",
+    "email": "user@example.com",
     "display_name": "布鲁斯",
     "avatar_url": "/uploads/avatar.png",
     "account_type": "human",
@@ -158,7 +175,7 @@ Content-Type: application/json
 }
 ```
 
-token 无效：
+无效或过期 token 返回：
 
 ```json
 {
@@ -167,15 +184,16 @@ token 无效：
 }
 ```
 
-接入方行为：
+业务服务建议：
 
-- `active=true` 才允许访问。
-- `active=false` 返回 401 并要求用户重新登录。
-- 接入方本地可以短缓存 30-120 秒，降低账号中心压力。
+- `active=true` 且 `user.state=0` 才放行。
+- `active=false` 返回 401，让用户重新登录。
+- 本地短缓存验证结果 30-120 秒，减少账号中心压力。
+- 不要把用户密码、CatsCompany 数据库连接、service token 下发到浏览器。
 
-### 3. 业务服务获取当前用户资料
+## 第四步：按 UID 查询用户资料
 
-新增接口：
+业务服务需要补全用户资料时，可以调用：
 
 ```http
 GET /api/account/users/{uid}
@@ -188,7 +206,7 @@ Authorization: Service <service_token>
 {
   "uid": 2,
   "username": "zhy8882",
-  "email": "3026804351@qq.com",
+  "email": "user@example.com",
   "display_name": "布鲁斯",
   "avatar_url": "/uploads/avatar.png",
   "account_type": "human",
@@ -197,206 +215,158 @@ Authorization: Service <service_token>
 }
 ```
 
-建议只给内部服务使用，普通前端仍使用 `GET /api/me`。
-
-### 4. Relay / Bifrost 接入边界
-
-relay/Bifrost 作为独立服务接入账号中心：
-
-1. 用户在 relay 门户或 CatsCompany 登录，拿到 CatsCo 用户 JWT。
-2. relay 后端使用自己的 `Service Token` 调用 `/api/account/introspect`。
-3. 账号中心返回 `uid`、账号状态和基础资料。
-4. relay/Bifrost 用 `uid` 映射自己的 customer、team、Virtual Key、模型权限、预算和限流。
-5. provider key、模型路由、OpenAI/Anthropic 兼容层留在 Bifrost，不写入 CatsCompany 账号中心。
-
-这样其他业务共用 CatsCo 账号，但每个业务仍然保留自己的权限、配额和业务凭证。
-
-## 推荐数据库表
-
-第一阶段可以在现有 PostgreSQL 中新增这些表。
-
-### auth_services
-
-记录接入账号中心的业务系统。
-
-字段建议：
-
-- `id`
-- `name`
-- `slug`
-- `service_token_hash`
-- `allowed_origins`
-- `allowed_redirect_uris`
-- `scopes`
-- `state`
-- `created_at`
-- `updated_at`
-
-### auth_sessions（可选）
-
-如果要支持强制下线、设备管理、refresh token，需要 session 表。
-
-字段建议：
-
-- `id`
-- `user_id`
-- `refresh_token_hash`
-- `device_name`
-- `ip`
-- `user_agent`
-- `expires_at`
-- `revoked_at`
-- `created_at`
-
-V0 可以先不做 refresh token，继续用 7 天 JWT。
-
-### auth_audit_logs
-
-记录关键认证行为。
-
-字段建议：
-
-- `id`
-- `actor_user_id`
-- `service_id`
-- `action`
-- `target_type`
-- `target_id`
-- `ip`
-- `user_agent`
-- `metadata`
-- `created_at`
-
-## 接入方怎么用
-
-### 前端业务
-
-适合 CatsCompany、未来有页面的工具。
-
-流程：
-
-1. 如果没有 token，跳到 CatsCompany 登录页。
-2. 登录后保存 token。
-3. 调业务接口时带 `Authorization: Bearer <token>`。
-4. 业务后端调用 `/api/account/introspect` 验 token。
-
-### 后端服务
-
-适合 relay、内部工具、任务服务。
-
-流程：
-
-1. 后端环境变量配置 `CATS_ACCOUNT_CENTER_URL` 和 `CATS_SERVICE_TOKEN`。
-2. 收到用户 JWT。
-3. 调账号中心验证。
-4. 按返回的 `uid`、`account_type`、`state` 决定是否放行。
-5. 如果业务自己有 key、配额或 scope，例如 relay/Bifrost Virtual Key，在业务自己的存储和策略层处理。
-
-### CatsCo 桌面端
-
-建议继续走 CatsCompany 登录或 API Key 绑定：
-
-- 用户登录后 CatsCompany 下发桌面端需要的连接信息。
-- CatsCo 用 bot/API key 接入实时消息。
-- 后续可以增加“用 CatsCo 账号自动配置模型/relay”的接口，但不要把真实模型供应商 key 直接下发给客户端。
-
-## 安全边界
-
-必须做到：
-
-- 生产环境必须配置固定 `OC_JWT_SECRET`。
-- Service Token 只存 hash，不存明文。
-- Service Token 不进入前端。
-- Introspection 接口必须要求 `Authorization: Service <service_token>`。
-- URL query 中的 `token`、`api_key` 后续应逐步废弃，优先 header。
-- Relay/Bifrost 的 Virtual Key、provider key、模型配额不写入 CatsCompany 账号中心。
-- 所有认证相关接口必须有限流。
-- 所有 key 创建、撤销、验证失败次数过多都进入审计日志。
-
-暂时不建议：
-
-- 现在就做完整 OAuth 授权码流程。
-- 现在就让各业务直接连账号数据库。
-- 现在就把账号中心拆到独立仓库和独立服务。
-
-## OAuth 什么时候做
-
-满足下面任一条件时，再做独立 OAuth/OIDC：
-
-- 有外部第三方应用需要“用 CatsCo 登录”。
-- 需要授权页面和用户 consent。
-- 需要标准 `/.well-known/openid-configuration`。
-- 需要 OAuth callback、PKCE、refresh token、client secret 管理。
-- 接入应用超过 3-5 个，CatsCompany 内置 auth 开始影响业务迭代。
-
-届时可以把 V0 的接口迁到：
-
-- `https://auth.catsco.cc`
-- 或 `https://account.catsco.cc`
-
-并保留 CatsCompany 对旧接口的代理兼容。
-
-## 第一阶段开发清单
-
-建议按这个顺序做：
-
-1. 新增 `POST /api/account/introspect`。
-2. 新增 `GET /api/account/users/{uid}`。
-3. 先用 `OC_ACCOUNT_SERVICE_TOKENS` 配置 service token，形成最小服务间鉴权闭环。
-4. 新增 `auth_services` 表，把 service token 从环境变量迁到数据库。
-5. 给 relay/Bifrost 写最小接入示例：用 `Service Token` 验证 CatsCo 用户 JWT，再在 relay/Bifrost 内部映射 Virtual Key。
-6. 给同事提供本文档和 curl 示例。
-
-这样第一版上线后，其他业务就可以先通过“token introspection + service token”接入统一账号，不需要直接读取 CatsCompany 数据库，也不需要 CatsCompany 管理各业务自己的调用 key。
-
-## V0 环境变量配置
-
-第一版可以先在服务端环境变量里配置 service token：
-
-```bash
-OC_ACCOUNT_SERVICE_TOKENS="cats-relay=replace-with-secret;internal-tool=sha256:<hex-sha256>"
-```
-
-支持两种形式：
-
-- `service=plain-token`：启动时在内存里计算 hash。
-- `service=sha256:<hex>`：只把 token 的 SHA-256 hash 放进环境变量。
-
-生产推荐使用 `sha256:<hex>`，避免环境变量里出现 service token 明文。
-
-同时 V0 已支持数据库里的 `auth_services`。本地后台创建 service 后，会生成一次性明文 token；服务端只保存 token hash 和 prefix。创建后的 service token 也可以直接用于：
+普通前端不要直接调用这个接口。普通前端查询自己资料仍然用：
 
 ```http
-Authorization: Service <service_token>
+GET /api/me
+Authorization: Bearer <user_jwt>
 ```
 
-## 本地后台管理页
+## Relay / Bifrost 推荐接法
 
-V0 提供一个只读的本地后台页面，用于通过 SSH 隧道查看账号状态。它不走公网入口，不需要在公网 nginx 上暴露后台路径。
+relay/Bifrost 不需要 CatsCompany 帮它生成用户中转 key。
 
-访问方式：
+推荐流程：
 
-```bash
-ssh -L 26061:127.0.0.1:26061 <server-alias>
+1. 用户登录 CatsCompany，拿到 CatsCo 用户 JWT。
+2. relay/Bifrost 后端用自己的 `Service Token` 调 `/api/account/introspect`。
+3. 账号中心返回 `uid`。
+4. relay/Bifrost 用 `uid` 查或创建自己的 customer/team/Virtual Key。
+5. relay/Bifrost 自己处理 provider key、模型权限、预算、限流、OpenAI/Anthropic 兼容。
+
+这样以后即使 relay 从 Bifrost 换成别的网关，账号中心接口也不用大改。
+
+## 接入方伪代码
+
+### Node / TypeScript
+
+```ts
+async function verifyCatsUser(userToken: string) {
+  const resp = await fetch(`${process.env.CATS_ACCOUNT_CENTER_URL}/api/account/introspect`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Service ${process.env.CATS_SERVICE_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ token: userToken }),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`account center failed: ${resp.status}`);
+  }
+
+  const result = await resp.json();
+  if (!result.active || result.user?.state !== 0) {
+    return null;
+  }
+
+  return result.user;
+}
 ```
 
-然后在本机浏览器打开：
+### Go
 
-```text
-http://127.0.0.1:26061/local/account-admin
+```go
+func verifyCatsUser(ctx context.Context, accountURL, serviceToken, userToken string) (*CatsUser, error) {
+	body := strings.NewReader(fmt.Sprintf(`{"token":%q}`, userToken))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, accountURL+"/api/account/introspect", body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Service "+serviceToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("account center status %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Active bool      `json:"active"`
+		User   *CatsUser `json:"user"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if !out.Active || out.User == nil || out.User.State != 0 {
+		return nil, nil
+	}
+	return out.User, nil
+}
 ```
 
-第一版能力：
+## 错误处理
 
-- 按 UID 查询账号。
-- 创建或轮换 service token。
-- 撤销 service token。
-- 查看用户名、邮箱、显示名、头像、账号类型、状态和创建时间。
-- 查看 service token 是否已在服务端配置。
+### Service Token 未配置
 
-注意：
+```http
+HTTP/1.1 503 Service Unavailable
+```
 
-- 后台页面只接受本机/内网隧道来源请求。
-- 文档和页面示例只写本地访问方式，不写服务器公网 IP。
-- token 明文只在创建或轮换时显示一次，数据库只保存 hash。
-- 目前后台不提供改密码、封禁、删除账号等高风险操作；这些等审计日志和权限模型补齐后再加。
+```json
+{
+  "error": "account center service tokens are not configured"
+}
+```
+
+说明 CatsCompany 服务端还没有配置 `OC_ACCOUNT_SERVICE_TOKENS`，也没有可用的数据库 service token。
+
+### Service Token 无效
+
+```http
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{
+  "error": "invalid service token"
+}
+```
+
+说明业务服务端传错了 `Authorization: Service <service_token>`。
+
+### 用户 JWT 无效
+
+```http
+HTTP/1.1 200 OK
+```
+
+```json
+{
+  "active": false,
+  "error": "invalid_or_expired_token"
+}
+```
+
+说明用户需要重新登录。
+
+## 安全要求
+
+- `Service Token` 只能放在服务端，不进前端，不进客户端，不进 Git。
+- `Service Token` 明文只在创建时显示一次。
+- 业务服务不要直连 CatsCompany 数据库。
+- 业务服务不要保存用户密码。
+- 业务服务验证用户身份时必须走 `/api/account/introspect`。
+- relay/Bifrost 的 Virtual Key、provider key、预算和限流留在 relay/Bifrost。
+- 生产环境必须配置固定 `OC_JWT_SECRET`。
+- URL query 中的 `token`、`api_key` 后续应逐步废弃，优先 header。
+
+## 同事接入清单
+
+接入一个新服务时，只需要完成这些事：
+
+1. 确定服务标识，例如 `writing-app`。
+2. 通过本地后台创建 service token。
+3. 把 service token 放入该服务的 secret 或环境变量。
+4. 前端让用户使用 CatsCompany 登录，拿到用户 JWT。
+5. 后端收到用户 JWT 后调用 `/api/account/introspect`。
+6. 后端按返回的 `uid`、`account_type`、`state` 做本业务权限判断。
+
+后续如果要拆成独立账号中心，优先保持这两个接口兼容：
+
+- `POST /api/account/introspect`
+- `GET /api/account/users/{uid}`
