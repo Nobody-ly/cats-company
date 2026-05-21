@@ -56,8 +56,10 @@ jobs:
           cp deploy/prod/env.prod.example "${tmpdir}/env/"
           tar -C "${tmpdir}" -czf prod-stack-files.tar.gz .
           rm -rf "${tmpdir}"
+          git archive --format=tar.gz --output "cats-company-source-${IMAGE_TAG}.tar.gz" HEAD
 
           ssh ${SSH_OPTS} "${REMOTE}" "tar -xzf - -C ${PROD_STACK_ROOT}" < prod-stack-files.tar.gz
+          ssh ${SSH_OPTS} "${REMOTE}" "cat > ${PROD_STACK_ROOT}/releases/cats-company-source-${IMAGE_TAG}.tar.gz" < "cats-company-source-${IMAGE_TAG}.tar.gz"
 
       - name: Deploy prod stack
         env:
@@ -74,12 +76,15 @@ jobs:
           chmod +x "$root/compose/bootstrap-server.sh" "$root/compose/remote-deploy.sh" "$root/compose/remote-rollback.sh" "$root/compose/remote-status.sh"
           "$root/compose/bootstrap-server.sh" "$root"
 
+          source_bundle="$root/releases/cats-company-source-${revision}.tar.gz"
+          if [ ! -f "$source_bundle" ]; then
+            echo "missing source bundle: $source_bundle" >&2
+            exit 1
+          fi
           rm -rf "$source_root"
-          mkdir -p "$root/source"
-          git clone --depth 1 "https://github.com/${owner}/cats-company.git" "$source_root"
+          mkdir -p "$source_root"
+          tar -xzf "$source_bundle" -C "$source_root"
           cd "$source_root"
-          git fetch --depth 1 origin "$revision"
-          git checkout --detach "$revision"
           docker build \
             --build-arg GOPROXY="${REMOTE_GOPROXY:-https://goproxy.cn,direct}" \
             -f deploy/Dockerfile.server \
