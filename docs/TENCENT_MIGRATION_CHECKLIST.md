@@ -56,7 +56,7 @@
 腾讯云 shadow 当前用途：
 
 - CatsCompany web/server：临时运行在 `/srv/catscompany-shadow`
-- PostgreSQL shadow schema：`cats_shadow_20260520`
+- PostgreSQL shadow schema：`cats_shadow_20260521_090713`
 - advanced-reader：临时运行在 `/srv/advanced-reader-prod`
 
 已验证：
@@ -78,10 +78,18 @@
 - prod-shadow 已复制 `/srv/catscompany-shadow/data/uploads` 到
   `/srv/catscompany-prod/data/uploads`，历史反馈图片可通过 prod web 返回
   `200 OK`。
+- 2026-05-21 已从旧线上 MySQL 重新拉取备份并刷新到
+  `cats_shadow_20260521_090713`：
+  - `users=148`
+  - `messages=68101`
+  - `feedback_reports=20`
+  - 已显式允许迁移工具清理历史 NUL 字符和坏 JSON，迁移报告行数对齐。
+- `/srv/catscompany-test` 和 `/srv/catscompany-prod` 已重新部署到
+  `cats_shadow_20260521_090713`，`/ready` 均显示 PostgreSQL 连接正常。
 
-注意：`cats_shadow_20260520` 是迁移预演 schema，数据量已经落后于旧线上
-MySQL。正式切换前必须冻结写入或重新拉取最新 MySQL 备份，再导入新的
-PostgreSQL schema 并重新校验行数。
+注意：`cats_shadow_20260521_090713` 仍然只是迁移预演 schema。正式切换前
+必须冻结写入或重新拉取最新 MySQL 备份，再导入最终 PostgreSQL schema 并
+重新校验行数。
 
 已同步但尚未启用：
 
