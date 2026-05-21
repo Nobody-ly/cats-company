@@ -35,14 +35,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push server image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/Dockerfile.server
-          push: true
-          tags: ghcr.io/${{ github.repository_owner }}/cats-company-server:${{ github.sha }}
-
       - name: Build and push web image
         uses: docker/build-push-action@v6
         with:
@@ -73,6 +65,7 @@ jobs:
           tmpdir="$(mktemp -d)"
           mkdir -p "${tmpdir}/compose" "${tmpdir}/env"
           cp deploy/test/bootstrap-server.sh "${tmpdir}/compose/"
+          cp deploy/remote-build-source.sh "${tmpdir}/compose/"
           cp deploy/test/remote-deploy.sh "${tmpdir}/compose/"
           cp deploy/test/remote-status.sh "${tmpdir}/compose/"
           cp deploy/test/docker-compose.yml "${tmpdir}/compose/"
@@ -88,6 +81,7 @@ jobs:
           ssh ${SSH_OPTS} "${REMOTE}" "cat > ${TEST_STACK_ROOT}/releases/cats-company-source-${{ github.sha }}.tar.gz" < "cats-company-source-${{ github.sha }}.tar.gz"
 
       - name: Deploy isolated test stack
+        timeout-minutes: 15
         env:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
@@ -98,31 +92,9 @@ jobs:
           root="${TEST_STACK_ROOT}"
           revision="${GITHUB_SHA}"
           owner="${GHCR_OWNER}"
-          source_root="$root/source/$revision"
-          chmod +x "$root/compose/bootstrap-server.sh" "$root/compose/remote-deploy.sh" "$root/compose/remote-status.sh"
+          chmod +x "$root/compose/bootstrap-server.sh" "$root/compose/remote-build-source.sh" "$root/compose/remote-deploy.sh" "$root/compose/remote-status.sh"
           "$root/compose/bootstrap-server.sh" "$root"
-
-          source_bundle="$root/releases/cats-company-source-${revision}.tar.gz"
-          if [ ! -f "$source_bundle" ]; then
-            echo "missing source bundle: $source_bundle" >&2
-            exit 1
-          fi
-          rm -rf "$source_root"
-          mkdir -p "$source_root"
-          tar -xzf "$source_bundle" -C "$source_root"
-          cd "$source_root"
-          docker build \
-            --build-arg GOPROXY="${REMOTE_GOPROXY:-https://goproxy.cn,direct}" \
-            -f deploy/Dockerfile.server \
-            -t "ghcr.io/${owner}/cats-company-server:${revision}" \
-            .
-
-          if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
-            printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
-          fi
-          timeout 300 docker pull "ghcr.io/${owner}/cats-company-web:${revision}"
-          find "$root/source" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} +
-
+          "$root/compose/remote-build-source.sh" "$root" "$revision" "$owner"
           export SKIP_IMAGE_PULL=1
           "$root/compose/remote-deploy.sh" "$root" "$revision"
           "$root/compose/remote-status.sh" "$root"
