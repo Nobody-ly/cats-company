@@ -43,6 +43,65 @@ func TestEnvAccountServiceVerifierSupportsPlainAndHashTokens(t *testing.T) {
 	}
 }
 
+func TestAccountServiceVerifierSupportsDatabaseTokens(t *testing.T) {
+	store := newAccountTestAuthServiceStore()
+	token, prefix, hash, err := GenerateAccountServiceToken()
+	if err != nil {
+		t.Fatalf("GenerateAccountServiceToken: %v", err)
+	}
+	if _, err := store.CreateAuthService(&types.AuthService{
+		Slug:        "cats-relay",
+		Name:        "Cats Relay",
+		TokenPrefix: prefix,
+		TokenHash:   hash,
+		Scopes:      []string{"account.introspect"},
+		State:       0,
+	}); err != nil {
+		t.Fatalf("CreateAuthService: %v", err)
+	}
+
+	verifier, err := NewAccountServiceVerifier("", store)
+	if err != nil {
+		t.Fatalf("NewAccountServiceVerifier: %v", err)
+	}
+	service, ok := verifier.Verify(token)
+	if !ok {
+		t.Fatal("expected database token to verify")
+	}
+	if service.Slug != "cats-relay" || service.Source != "db" {
+		t.Fatalf("unexpected service: %+v", service)
+	}
+}
+
+func TestAccountServiceVerifierRejectsRevokedDatabaseTokens(t *testing.T) {
+	store := newAccountTestAuthServiceStore()
+	token, prefix, hash, err := GenerateAccountServiceToken()
+	if err != nil {
+		t.Fatalf("GenerateAccountServiceToken: %v", err)
+	}
+	id, err := store.CreateAuthService(&types.AuthService{
+		Slug:        "cats-relay",
+		Name:        "Cats Relay",
+		TokenPrefix: prefix,
+		TokenHash:   hash,
+		State:       0,
+	})
+	if err != nil {
+		t.Fatalf("CreateAuthService: %v", err)
+	}
+	if err := store.RevokeAuthService(id); err != nil {
+		t.Fatalf("RevokeAuthService: %v", err)
+	}
+
+	verifier, err := NewAccountServiceVerifier("", store)
+	if err != nil {
+		t.Fatalf("NewAccountServiceVerifier: %v", err)
+	}
+	if _, ok := verifier.Verify(token); ok {
+		t.Fatal("unexpected verification success for revoked token")
+	}
+}
+
 func TestAccountCenterIntrospectActiveToken(t *testing.T) {
 	oldSecret := append([]byte(nil), jwtSecret...)
 	defer func() { jwtSecret = oldSecret }()

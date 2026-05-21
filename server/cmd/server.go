@@ -211,12 +211,12 @@ func main() {
 	}
 
 	userHandler := server.NewUserHandler(db)
-	accountServiceVerifier, err := server.NewEnvAccountServiceVerifier(os.Getenv("OC_ACCOUNT_SERVICE_TOKENS"))
+	accountServiceVerifier, err := server.NewAccountServiceVerifier(os.Getenv("OC_ACCOUNT_SERVICE_TOKENS"), db)
 	if err != nil {
 		log.Fatalf("invalid OC_ACCOUNT_SERVICE_TOKENS: %v", err)
 	}
 	accountCenterHandler := server.NewAccountCenterHandler(db, accountServiceVerifier)
-	accountAdminHandler := server.NewAccountAdminHandler(db, accountServiceVerifier)
+	accountAdminHandler := server.NewAccountAdminHandler(db, accountServiceVerifier, db)
 	friendHandler := server.NewFriendHandler(db)
 	conversationHandler := server.NewConversationHandler(db, hub)
 	botHandler := server.NewBotHandler(db, deployer)
@@ -311,6 +311,8 @@ func main() {
 	mux.HandleFunc("/local/account-admin", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/users", accountAdminHandler.HandleUserLookup)
+	mux.HandleFunc("/local/account-admin/services", accountAdminHandler.HandleServices)
+	mux.HandleFunc("/local/account-admin/services/revoke", accountAdminHandler.HandleRevokeService)
 
 	// Friends (require auth — JWT or API Key for bot access)
 	authWithDB := server.AuthMiddlewareWithDB(db)

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,7 +26,10 @@ type AccountUserLookup interface {
 }
 
 type AccountService struct {
-	Slug string `json:"slug"`
+	ID     int64    `json:"id,omitempty"`
+	Slug   string   `json:"slug"`
+	Scopes []string `json:"scopes,omitempty"`
+	Source string   `json:"source,omitempty"`
 }
 
 type AccountServiceVerifier interface {
@@ -32,8 +37,18 @@ type AccountServiceVerifier interface {
 	Verify(token string) (AccountService, bool)
 }
 
+type AccountServiceRegistry interface {
+	GetAuthServiceByTokenHash(tokenHash string) (*types.AuthService, error)
+	TouchAuthServiceLastUsed(id int64) error
+}
+
 type envAccountServiceVerifier struct {
 	tokens map[string][32]byte
+}
+
+type accountServiceVerifier struct {
+	env      AccountServiceVerifier
+	registry AccountServiceRegistry
 }
 
 // NewEnvAccountServiceVerifier builds a service-token verifier from env config.
@@ -71,6 +86,14 @@ func NewEnvAccountServiceVerifier(raw string) (AccountServiceVerifier, error) {
 	return verifier, nil
 }
 
+func NewAccountServiceVerifier(raw string, registry AccountServiceRegistry) (AccountServiceVerifier, error) {
+	envVerifier, err := NewEnvAccountServiceVerifier(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &accountServiceVerifier{env: envVerifier, registry: registry}, nil
+}
+
 func splitServiceTokenConfig(raw string) []string {
 	fields := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ';' || r == '\n' || r == '\r'
@@ -96,10 +119,58 @@ func (v *envAccountServiceVerifier) Verify(token string) (AccountService, bool) 
 	sum := sha256.Sum256([]byte(token))
 	for slug, expected := range v.tokens {
 		if subtle.ConstantTimeCompare(sum[:], expected[:]) == 1 {
-			return AccountService{Slug: slug}, true
+			return AccountService{Slug: slug, Source: "env"}, true
 		}
 	}
 	return AccountService{}, false
+}
+
+func (v *accountServiceVerifier) Configured() bool {
+	return (v.env != nil && v.env.Configured()) || v.registry != nil
+}
+
+func (v *accountServiceVerifier) Verify(token string) (AccountService, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return AccountService{}, false
+	}
+	if v.env != nil {
+		if service, ok := v.env.Verify(token); ok {
+			return service, true
+		}
+	}
+	if v.registry == nil {
+		return AccountService{}, false
+	}
+	dbService, err := v.registry.GetAuthServiceByTokenHash(HashAccountServiceToken(token))
+	if err != nil || dbService == nil {
+		return AccountService{}, false
+	}
+	_ = v.registry.TouchAuthServiceLastUsed(dbService.ID)
+	return AccountService{
+		ID:     dbService.ID,
+		Slug:   dbService.Slug,
+		Scopes: dbService.Scopes,
+		Source: "db",
+	}, true
+}
+
+func GenerateAccountServiceToken() (token string, prefix string, tokenHash string, err error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", "", err
+	}
+	token = "cats_svc_" + base64.RawURLEncoding.EncodeToString(raw)
+	prefix = token
+	if len(prefix) > 20 {
+		prefix = prefix[:20]
+	}
+	return token, prefix, HashAccountServiceToken(token), nil
+}
+
+func HashAccountServiceToken(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
 }
 
 type AccountCenterHandler struct {

@@ -18,6 +18,7 @@ func (a *Adapter) CreateSchema() error {
 		createGroupsTable,
 		createGroupMembersTable,
 		createFeedbackReportsTable,
+		createAuthServicesTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -201,6 +202,23 @@ CREATE TABLE IF NOT EXISTS feedback_reports (
     INDEX idx_feedback_user_created (user_id, created_at),
     INDEX idx_feedback_status_created (status, created_at),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createAuthServicesTable = `
+CREATE TABLE IF NOT EXISTS auth_services (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    slug VARCHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(128) NOT NULL,
+    token_prefix VARCHAR(32) NOT NULL,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    scopes JSON NOT NULL,
+    state TINYINT NOT NULL DEFAULT 0,
+    last_used_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_auth_services_state (state),
+    INDEX idx_auth_services_slug (slug)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 

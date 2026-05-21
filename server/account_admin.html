@@ -91,6 +91,10 @@
       align-items: center;
     }
 
+    #service-form {
+      grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    }
+
     input {
       width: 100%;
       height: 44px;
@@ -177,6 +181,63 @@
       display: block;
     }
 
+    .token-box {
+      display: none;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid rgba(214, 168, 79, 0.32);
+      border-radius: 8px;
+      background: rgba(214, 168, 79, 0.08);
+    }
+
+    .token-box.visible {
+      display: block;
+    }
+
+    .token-box strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent-2);
+    }
+
+    .service-list {
+      margin-top: 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .service-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .service-item:first-child {
+      border-top: 0;
+    }
+
+    .service-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .service-item button {
+      height: 34px;
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid rgba(255, 123, 114, 0.42);
+      padding: 0 12px;
+    }
+
+    .service-item button:hover {
+      background: rgba(255, 123, 114, 0.12);
+    }
+
     code {
       display: block;
       margin-top: 10px;
@@ -208,6 +269,15 @@
         width: 100%;
       }
 
+      #service-form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .service-item {
+        grid-template-columns: 1fr;
+      }
+
       .row {
         grid-template-columns: 1fr;
         gap: 4px;
@@ -237,6 +307,20 @@
     </section>
 
     <section>
+      <h2>Service Token</h2>
+      <form id="service-form">
+        <input id="service-slug" name="slug" autocomplete="off" placeholder="服务标识，例如 cats-relay" />
+        <input id="service-name" name="name" autocomplete="off" placeholder="显示名称，例如 Cats Relay" />
+        <input id="service-scopes" name="scopes" autocomplete="off" placeholder="scope，用逗号分隔，例如 account.introspect" />
+        <button id="service-button" type="submit">生成</button>
+      </form>
+      <div class="hint">token 明文只在创建或轮换时展示一次。重新使用同一个服务标识会轮换旧 token。</div>
+      <div id="service-error" class="error"></div>
+      <div id="service-token" class="token-box"></div>
+      <div id="service-list" class="service-list"></div>
+    </section>
+
+    <section>
       <h2>访问方式</h2>
       <p>在本机建立 SSH 隧道后访问下面的本地地址：</p>
       <code>ssh -L 26061:127.0.0.1:26061 &lt;server-alias&gt;
@@ -250,6 +334,11 @@ http://127.0.0.1:26061/local/account-admin</code>
     const button = document.querySelector('#lookup-button');
     const result = document.querySelector('#result');
     const error = document.querySelector('#error');
+    const serviceForm = document.querySelector('#service-form');
+    const serviceButton = document.querySelector('#service-button');
+    const serviceError = document.querySelector('#service-error');
+    const serviceToken = document.querySelector('#service-token');
+    const serviceList = document.querySelector('#service-list');
 
     function showError(message) {
       error.textContent = message;
@@ -319,6 +408,119 @@ http://127.0.0.1:26061/local/account-admin</code>
         button.disabled = false;
       }
     });
+
+    function showServiceError(message) {
+      serviceError.textContent = message;
+      serviceError.classList.add('visible');
+    }
+
+    function clearServiceError() {
+      serviceError.textContent = '';
+      serviceError.classList.remove('visible');
+    }
+
+    function renderServiceToken(token) {
+      if (!token) {
+        serviceToken.classList.remove('visible');
+        serviceToken.innerHTML = '';
+        return;
+      }
+      serviceToken.innerHTML = `<strong>请立即保存这个 token，之后不会再次显示：</strong><code>${escapeHTML(token)}</code>`;
+      serviceToken.classList.add('visible');
+    }
+
+    function renderServices(items) {
+      const services = Array.isArray(items) ? items : [];
+      if (!services.length) {
+        serviceList.innerHTML = '<div class="service-item"><div><strong>暂无 service</strong><div class="service-meta">创建后会显示在这里。</div></div></div>';
+        return;
+      }
+      serviceList.innerHTML = services.map((service) => {
+        const active = Number(service.state || 0) === 0;
+        const scopes = Array.isArray(service.scopes) && service.scopes.length ? service.scopes.join(', ') : '-';
+        return `<div class="service-item">
+          <div>
+            <strong>${escapeHTML(service.name || service.slug)}</strong>
+            <div class="service-meta">
+              slug=${escapeHTML(service.slug)} · prefix=${escapeHTML(service.token_prefix || '-')} · scopes=${escapeHTML(scopes)} · ${active ? '启用' : '已撤销'}
+            </div>
+          </div>
+          ${active ? `<button data-revoke="${escapeHTML(service.id)}">撤销</button>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    async function loadServices() {
+      try {
+        const resp = await fetch('/local/account-admin/services', { headers: { Accept: 'application/json' } });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showServiceError(payload.error || `服务列表加载失败：HTTP ${resp.status}`);
+          return;
+        }
+        renderServices(payload.services);
+      } catch (err) {
+        showServiceError(err && err.message ? err.message : '服务列表加载失败。');
+      }
+    }
+
+    serviceForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearServiceError();
+      renderServiceToken('');
+      const slug = document.querySelector('#service-slug').value.trim();
+      const name = document.querySelector('#service-name').value.trim();
+      const scopes = document.querySelector('#service-scopes').value.split(',').map((item) => item.trim()).filter(Boolean);
+      if (!slug) {
+        showServiceError('请输入服务标识。');
+        return;
+      }
+      serviceButton.disabled = true;
+      try {
+        const resp = await fetch('/local/account-admin/services', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ slug, name, scopes }),
+        });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showServiceError(payload.error || `创建失败：HTTP ${resp.status}`);
+          return;
+        }
+        renderServiceToken(payload.token);
+        await loadServices();
+      } catch (err) {
+        showServiceError(err && err.message ? err.message : '创建失败。');
+      } finally {
+        serviceButton.disabled = false;
+      }
+    });
+
+    serviceList.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!target || !target.dataset || !target.dataset.revoke) return;
+      clearServiceError();
+      target.disabled = true;
+      try {
+        const resp = await fetch('/local/account-admin/services/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ id: Number(target.dataset.revoke) }),
+        });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showServiceError(payload.error || `撤销失败：HTTP ${resp.status}`);
+          return;
+        }
+        await loadServices();
+      } catch (err) {
+        showServiceError(err && err.message ? err.message : '撤销失败。');
+      } finally {
+        target.disabled = false;
+      }
+    });
+
+    loadServices();
   </script>
 </body>
 </html>

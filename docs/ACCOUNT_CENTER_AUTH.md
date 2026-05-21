@@ -417,7 +417,7 @@ V0 可以先不做 refresh token，继续用 7 天 JWT。
 1. 新增 `POST /api/account/introspect`。
 2. 新增 `GET /api/account/users/{uid}`。
 3. 先用 `OC_ACCOUNT_SERVICE_TOKENS` 配置 service token，形成最小服务间鉴权闭环。
-4. 再新增 `auth_services` 表，把 service token 从环境变量迁到数据库。
+4. 新增 `auth_services` 表，把 service token 从环境变量迁到数据库。
 5. 新增用户 API key 创建、列表、撤销接口。
 6. 给 relay 写最小接入示例。
 7. 给同事提供本文档和 curl 示例。
@@ -439,6 +439,12 @@ OC_ACCOUNT_SERVICE_TOKENS="cats-relay=replace-with-secret;internal-tool=sha256:<
 
 生产推荐使用 `sha256:<hex>`，避免环境变量里出现 service token 明文。
 
+同时 V0 已支持数据库里的 `auth_services`。本地后台创建 service 后，会生成一次性明文 token；服务端只保存 token hash 和 prefix。创建后的 service token 也可以直接用于：
+
+```http
+Authorization: Service <service_token>
+```
+
 ## 本地后台管理页
 
 V0 提供一个只读的本地后台页面，用于通过 SSH 隧道查看账号状态。它不走公网入口，不需要在公网 nginx 上暴露后台路径。
@@ -458,6 +464,8 @@ http://127.0.0.1:26061/local/account-admin
 第一版能力：
 
 - 按 UID 查询账号。
+- 创建或轮换 service token。
+- 撤销 service token。
 - 查看用户名、邮箱、显示名、头像、账号类型、状态和创建时间。
 - 查看 service token 是否已在服务端配置。
 
@@ -465,4 +473,5 @@ http://127.0.0.1:26061/local/account-admin
 
 - 后台页面只接受本机/内网隧道来源请求。
 - 文档和页面示例只写本地访问方式，不写服务器公网 IP。
-- 目前后台只读，不提供删除、改密码、封禁等高风险操作；这些等审计日志和权限模型补齐后再加。
+- token 明文只在创建或轮换时显示一次，数据库只保存 hash。
+- 目前后台不提供改密码、封禁、删除账号等高风险操作；这些等审计日志和权限模型补齐后再加。

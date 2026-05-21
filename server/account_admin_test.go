@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openchat/openchat/server/store/types"
 )
 
 func TestAccountAdminPageAllowsTunnelAddress(t *testing.T) {
-	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil)
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/local/account-admin", nil)
 	req.RemoteAddr = "172.18.0.1:40200"
@@ -27,7 +28,7 @@ func TestAccountAdminPageAllowsTunnelAddress(t *testing.T) {
 }
 
 func TestAccountAdminRejectsPublicAddress(t *testing.T) {
-	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil)
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/local/account-admin", nil)
 	req.RemoteAddr = "203.0.113.20:40200"
@@ -55,7 +56,7 @@ func TestAccountAdminUserLookup(t *testing.T) {
 			AccountType: types.AccountHuman,
 			State:       0,
 		},
-	}}, verifier)
+	}}, verifier, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users?uid=9", nil)
 	req.RemoteAddr = "127.0.0.1:40200"
@@ -83,5 +84,104 @@ func TestAccountAdminUserLookup(t *testing.T) {
 	}
 	if !body.AccountCenter.ServiceTokensConfigured {
 		t.Fatal("expected configured service token flag")
+	}
+}
+
+type accountTestAuthServiceStore struct {
+	nextID   int64
+	services map[int64]*types.AuthService
+}
+
+func newAccountTestAuthServiceStore() *accountTestAuthServiceStore {
+	return &accountTestAuthServiceStore{
+		nextID:   1,
+		services: map[int64]*types.AuthService{},
+	}
+}
+
+func (s *accountTestAuthServiceStore) CreateAuthService(service *types.AuthService) (int64, error) {
+	if s.nextID == 0 {
+		s.nextID = 1
+	}
+	for id, existing := range s.services {
+		if existing.Slug == service.Slug {
+			cp := *service
+			cp.ID = id
+			s.services[id] = &cp
+			return id, nil
+		}
+	}
+	id := s.nextID
+	s.nextID++
+	cp := *service
+	cp.ID = id
+	s.services[id] = &cp
+	return id, nil
+}
+
+func (s *accountTestAuthServiceStore) ListAuthServices() ([]*types.AuthService, error) {
+	out := make([]*types.AuthService, 0, len(s.services))
+	for _, service := range s.services {
+		out = append(out, service)
+	}
+	return out, nil
+}
+
+func (s *accountTestAuthServiceStore) GetAuthServiceByTokenHash(tokenHash string) (*types.AuthService, error) {
+	for _, service := range s.services {
+		if service.TokenHash == tokenHash && service.State == 0 {
+			return service, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *accountTestAuthServiceStore) RevokeAuthService(id int64) error {
+	if service := s.services[id]; service != nil {
+		service.State = 1
+	}
+	return nil
+}
+
+func (s *accountTestAuthServiceStore) TouchAuthServiceLastUsed(id int64) error {
+	return nil
+}
+
+func TestAccountAdminCreatesAndRevokesService(t *testing.T) {
+	store := newAccountTestAuthServiceStore()
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/local/account-admin/services", strings.NewReader(`{"slug":"cats-relay","name":"Cats Relay","scopes":["account.introspect"]}`))
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleServices(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Token   string `json:"token"`
+		Service struct {
+			ID   int64  `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"service"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if created.Token == "" || created.Service.Slug != "cats-relay" {
+		t.Fatalf("unexpected create response: %+v", created)
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodPost, "/local/account-admin/services/revoke", strings.NewReader(`{"id":1}`))
+	revokeReq.RemoteAddr = "127.0.0.1:40200"
+	revokeRec := httptest.NewRecorder()
+	handler.HandleRevokeService(revokeRec, revokeReq)
+
+	if revokeRec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", revokeRec.Code, revokeRec.Body.String())
+	}
+	if store.services[1].State != 1 {
+		t.Fatalf("expected revoked service, got state=%d", store.services[1].State)
 	}
 }

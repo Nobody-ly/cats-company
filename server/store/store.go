@@ -87,6 +87,15 @@ type FeedbackStore interface {
 	CreateFeedbackReport(report *types.FeedbackReport) (int64, error)
 }
 
+// AuthServiceStore contains service-to-service account center credentials.
+type AuthServiceStore interface {
+	CreateAuthService(service *types.AuthService) (int64, error)
+	ListAuthServices() ([]*types.AuthService, error)
+	GetAuthServiceByTokenHash(tokenHash string) (*types.AuthService, error)
+	RevokeAuthService(id int64) error
+	TouchAuthServiceLastUsed(id int64) error
+}
+
 // Store is the complete persistence boundary required by the current server.
 type Store interface {
 	UserStore
@@ -95,6 +104,7 @@ type Store interface {
 	MessageStore
 	BotStore
 	FeedbackStore
+	AuthServiceStore
 	CreateSchema() error
 	HealthCheck() map[string]interface{}
 	Close() error
