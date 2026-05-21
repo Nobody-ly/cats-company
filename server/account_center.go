@@ -42,14 +42,6 @@ type AccountServiceRegistry interface {
 	TouchAuthServiceLastUsed(id int64) error
 }
 
-type AccountAPIKeyStore interface {
-	CreateAuthAPIKey(key *types.AuthAPIKey) (int64, error)
-	ListAuthAPIKeysByOwner(ownerUserID int64) ([]*types.AuthAPIKey, error)
-	GetAuthAPIKeyByHash(keyHash string) (*types.AuthAPIKey, error)
-	RevokeAuthAPIKey(ownerUserID, id int64) error
-	TouchAuthAPIKeyLastUsed(id int64) error
-}
-
 type envAccountServiceVerifier struct {
 	tokens map[string][32]byte
 }
@@ -164,35 +156,19 @@ func (v *accountServiceVerifier) Verify(token string) (AccountService, bool) {
 }
 
 func GenerateAccountServiceToken() (token string, prefix string, tokenHash string, err error) {
-	return generateAccountToken("cats_svc_")
-}
-
-func GenerateAccountAPIKey() (key string, prefix string, keyHash string, err error) {
-	return generateAccountToken("cat_sk_")
-}
-
-func generateAccountToken(prefix string) (token string, publicPrefix string, tokenHash string, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", "", "", err
 	}
-	token = prefix + base64.RawURLEncoding.EncodeToString(raw)
-	publicPrefix = token
-	if len(publicPrefix) > 20 {
-		publicPrefix = publicPrefix[:20]
+	token = "cats_svc_" + base64.RawURLEncoding.EncodeToString(raw)
+	prefix = token
+	if len(prefix) > 20 {
+		prefix = prefix[:20]
 	}
-	return token, publicPrefix, HashAccountToken(token), nil
+	return token, prefix, HashAccountServiceToken(token), nil
 }
 
 func HashAccountServiceToken(token string) string {
-	return HashAccountToken(token)
-}
-
-func HashAccountAPIKey(key string) string {
-	return HashAccountToken(key)
-}
-
-func HashAccountToken(token string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	return hex.EncodeToString(sum[:])
 }
@@ -200,27 +176,14 @@ func HashAccountToken(token string) string {
 type AccountCenterHandler struct {
 	users    AccountUserLookup
 	services AccountServiceVerifier
-	apiKeys  AccountAPIKeyStore
 }
 
-func NewAccountCenterHandler(users AccountUserLookup, services AccountServiceVerifier, apiKeys AccountAPIKeyStore) *AccountCenterHandler {
-	return &AccountCenterHandler{users: users, services: services, apiKeys: apiKeys}
+func NewAccountCenterHandler(users AccountUserLookup, services AccountServiceVerifier) *AccountCenterHandler {
+	return &AccountCenterHandler{users: users, services: services}
 }
 
 type accountIntrospectRequest struct {
 	Token string `json:"token"`
-}
-
-type accountAPIKeyCreateRequest struct {
-	Service   string   `json:"service"`
-	Name      string   `json:"name"`
-	Scopes    []string `json:"scopes"`
-	ExpiresAt string   `json:"expires_at"`
-}
-
-type accountAPIKeyIntrospectRequest struct {
-	Key           string `json:"key"`
-	RequiredScope string `json:"required_scope"`
 }
 
 type accountUserResponse struct {
@@ -327,188 +290,6 @@ func (h *AccountCenterHandler) HandleGetUser(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, accountUserPayload(user))
 }
 
-func (h *AccountCenterHandler) HandleAPIKeys(w http.ResponseWriter, r *http.Request) {
-	if h.apiKeys == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account api key store unavailable"})
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		h.handleListAPIKeys(w, r)
-	case http.MethodPost:
-		h.handleCreateAPIKey(w, r)
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-	}
-}
-
-func (h *AccountCenterHandler) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	uid := UIDFromContext(r.Context())
-	keys, err := h.apiKeys.ListAuthAPIKeysByOwner(uid)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
-}
-
-func (h *AccountCenterHandler) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
-	uid := UIDFromContext(r.Context())
-	if uid <= 0 {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-
-	var req accountAPIKeyCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-		return
-	}
-
-	service := normalizeAuthServiceSlug(req.Service)
-	if service == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid service"})
-		return
-	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = service
-	}
-	scopes := normalizeAuthServiceScopes(req.Scopes)
-	expiresAt, ok := parseOptionalRFC3339(req.ExpiresAt)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid expires_at"})
-		return
-	}
-
-	key, keyPrefix, keyHash, err := GenerateAccountAPIKey()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate api key"})
-		return
-	}
-
-	id, err := h.apiKeys.CreateAuthAPIKey(&types.AuthAPIKey{
-		OwnerUserID: uid,
-		ServiceSlug: service,
-		Name:        name,
-		KeyPrefix:   keyPrefix,
-		KeyHash:     keyHash,
-		Scopes:      scopes,
-		State:       0,
-		ExpiresAt:   expiresAt,
-	})
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create api key"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok":  true,
-		"key": key,
-		"meta": map[string]interface{}{
-			"id":         id,
-			"service":    service,
-			"name":       name,
-			"key_prefix": keyPrefix,
-			"scopes":     scopes,
-			"state":      0,
-			"expires_at": expiresAt,
-		},
-	})
-}
-
-func (h *AccountCenterHandler) HandleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	if h.apiKeys == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account api key store unavailable"})
-		return
-	}
-
-	var req struct {
-		ID int64 `json:"id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid api key id"})
-		return
-	}
-	if err := h.apiKeys.RevokeAuthAPIKey(UIDFromContext(r.Context()), req.ID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke api key"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
-}
-
-func (h *AccountCenterHandler) HandleAPIKeyIntrospect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	service, ok := h.requireService(w, r)
-	if !ok {
-		return
-	}
-	if h.apiKeys == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account api key store unavailable"})
-		return
-	}
-
-	var req accountAPIKeyIntrospectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-		return
-	}
-	keyText := strings.TrimSpace(req.Key)
-	if keyText == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key required"})
-		return
-	}
-
-	apiKey, err := h.apiKeys.GetAuthAPIKeyByHash(HashAccountAPIKey(keyText))
-	if err != nil || apiKey == nil || apiKey.State != 0 {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"active": false, "error": "invalid_api_key"})
-		return
-	}
-	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"active": false, "error": "expired_api_key"})
-		return
-	}
-	if apiKey.ServiceSlug != service.Slug {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"active": false, "error": "wrong_service"})
-		return
-	}
-	requiredScope := strings.ToLower(strings.TrimSpace(req.RequiredScope))
-	if requiredScope != "" && !hasScope(apiKey.Scopes, requiredScope) {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"active": false, "error": "scope_denied"})
-		return
-	}
-
-	user, err := h.users.GetUser(apiKey.OwnerUserID)
-	if err != nil || user == nil || user.State != 0 {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"active": false, "error": "user_not_available"})
-		return
-	}
-	_ = h.apiKeys.TouchAuthAPIKeyLastUsed(apiKey.ID)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"active":  true,
-		"uid":     apiKey.OwnerUserID,
-		"user":    accountUserPayload(user),
-		"service": apiKey.ServiceSlug,
-		"scopes":  apiKey.Scopes,
-		"key": map[string]interface{}{
-			"id":           apiKey.ID,
-			"name":         apiKey.Name,
-			"key_prefix":   apiKey.KeyPrefix,
-			"last_used_at": apiKey.LastUsedAt,
-			"expires_at":   apiKey.ExpiresAt,
-		},
-	})
-}
-
 func (h *AccountCenterHandler) requireService(w http.ResponseWriter, r *http.Request) (AccountService, bool) {
 	if h.services == nil || !h.services.Configured() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account center service tokens are not configured"})
@@ -537,30 +318,4 @@ func jwtTime(t *jwt.NumericDate) interface{} {
 		return nil
 	}
 	return t.Time
-}
-
-func parseOptionalRFC3339(raw string) (*time.Time, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, true
-	}
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return nil, false
-	}
-	return &parsed, true
-}
-
-func hasScope(scopes []string, required string) bool {
-	required = strings.ToLower(strings.TrimSpace(required))
-	if required == "" {
-		return true
-	}
-	for _, scope := range scopes {
-		scope = strings.ToLower(strings.TrimSpace(scope))
-		if scope == required || scope == "*" {
-			return true
-		}
-	}
-	return false
 }

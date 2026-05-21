@@ -16,7 +16,6 @@ func (a *Adapter) CreateSchema() error {
 		createGroupMembersTable,
 		createFeedbackReportsTable,
 		createAuthServicesTable,
-		createAuthAPIKeysTable,
 		migrateUsersAddBotDisclose,
 		migrateMessagesAddReplyTo,
 		migrateBotConfigAddAPIKey,
@@ -34,7 +33,6 @@ func (a *Adapter) CreateSchema() error {
 		createGroupMembersIndexes,
 		createFeedbackIndexes,
 		createAuthServicesIndexes,
-		createAuthAPIKeysIndexes,
 		createUpdatedAtTriggers,
 	}
 	for _, statement := range statements {
@@ -190,23 +188,6 @@ CREATE TABLE IF NOT EXISTS auth_services (
 );
 `
 
-const createAuthAPIKeysTable = `
-CREATE TABLE IF NOT EXISTS auth_api_keys (
-    id BIGSERIAL PRIMARY KEY,
-    owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    service_slug VARCHAR(64) NOT NULL,
-    name VARCHAR(128) NOT NULL,
-    key_prefix VARCHAR(32) NOT NULL,
-    key_hash VARCHAR(64) NOT NULL UNIQUE,
-    scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
-    state SMALLINT NOT NULL DEFAULT 0,
-    last_used_at TIMESTAMPTZ DEFAULT NULL,
-    expires_at TIMESTAMPTZ DEFAULT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-`
-
 const migrateUsersAddBotDisclose = `ALTER TABLE users ADD COLUMN IF NOT EXISTS bot_disclose BOOLEAN NOT NULL DEFAULT FALSE;`
 const migrateMessagesAddReplyTo = `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to BIGINT DEFAULT NULL;`
 const migrateBotConfigAddAPIKey = `ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS api_key VARCHAR(128) DEFAULT NULL;`
@@ -258,11 +239,6 @@ CREATE INDEX IF NOT EXISTS idx_auth_services_state ON auth_services (state);
 CREATE INDEX IF NOT EXISTS idx_auth_services_slug ON auth_services (slug);
 `
 
-const createAuthAPIKeysIndexes = `
-CREATE INDEX IF NOT EXISTS idx_auth_api_keys_owner ON auth_api_keys (owner_user_id, state);
-CREATE INDEX IF NOT EXISTS idx_auth_api_keys_service ON auth_api_keys (service_slug, state);
-`
-
 const createUpdatedAtTriggers = `
 CREATE OR REPLACE TRIGGER trg_users_updated_at BEFORE UPDATE ON users
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -273,7 +249,5 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_feedback_reports_updated_at BEFORE UPDATE ON feedback_reports
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_auth_services_updated_at BEFORE UPDATE ON auth_services
-FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE OR REPLACE TRIGGER trg_auth_api_keys_updated_at BEFORE UPDATE ON auth_api_keys
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 `

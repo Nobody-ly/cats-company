@@ -215,7 +215,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid OC_ACCOUNT_SERVICE_TOKENS: %v", err)
 	}
-	accountCenterHandler := server.NewAccountCenterHandler(db, accountServiceVerifier, db)
+	accountCenterHandler := server.NewAccountCenterHandler(db, accountServiceVerifier)
 	accountAdminHandler := server.NewAccountAdminHandler(db, accountServiceVerifier, db)
 	friendHandler := server.NewFriendHandler(db)
 	conversationHandler := server.NewConversationHandler(db, hub)
@@ -306,13 +306,8 @@ func main() {
 	mux.HandleFunc("/api/auth/login", chainHTTP(userHandler.HandleLogin, authLoginIPLimit, authLoginAccountLimit))
 
 	// Account center (service-to-service auth)
-	authWithDB := server.AuthMiddlewareWithDB(db)
-	ownerAuthWithDB := server.OwnerMiddlewareWithDB(db)
 	mux.HandleFunc("/api/account/introspect", accountCenterHandler.HandleIntrospect)
 	mux.HandleFunc("/api/account/users/", accountCenterHandler.HandleGetUser)
-	mux.HandleFunc("/api/account/api-keys", ownerAuthWithDB(accountCenterHandler.HandleAPIKeys))
-	mux.HandleFunc("/api/account/api-keys/revoke", ownerAuthWithDB(accountCenterHandler.HandleRevokeAPIKey))
-	mux.HandleFunc("/api/account/api-keys/introspect", accountCenterHandler.HandleAPIKeyIntrospect)
 	mux.HandleFunc("/local/account-admin", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/users", accountAdminHandler.HandleUserLookup)
@@ -320,6 +315,8 @@ func main() {
 	mux.HandleFunc("/local/account-admin/services/revoke", accountAdminHandler.HandleRevokeService)
 
 	// Friends (require auth — JWT or API Key for bot access)
+	authWithDB := server.AuthMiddlewareWithDB(db)
+	ownerAuthWithDB := server.OwnerMiddlewareWithDB(db)
 	mux.HandleFunc("/api/friends", authWithDB(friendHandler.HandleGetFriends))
 	mux.HandleFunc("/api/friends/pending", authWithDB(friendHandler.HandleGetPendingRequests))
 	mux.HandleFunc("/api/friends/request", authWithDB(friendHandler.HandleSendRequest))

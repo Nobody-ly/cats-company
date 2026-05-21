@@ -88,18 +88,14 @@ func TestAccountAdminUserLookup(t *testing.T) {
 }
 
 type accountTestAuthServiceStore struct {
-	nextID    int64
-	nextKeyID int64
-	services  map[int64]*types.AuthService
-	keys      map[int64]*types.AuthAPIKey
+	nextID   int64
+	services map[int64]*types.AuthService
 }
 
 func newAccountTestAuthServiceStore() *accountTestAuthServiceStore {
 	return &accountTestAuthServiceStore{
-		nextID:    1,
-		nextKeyID: 1,
-		services:  map[int64]*types.AuthService{},
-		keys:      map[int64]*types.AuthAPIKey{},
+		nextID:   1,
+		services: map[int64]*types.AuthService{},
 	}
 }
 
@@ -148,48 +144,6 @@ func (s *accountTestAuthServiceStore) RevokeAuthService(id int64) error {
 }
 
 func (s *accountTestAuthServiceStore) TouchAuthServiceLastUsed(id int64) error {
-	return nil
-}
-
-func (s *accountTestAuthServiceStore) CreateAuthAPIKey(key *types.AuthAPIKey) (int64, error) {
-	if s.nextKeyID == 0 {
-		s.nextKeyID = 1
-	}
-	id := s.nextKeyID
-	s.nextKeyID++
-	cp := *key
-	cp.ID = id
-	s.keys[id] = &cp
-	return id, nil
-}
-
-func (s *accountTestAuthServiceStore) ListAuthAPIKeysByOwner(ownerUserID int64) ([]*types.AuthAPIKey, error) {
-	out := []*types.AuthAPIKey{}
-	for _, key := range s.keys {
-		if key.OwnerUserID == ownerUserID {
-			out = append(out, key)
-		}
-	}
-	return out, nil
-}
-
-func (s *accountTestAuthServiceStore) GetAuthAPIKeyByHash(keyHash string) (*types.AuthAPIKey, error) {
-	for _, key := range s.keys {
-		if key.KeyHash == keyHash && key.State == 0 {
-			return key, nil
-		}
-	}
-	return nil, nil
-}
-
-func (s *accountTestAuthServiceStore) RevokeAuthAPIKey(ownerUserID, id int64) error {
-	if key := s.keys[id]; key != nil && key.OwnerUserID == ownerUserID {
-		key.State = 1
-	}
-	return nil
-}
-
-func (s *accountTestAuthServiceStore) TouchAuthAPIKeyLastUsed(id int64) error {
 	return nil
 }
 

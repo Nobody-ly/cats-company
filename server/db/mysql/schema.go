@@ -19,7 +19,6 @@ func (a *Adapter) CreateSchema() error {
 		createGroupMembersTable,
 		createFeedbackReportsTable,
 		createAuthServicesTable,
-		createAuthAPIKeysTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -220,26 +219,6 @@ CREATE TABLE IF NOT EXISTS auth_services (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_auth_services_state (state),
     INDEX idx_auth_services_slug (slug)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-`
-
-const createAuthAPIKeysTable = `
-CREATE TABLE IF NOT EXISTS auth_api_keys (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    owner_user_id BIGINT NOT NULL,
-    service_slug VARCHAR(64) NOT NULL,
-    name VARCHAR(128) NOT NULL,
-    key_prefix VARCHAR(32) NOT NULL,
-    key_hash VARCHAR(64) NOT NULL UNIQUE,
-    scopes JSON NOT NULL,
-    state TINYINT NOT NULL DEFAULT 0,
-    last_used_at TIMESTAMP NULL DEFAULT NULL,
-    expires_at TIMESTAMP NULL DEFAULT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_auth_api_keys_owner (owner_user_id, state),
-    INDEX idx_auth_api_keys_service (service_slug, state),
-    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 
