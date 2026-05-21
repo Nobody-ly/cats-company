@@ -96,6 +96,15 @@ type AuthServiceStore interface {
 	TouchAuthServiceLastUsed(id int64) error
 }
 
+// AuthAPIKeyStore contains user-owned service API keys.
+type AuthAPIKeyStore interface {
+	CreateAuthAPIKey(key *types.AuthAPIKey) (int64, error)
+	ListAuthAPIKeysByOwner(ownerUserID int64) ([]*types.AuthAPIKey, error)
+	GetAuthAPIKeyByHash(keyHash string) (*types.AuthAPIKey, error)
+	RevokeAuthAPIKey(ownerUserID, id int64) error
+	TouchAuthAPIKeyLastUsed(id int64) error
+}
+
 // Store is the complete persistence boundary required by the current server.
 type Store interface {
 	UserStore
@@ -105,6 +114,7 @@ type Store interface {
 	BotStore
 	FeedbackStore
 	AuthServiceStore
+	AuthAPIKeyStore
 	CreateSchema() error
 	HealthCheck() map[string]interface{}
 	Close() error

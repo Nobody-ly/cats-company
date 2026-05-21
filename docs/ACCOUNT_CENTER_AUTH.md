@@ -234,6 +234,25 @@ Content-Type: application/json
 
 注意：`key` 明文只返回这一次，后续只能重新生成或撤销。
 
+用户查看自己的 key 列表：
+
+```http
+GET /api/account/api-keys
+Authorization: Bearer <user_jwt>
+```
+
+用户撤销自己的 key：
+
+```http
+POST /api/account/api-keys/revoke
+Authorization: Bearer <user_jwt>
+Content-Type: application/json
+
+{
+  "id": 123
+}
+```
+
 调用时：
 
 ```http
@@ -267,6 +286,13 @@ Content-Type: application/json
   }
 }
 ```
+
+安全规则：
+
+- introspect 时，service token 的 service slug 必须和 API key 绑定的 `service` 一致。
+- `required_scope` 非空时，API key 必须包含该 scope 或 `*`。
+- API key 只保存 hash；列表接口只返回 `key_prefix`，不会返回明文。
+- API key 是用户级凭证，不等同于 CatsCo 桌面端 bot 的 `cc_...` API Key。
 
 ## 推荐数据库表
 

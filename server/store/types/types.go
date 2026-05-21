@@ -45,6 +45,23 @@ type AuthService struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
+// AuthAPIKey is a user-owned long-lived key scoped to one internal service.
+// The plaintext key is only shown once; TokenHash is never returned.
+type AuthAPIKey struct {
+	ID          int64      `json:"id"`
+	OwnerUserID int64      `json:"owner_user_id"`
+	ServiceSlug string     `json:"service"`
+	Name        string     `json:"name"`
+	KeyPrefix   string     `json:"key_prefix,omitempty"`
+	KeyHash     string     `json:"-"`
+	Scopes      []string   `json:"scopes,omitempty"`
+	State       int        `json:"state"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
 // FriendStatus represents the state of a friend relationship.
 type FriendStatus string
 
