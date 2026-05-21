@@ -30,6 +30,21 @@ type User struct {
 	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
+// AuthService represents a trusted internal service which can verify CatsCo
+// user tokens through the account center.
+type AuthService struct {
+	ID          int64      `json:"id"`
+	Slug        string     `json:"slug"`
+	Name        string     `json:"name"`
+	TokenPrefix string     `json:"token_prefix,omitempty"`
+	TokenHash   string     `json:"-"`
+	Scopes      []string   `json:"scopes,omitempty"`
+	State       int        `json:"state"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
 // FriendStatus represents the state of a friend relationship.
 type FriendStatus string
 

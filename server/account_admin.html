@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CatsCo Account Admin</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #0f1520;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #d6a84f;
+      --accent-2: #f0c96b;
+      --danger: #ff7b72;
+      --ok: #3fb950;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(980px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 48px 0;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 28px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(63, 185, 80, 0.32);
+      border-radius: 999px;
+      color: var(--ok);
+      background: rgba(63, 185, 80, 0.08);
+      white-space: nowrap;
+      font-weight: 650;
+    }
+
+    section {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    #service-form {
+      grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    }
+
+    input {
+      width: 100%;
+      height: 44px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 0 12px;
+      font-size: 15px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(214, 168, 79, 0.16);
+    }
+
+    button {
+      height: 44px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 18px;
+      background: var(--accent);
+      color: #111827;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--accent-2);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+
+    .hint {
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .result {
+      display: none;
+      margin-top: 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .result.visible {
+      display: block;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 16px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.015);
+    }
+
+    .row:first-child {
+      border-top: 0;
+    }
+
+    .label {
+      color: var(--muted);
+    }
+
+    .value {
+      overflow-wrap: anywhere;
+    }
+
+    .error {
+      display: none;
+      margin-top: 14px;
+      color: var(--danger);
+    }
+
+    .error.visible {
+      display: block;
+    }
+
+    .token-box {
+      display: none;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid rgba(214, 168, 79, 0.32);
+      border-radius: 8px;
+      background: rgba(214, 168, 79, 0.08);
+    }
+
+    .token-box.visible {
+      display: block;
+    }
+
+    .token-box strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent-2);
+    }
+
+    .service-list {
+      margin-top: 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .service-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .service-item:first-child {
+      border-top: 0;
+    }
+
+    .service-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .service-item button {
+      height: 34px;
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid rgba(255, 123, 114, 0.42);
+      padding: 0 12px;
+    }
+
+    .service-item button:hover {
+      background: rgba(255, 123, 114, 0.12);
+    }
+
+    code {
+      display: block;
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      overflow-x: auto;
+    }
+
+    @media (max-width: 640px) {
+      main {
+        width: min(100vw - 24px, 980px);
+        padding: 28px 0;
+      }
+
+      header,
+      form {
+        display: block;
+      }
+
+      .badge,
+      button {
+        margin-top: 12px;
+      }
+
+      button {
+        width: 100%;
+      }
+
+      #service-form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .service-item {
+        grid-template-columns: 1fr;
+      }
+
+      .row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>CatsCo Account Admin</h1>
+        <p>本页面只用于 SSH 隧道后的本机管理，不走公网入口。</p>
+      </div>
+      <div class="badge">Local only</div>
+    </header>
+
+    <section>
+      <h2>按 UID 查询账号</h2>
+      <form id="lookup-form">
+        <input id="uid" name="uid" inputmode="numeric" autocomplete="off" placeholder="输入用户 UID，例如 2" />
+        <button id="lookup-button" type="submit">查询</button>
+      </form>
+      <div class="hint">第一版先做只读查询，避免后台误操作；service token 仍从服务端环境变量配置。</div>
+      <div id="error" class="error"></div>
+      <div id="result" class="result" aria-live="polite"></div>
+    </section>
+
+    <section>
+      <h2>Service Token</h2>
+      <form id="service-form">
+        <input id="service-slug" name="slug" autocomplete="off" placeholder="服务标识，例如 cats-relay" />
+        <input id="service-name" name="name" autocomplete="off" placeholder="显示名称，例如 Cats Relay" />
+        <input id="service-scopes" name="scopes" autocomplete="off" placeholder="scope，用逗号分隔，例如 account.introspect" />
+        <button id="service-button" type="submit">生成</button>
+      </form>
+      <div class="hint">token 明文只在创建或轮换时展示一次。重新使用同一个服务标识会轮换旧 token。</div>
+      <div id="service-error" class="error"></div>
+      <div id="service-token" class="token-box"></div>
+      <div id="service-list" class="service-list"></div>
+    </section>
+
+    <section>
+      <h2>访问方式</h2>
+      <p>在本机建立 SSH 隧道后访问下面的本地地址：</p>
+      <code>ssh -L 26061:127.0.0.1:26061 &lt;server-alias&gt;
+http://127.0.0.1:26061/local/account-admin</code>
+    </section>
+  </main>
+
+  <script>
+    const form = document.querySelector('#lookup-form');
+    const uidInput = document.querySelector('#uid');
+    const button = document.querySelector('#lookup-button');
+    const result = document.querySelector('#result');
+    const error = document.querySelector('#error');
+    const serviceForm = document.querySelector('#service-form');
+    const serviceButton = document.querySelector('#service-button');
+    const serviceError = document.querySelector('#service-error');
+    const serviceToken = document.querySelector('#service-token');
+    const serviceList = document.querySelector('#service-list');
+
+    function showError(message) {
+      error.textContent = message;
+      error.classList.add('visible');
+      result.classList.remove('visible');
+      result.innerHTML = '';
+    }
+
+    function escapeHTML(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function formatValue(value) {
+      if (value === null || value === undefined || value === '') return '-';
+      return escapeHTML(value);
+    }
+
+    function row(label, value) {
+      return `<div class="row"><div class="label">${label}</div><div class="value">${formatValue(value)}</div></div>`;
+    }
+
+    function render(payload) {
+      const user = payload.user || {};
+      const accountCenter = payload.account_center || {};
+      result.innerHTML = [
+        row('UID', user.uid),
+        row('用户名', user.username),
+        row('邮箱', user.email),
+        row('显示名', user.display_name),
+        row('头像', user.avatar_url),
+        row('账号类型', user.account_type),
+        row('状态', user.state),
+        row('创建时间', user.created_at),
+        row('Service Token', accountCenter.service_tokens_configured ? '已配置' : '未配置'),
+      ].join('');
+      error.classList.remove('visible');
+      result.classList.add('visible');
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const uid = uidInput.value.trim();
+      if (!uid) {
+        showError('请输入 UID。');
+        return;
+      }
+
+      button.disabled = true;
+      try {
+        const resp = await fetch(`/local/account-admin/users?uid=${encodeURIComponent(uid)}`, {
+          headers: { Accept: 'application/json' },
+        });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showError(payload.error || `查询失败：HTTP ${resp.status}`);
+          return;
+        }
+        render(payload);
+      } catch (err) {
+        showError(err && err.message ? err.message : '查询失败。');
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    function showServiceError(message) {
+      serviceError.textContent = message;
+      serviceError.classList.add('visible');
+    }
+
+    function clearServiceError() {
+      serviceError.textContent = '';
+      serviceError.classList.remove('visible');
+    }
+
+    function renderServiceToken(token) {
+      if (!token) {
+        serviceToken.classList.remove('visible');
+        serviceToken.innerHTML = '';
+        return;
+      }
+      serviceToken.innerHTML = `<strong>请立即保存这个 token，之后不会再次显示：</strong><code>${escapeHTML(token)}</code>`;
+      serviceToken.classList.add('visible');
+    }
+
+    function renderServices(items) {
+      const services = Array.isArray(items) ? items : [];
+      if (!services.length) {
+        serviceList.innerHTML = '<div class="service-item"><div><strong>暂无 service</strong><div class="service-meta">创建后会显示在这里。</div></div></div>';
+        return;
+      }
+      serviceList.innerHTML = services.map((service) => {
+        const active = Number(service.state || 0) === 0;
+        const scopes = Array.isArray(service.scopes) && service.scopes.length ? service.scopes.join(', ') : '-';
+        return `<div class="service-item">
+          <div>
+            <strong>${escapeHTML(service.name || service.slug)}</strong>
+            <div class="service-meta">
+              slug=${escapeHTML(service.slug)} · prefix=${escapeHTML(service.token_prefix || '-')} · scopes=${escapeHTML(scopes)} · ${active ? '启用' : '已撤销'}
+            </div>
+          </div>
+          ${active ? `<button data-revoke="${escapeHTML(service.id)}">撤销</button>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    async function loadServices() {
+      try {
+        const resp = await fetch('/local/account-admin/services', { headers: { Accept: 'application/json' } });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showServiceError(payload.error || `服务列表加载失败：HTTP ${resp.status}`);
+          return;
+        }
+        renderServices(payload.services);
+      } catch (err) {
+        showServiceError(err && err.message ? err.message : '服务列表加载失败。');
+      }
+    }
+
+    serviceForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearServiceError();
+      renderServiceToken('');
+      const slug = document.querySelector('#service-slug').value.trim();
+      const name = document.querySelector('#service-name').value.trim();
+      const scopes = document.querySelector('#service-scopes').value.split(',').map((item) => item.trim()).filter(Boolean);
+      if (!slug) {
+        showServiceError('请输入服务标识。');
+        return;
+      }
+      serviceButton.disabled = true;
+      try {
+        const resp = await fetch('/local/account-admin/services', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ slug, name, scopes }),
+        });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showServiceError(payload.error || `创建失败：HTTP ${resp.status}`);
+          return;
+        }
+        renderServiceToken(payload.token);
+        await loadServices();
+      } catch (err) {
+        showServiceError(err && err.message ? err.message : '创建失败。');
+      } finally {
+        serviceButton.disabled = false;
+      }
+    });
+
+    serviceList.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!target || !target.dataset || !target.dataset.revoke) return;
+      clearServiceError();
+      target.disabled = true;
+      try {
+        const resp = await fetch('/local/account-admin/services/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ id: Number(target.dataset.revoke) }),
+        });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showServiceError(payload.error || `撤销失败：HTTP ${resp.status}`);
+          return;
+        }
+        await loadServices();
+      } catch (err) {
+        showServiceError(err && err.message ? err.message : '撤销失败。');
+      } finally {
+        target.disabled = false;
+      }
+    });
+
+    loadServices();
+  </script>
+</body>
+</html>
