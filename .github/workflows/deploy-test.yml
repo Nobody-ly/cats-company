@@ -73,17 +73,19 @@ jobs:
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Upload test stack files
+        timeout-minutes: 8
         run: |
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${TEST_STACK_ROOT}/compose ${TEST_STACK_ROOT}/env ${TEST_STACK_ROOT}/data/mysql ${TEST_STACK_ROOT}/data/uploads ${TEST_STACK_ROOT}/logs ${TEST_STACK_ROOT}/releases /usr/local/bin"
-          scp deploy/test/bootstrap-server.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
-          scp deploy/test/remote-deploy.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
-          scp deploy/test/remote-status.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
-          scp deploy/test/docker-compose.yml "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
-          scp deploy/test/tinode.test.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
-          scp deploy/init-db.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
-          scp deploy/test/env.test.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
-          scp deploy/test/env.test.postgres.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
-          scp cats-company-images-${{ github.sha }}.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/releases/"
+          SSH_OPTS="-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          ssh ${SSH_OPTS} "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${TEST_STACK_ROOT}/compose ${TEST_STACK_ROOT}/env ${TEST_STACK_ROOT}/data/mysql ${TEST_STACK_ROOT}/data/uploads ${TEST_STACK_ROOT}/logs ${TEST_STACK_ROOT}/releases /usr/local/bin"
+          scp -O ${SSH_OPTS} deploy/test/bootstrap-server.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/test/remote-deploy.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/test/remote-status.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/test/docker-compose.yml "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/test/tinode.test.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/init-db.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/test/env.test.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
+          scp -O ${SSH_OPTS} deploy/test/env.test.postgres.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
+          scp -O ${SSH_OPTS} cats-company-images-${{ github.sha }}.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/releases/"
 
       - name: Deploy isolated test stack
         env:

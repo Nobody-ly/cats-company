@@ -55,16 +55,18 @@ jobs:
             | gzip -1 > cats-company-images-${IMAGE_TAG}.tar.gz
 
       - name: Upload prod stack files
+        timeout-minutes: 8
         run: |
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${PROD_STACK_ROOT}/compose ${PROD_STACK_ROOT}/env ${PROD_STACK_ROOT}/data/uploads ${PROD_STACK_ROOT}/logs ${PROD_STACK_ROOT}/releases /usr/local/bin"
-          scp deploy/prod/bootstrap-server.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
-          scp deploy/prod/remote-deploy.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
-          scp deploy/prod/remote-rollback.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
-          scp deploy/prod/remote-status.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
-          scp deploy/prod/docker-compose.yml "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
-          scp deploy/prod/tinode.prod.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
-          scp deploy/prod/env.prod.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/env/"
-          scp cats-company-images-${IMAGE_TAG}.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/releases/"
+          SSH_OPTS="-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          ssh ${SSH_OPTS} "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${PROD_STACK_ROOT}/compose ${PROD_STACK_ROOT}/env ${PROD_STACK_ROOT}/data/uploads ${PROD_STACK_ROOT}/logs ${PROD_STACK_ROOT}/releases /usr/local/bin"
+          scp -O ${SSH_OPTS} deploy/prod/bootstrap-server.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/prod/remote-deploy.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/prod/remote-rollback.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/prod/remote-status.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/prod/docker-compose.yml "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/prod/tinode.prod.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
+          scp -O ${SSH_OPTS} deploy/prod/env.prod.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/env/"
+          scp -O ${SSH_OPTS} cats-company-images-${IMAGE_TAG}.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/releases/"
 
       - name: Deploy prod stack
         env:
