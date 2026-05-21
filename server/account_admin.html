@@ -377,7 +377,7 @@ http://127.0.0.1:26061/local/account-admin</code>
         row('账号类型', user.account_type),
         row('状态', user.state),
         row('创建时间', user.created_at),
-        row('Service Token', accountCenter.service_tokens_configured ? '已配置' : '未配置'),
+        row('Service Token 管理', accountCenter.service_tokens_configured ? '可用' : '不可用'),
       ].join('');
       error.classList.remove('visible');
       result.classList.add('visible');
