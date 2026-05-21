@@ -90,7 +90,9 @@ http://127.0.0.1:26061/local/account-admin
 - `writing-app`
 - `ops-dashboard`
 
-创建后会显示一次性明文 token。立刻保存到对应服务的 secret 或环境变量里。CatsCompany 数据库只保存 hash 和 prefix，后续无法找回明文，只能重新生成。
+创建后会显示一次性明文 token。立刻保存到对应服务的 secret 或环境变量里。CatsCompany 数据库只保存 hash 和 prefix，后续无法找回明文；如果丢失或怀疑泄露，就在本地后台重新生成并替换到对应服务。
+
+这里即使后台只通过 SSH 隧道访问，也不建议支持重复查看明文 token。原因不是 SSH 不安全，而是账号中心不保存明文本身，后续即使数据库或后台页面被误读，也不会直接泄露可用的 service token。
 
 也可以用环境变量配置固定 service token：
 
