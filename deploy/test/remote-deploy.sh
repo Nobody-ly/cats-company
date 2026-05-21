@@ -81,6 +81,14 @@ updates = {
     "IMAGE_TAG": "$revision",
 }
 
+values = {}
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    values[key] = value
+
 lines = []
 seen = set()
 for raw_line in text.splitlines():
@@ -95,6 +103,21 @@ for raw_line in text.splitlines():
 for key, value in updates.items():
     if value and key not in seen:
         lines.append(f"{key}={value}")
+
+# Backfill legacy test env files that predate OC_DB_DRIVER/OC_DB_DSN. Existing
+# deployed test servers keep MYSQL_USER/MYSQL_PASSWORD only, while the current
+# compose file expects the unified store DSN variables.
+if not values.get("OC_DB_DSN"):
+    mysql_user = values.get("MYSQL_USER")
+    mysql_password = values.get("MYSQL_PASSWORD")
+    if mysql_user and mysql_password:
+        if "COMPOSE_PROFILES" not in values:
+            lines.append("COMPOSE_PROFILES=mysql")
+        if "OC_DB_DRIVER" not in values:
+            lines.append("OC_DB_DRIVER=mysql")
+        lines.append(
+            f"OC_DB_DSN={mysql_user}:{mysql_password}@tcp(mysql:3306)/openchat?parseTime=true&charset=utf8mb4"
+        )
 
 p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
