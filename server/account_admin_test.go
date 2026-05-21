@@ -147,6 +147,42 @@ func (s *accountTestAuthServiceStore) TouchAuthServiceLastUsed(id int64) error {
 	return nil
 }
 
+type accountNilAuthServiceStore struct{}
+
+func (accountNilAuthServiceStore) CreateAuthService(service *types.AuthService) (int64, error) {
+	return 0, nil
+}
+
+func (accountNilAuthServiceStore) ListAuthServices() ([]*types.AuthService, error) {
+	return nil, nil
+}
+
+func (accountNilAuthServiceStore) RevokeAuthService(id int64) error {
+	return nil
+}
+
+func TestAccountAdminListsEmptyServicesAsArray(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, accountNilAuthServiceStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/services", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleServices(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Services []types.AuthService `json:"services"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Services == nil {
+		t.Fatalf("expected empty services array, got nil: %s", rec.Body.String())
+	}
+}
+
 func TestAccountAdminCreatesAndRevokesService(t *testing.T) {
 	store := newAccountTestAuthServiceStore()
 	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, store)

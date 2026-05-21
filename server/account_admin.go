@@ -139,6 +139,9 @@ func (h *AccountAdminHandler) handleListServices(w http.ResponseWriter, _ *http.
 		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list services"})
 		return
 	}
+	if services == nil {
+		services = []*types.AuthService{}
+	}
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"services": services})
 }
 
