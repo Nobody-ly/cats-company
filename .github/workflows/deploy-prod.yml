@@ -38,9 +38,25 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Prepare deploy image bundle
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/cats-company-server:${IMAGE_TAG}
+          docker pull ghcr.io/${{ github.repository_owner }}/cats-company-web:${IMAGE_TAG}
+          docker save \
+            ghcr.io/${{ github.repository_owner }}/cats-company-server:${IMAGE_TAG} \
+            ghcr.io/${{ github.repository_owner }}/cats-company-web:${IMAGE_TAG} \
+            | gzip -1 > cats-company-images-${IMAGE_TAG}.tar.gz
+
       - name: Upload prod stack files
         run: |
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${PROD_STACK_ROOT}/compose ${PROD_STACK_ROOT}/env ${PROD_STACK_ROOT}/data/uploads ${PROD_STACK_ROOT}/logs /usr/local/bin"
+          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${PROD_STACK_ROOT}/compose ${PROD_STACK_ROOT}/env ${PROD_STACK_ROOT}/data/uploads ${PROD_STACK_ROOT}/logs ${PROD_STACK_ROOT}/releases /usr/local/bin"
           scp deploy/prod/bootstrap-server.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
           scp deploy/prod/remote-deploy.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
           scp deploy/prod/remote-rollback.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
@@ -48,6 +64,7 @@ jobs:
           scp deploy/prod/docker-compose.yml "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
           scp deploy/prod/tinode.prod.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/compose/"
           scp deploy/prod/env.prod.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/env/"
+          scp cats-company-images-${IMAGE_TAG}.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${PROD_STACK_ROOT}/releases/"
 
       - name: Deploy prod stack
         env:
@@ -61,6 +78,11 @@ jobs:
           revision="${IMAGE_TAG}"
           chmod +x "$root/compose/bootstrap-server.sh" "$root/compose/remote-deploy.sh" "$root/compose/remote-rollback.sh" "$root/compose/remote-status.sh"
           "$root/compose/bootstrap-server.sh" "$root"
+          image_bundle="$root/releases/cats-company-images-${revision}.tar.gz"
+          if [ -f "$image_bundle" ]; then
+            gzip -dc "$image_bundle" | docker load
+            export SKIP_IMAGE_PULL=1
+          fi
           "$root/compose/remote-deploy.sh" "$root" "$revision"
           "$root/compose/remote-status.sh" "$root"
           EOF

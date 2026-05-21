@@ -3,13 +3,20 @@ set -euo pipefail
 
 root="${1:-/srv/catscompany-test}"
 revision="${2:-}"
-compose_bin="/usr/local/bin/docker-compose"
 compose_dir="$root/compose"
 env_dir="$root/env"
 env_file="$env_dir/test.env"
 compose_file="$compose_dir/docker-compose.yml"
 health_api="${TEST_HEALTH_API:-http://127.0.0.1:16061/health}"
 health_web="${TEST_HEALTH_WEB:-http://127.0.0.1:18080/health}"
+
+compose() {
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
 
 wait_for_health() {
   local name="$1"
@@ -44,15 +51,7 @@ mkdir -p \
   "$env_dir" \
   "$root/data/mysql" \
   "$root/data/uploads" \
-  "$root/logs" \
-  "/usr/local/bin"
-
-if [ ! -x "$compose_bin" ]; then
-  curl -L --fail \
-    https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-    -o "$compose_bin"
-  chmod +x "$compose_bin"
-fi
+  "$root/logs"
 
 if [ ! -f "$compose_file" ]; then
   echo "missing compose file: $compose_file" >&2
@@ -77,10 +76,18 @@ p = Path(r"$env_file")
 text = p.read_text(encoding="utf-8", errors="replace").replace("\ufeff", "")
 
 updates = {
-    "GHCR_REGISTRY": "ghcr.io",
+    "GHCR_REGISTRY": "${GHCR_REGISTRY:-ghcr.io}",
     "GHCR_OWNER": "${GHCR_OWNER:-}",
     "IMAGE_TAG": "$revision",
 }
+
+values = {}
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    values[key] = value
 
 lines = []
 seen = set()
@@ -97,6 +104,21 @@ for key, value in updates.items():
     if value and key not in seen:
         lines.append(f"{key}={value}")
 
+# Backfill legacy test env files that predate OC_DB_DRIVER/OC_DB_DSN. Existing
+# deployed test servers keep MYSQL_USER/MYSQL_PASSWORD only, while the current
+# compose file expects the unified store DSN variables.
+if not values.get("OC_DB_DSN"):
+    mysql_user = values.get("MYSQL_USER")
+    mysql_password = values.get("MYSQL_PASSWORD")
+    if mysql_user and mysql_password:
+        if "COMPOSE_PROFILES" not in values:
+            lines.append("COMPOSE_PROFILES=mysql")
+        if "OC_DB_DRIVER" not in values:
+            lines.append("OC_DB_DRIVER=mysql")
+        lines.append(
+            f"OC_DB_DSN={mysql_user}:{mysql_password}@tcp(mysql:3306)/openchat?parseTime=true&charset=utf8mb4"
+        )
+
 p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 
@@ -105,9 +127,11 @@ if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
 fi
 
 cd "$compose_dir"
-"$compose_bin" -f "$compose_file" --env-file "$env_file" pull server web
-"$compose_bin" -f "$compose_file" --env-file "$env_file" up -d
-"$compose_bin" -f "$compose_file" --env-file "$env_file" ps
+if [ "${SKIP_IMAGE_PULL:-0}" != "1" ]; then
+  compose -f "$compose_file" --env-file "$env_file" pull server web
+fi
+compose -f "$compose_file" --env-file "$env_file" up -d
+compose -f "$compose_file" --env-file "$env_file" ps
 
 printf '%s\n' "$revision" > "$root/CURRENT_REVISION"
 

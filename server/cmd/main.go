@@ -19,6 +19,7 @@ type Config struct {
 }
 
 type DBConfig struct {
+	Driver          string `json:"driver"`
 	DSN             string `json:"dsn"`
 	MaxOpenConns    int    `json:"max_open_conns"`
 	MaxIdleConns    int    `json:"max_idle_conns"`
@@ -54,7 +55,8 @@ func defaultConfig() *Config {
 		Listen:   ":6061",
 		GRPCPort: ":6062",
 		Database: DBConfig{
-			DSN: "openchat:openchat@tcp(localhost:3306)/openchat?parseTime=true&charset=utf8mb4",
+			Driver: "mysql",
+			DSN:    "openchat:openchat@tcp(localhost:3306)/openchat?parseTime=true&charset=utf8mb4",
 		},
 		WebSocket: WSConfig{Path: "/v0/channels"},
 		Static:    StaticConfig{Dir: "../webapp/build"},
@@ -64,6 +66,9 @@ func defaultConfig() *Config {
 }
 
 func applyEnvOverrides(cfg *Config) {
+	if driver := os.Getenv("OC_DB_DRIVER"); driver != "" {
+		cfg.Database.Driver = driver
+	}
 	if dsn := os.Getenv("OC_DB_DSN"); dsn != "" {
 		cfg.Database.DSN = dsn
 	}

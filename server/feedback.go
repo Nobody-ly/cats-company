@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
@@ -25,11 +25,11 @@ const (
 
 // FeedbackHandler handles user feedback reports.
 type FeedbackHandler struct {
-	db *mysql.Adapter
+	db store.Store
 }
 
 // NewFeedbackHandler creates a new FeedbackHandler.
-func NewFeedbackHandler(db *mysql.Adapter) *FeedbackHandler {
+func NewFeedbackHandler(db store.Store) *FeedbackHandler {
 	return &FeedbackHandler{db: db}
 }
 

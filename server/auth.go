@@ -14,7 +14,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
@@ -37,9 +37,9 @@ func SetJWTSecret(secret string) {
 
 // JWTClaims defines the claims stored in the token.
 type JWTClaims struct {
-	UID      int64  `json:"userId"`   // 改为 userId 与 Token 项目统一
+	UID      int64  `json:"userId"` // 改为 userId 与 Token 项目统一
 	Username string `json:"username"`
-	Email    string `json:"email"`    // 添加 email
+	Email    string `json:"email"` // 添加 email
 	jwt.RegisteredClaims
 }
 
@@ -140,7 +140,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // AuthMiddlewareWithDB returns an auth middleware that accepts both JWT and API Key.
 // JWT is tried first; on failure, it falls back to API Key authentication.
-func AuthMiddlewareWithDB(db *mysql.Adapter) func(http.HandlerFunc) http.HandlerFunc {
+func AuthMiddlewareWithDB(db store.Store) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			// Try JWT first
@@ -198,7 +198,7 @@ func ownerClaimsFromRequest(r *http.Request, lookupUser func(int64) (*types.User
 
 // OwnerMiddlewareWithDB requires a valid human-user JWT.
 // It is intended for owner-management endpoints, not bot runtime endpoints.
-func OwnerMiddlewareWithDB(db *mysql.Adapter) func(http.HandlerFunc) http.HandlerFunc {
+func OwnerMiddlewareWithDB(db store.Store) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			claims, status, msg := ownerClaimsFromRequest(r, db.GetUser)

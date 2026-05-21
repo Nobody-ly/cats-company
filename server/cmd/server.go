@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/openchat/openchat/server"
 	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/db/postgres"
+	"github.com/openchat/openchat/server/store"
 )
 
 func envString(name string) string {
@@ -76,6 +79,84 @@ func buildMySQLPoolConfig(cfg DBConfig) mysql.PoolConfig {
 	return pool
 }
 
+func buildPostgresPoolConfig(cfg DBConfig) postgres.PoolConfig {
+	pool := postgres.DefaultPoolConfig()
+	if cfg.MaxOpenConns > 0 {
+		pool.MaxOpenConns = cfg.MaxOpenConns
+	}
+	if cfg.MaxIdleConns > 0 {
+		pool.MaxIdleConns = cfg.MaxIdleConns
+	}
+	if pool.MaxOpenConns > 0 && pool.MaxIdleConns > pool.MaxOpenConns {
+		pool.MaxIdleConns = pool.MaxOpenConns
+	}
+	if cfg.ConnMaxLifetime != "" {
+		if duration, err := time.ParseDuration(cfg.ConnMaxLifetime); err == nil {
+			pool.ConnMaxLifetime = duration
+		} else {
+			log.Printf("ignoring invalid database.conn_max_lifetime=%q", cfg.ConnMaxLifetime)
+		}
+	}
+	if cfg.ConnMaxIdleTime != "" {
+		if duration, err := time.ParseDuration(cfg.ConnMaxIdleTime); err == nil {
+			pool.ConnMaxIdleTime = duration
+		} else {
+			log.Printf("ignoring invalid database.conn_max_idle_time=%q", cfg.ConnMaxIdleTime)
+		}
+	}
+	return pool
+}
+
+func openStore(cfg DBConfig) (store.Store, string, error) {
+	driver := strings.ToLower(strings.TrimSpace(cfg.Driver))
+	if driver == "" {
+		driver = "mysql"
+	}
+	dsn := strings.TrimSpace(cfg.DSN)
+	if dsn == "" {
+		return nil, driver, fmt.Errorf("database DSN is required for driver %s", driver)
+	}
+	switch driver {
+	case "mysql":
+		db := &mysql.Adapter{}
+		pool := buildMySQLPoolConfig(cfg)
+		if err := db.OpenWithConfig(dsn, pool); err != nil {
+			return nil, driver, err
+		}
+		log.Printf("database pool configured: driver=%s max_open=%d max_idle=%d conn_max_lifetime=%s conn_max_idle_time=%s",
+			driver,
+			pool.MaxOpenConns,
+			pool.MaxIdleConns,
+			pool.ConnMaxLifetime,
+			pool.ConnMaxIdleTime,
+		)
+		return db, driver, nil
+	case "postgres", "postgresql", "pg":
+		parsed, err := url.Parse(dsn)
+		if err != nil || parsed.Scheme == "" {
+			return nil, driver, fmt.Errorf("PostgreSQL DSN must be a URL DSN")
+		}
+		if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+			return nil, driver, fmt.Errorf("PostgreSQL DSN scheme must be postgres or postgresql")
+		}
+		db := &postgres.Adapter{}
+		pool := buildPostgresPoolConfig(cfg)
+		if err := db.OpenWithConfig(dsn, pool); err != nil {
+			return nil, driver, err
+		}
+		log.Printf("database pool configured: driver=%s max_open=%d max_idle=%d conn_max_lifetime=%s conn_max_idle_time=%s",
+			driver,
+			pool.MaxOpenConns,
+			pool.MaxIdleConns,
+			pool.ConnMaxLifetime,
+			pool.ConnMaxIdleTime,
+		)
+		return db, driver, nil
+	default:
+		return nil, driver, fmt.Errorf("unsupported database driver %q", cfg.Driver)
+	}
+}
+
 func chainHTTP(handler http.HandlerFunc, middlewares ...func(http.HandlerFunc) http.HandlerFunc) http.HandlerFunc {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)
@@ -100,22 +181,19 @@ func main() {
 	}
 
 	// Initialize database
-	db := &mysql.Adapter{}
-	dbPool := buildMySQLPoolConfig(cfg.Database)
-	if err := db.OpenWithConfig(cfg.Database.DSN, dbPool); err != nil {
+	db, dbDriver, err := openStore(cfg.Database)
+	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}
-	log.Printf("database pool configured: max_open=%d max_idle=%d conn_max_lifetime=%s conn_max_idle_time=%s",
-		dbPool.MaxOpenConns,
-		dbPool.MaxIdleConns,
-		dbPool.ConnMaxLifetime,
-		dbPool.ConnMaxIdleTime,
-	)
 	defer db.Close()
 
 	if err := db.CreateSchema(); err != nil {
+		if isProductionEnv() {
+			log.Fatalf("schema initialization failed: %v", err)
+		}
 		log.Printf("schema creation (may already exist): %v", err)
 	}
+	log.Printf("database initialized: driver=%s", dbDriver)
 
 	// Initialize components
 	rateLimiter := server.NewRateLimiter(server.DefaultRateLimits())

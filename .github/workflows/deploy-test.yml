@@ -53,6 +53,15 @@ jobs:
             REACT_APP_API_BASE=
           tags: ghcr.io/${{ github.repository_owner }}/cats-company-web:${{ github.sha }}
 
+      - name: Prepare deploy image bundle
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/cats-company-server:${{ github.sha }}
+          docker pull ghcr.io/${{ github.repository_owner }}/cats-company-web:${{ github.sha }}
+          docker save \
+            ghcr.io/${{ github.repository_owner }}/cats-company-server:${{ github.sha }} \
+            ghcr.io/${{ github.repository_owner }}/cats-company-web:${{ github.sha }} \
+            | gzip -1 > cats-company-images-${{ github.sha }}.tar.gz
+
       - name: Prepare SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -65,7 +74,7 @@ jobs:
 
       - name: Upload test stack files
         run: |
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${TEST_STACK_ROOT}/compose ${TEST_STACK_ROOT}/env ${TEST_STACK_ROOT}/data/mysql ${TEST_STACK_ROOT}/data/uploads ${TEST_STACK_ROOT}/logs /usr/local/bin"
+          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p ${TEST_STACK_ROOT}/compose ${TEST_STACK_ROOT}/env ${TEST_STACK_ROOT}/data/mysql ${TEST_STACK_ROOT}/data/uploads ${TEST_STACK_ROOT}/logs ${TEST_STACK_ROOT}/releases /usr/local/bin"
           scp deploy/test/bootstrap-server.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
           scp deploy/test/remote-deploy.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
           scp deploy/test/remote-status.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
@@ -73,6 +82,8 @@ jobs:
           scp deploy/test/tinode.test.conf "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
           scp deploy/init-db.sh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/compose/"
           scp deploy/test/env.test.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
+          scp deploy/test/env.test.postgres.example "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/env/"
+          scp cats-company-images-${{ github.sha }}.tar.gz "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${TEST_STACK_ROOT}/releases/"
 
       - name: Deploy isolated test stack
         env:
@@ -86,6 +97,11 @@ jobs:
           revision="${GITHUB_SHA}"
           chmod +x "$root/compose/bootstrap-server.sh" "$root/compose/remote-deploy.sh" "$root/compose/remote-status.sh"
           "$root/compose/bootstrap-server.sh" "$root"
+          image_bundle="$root/releases/cats-company-images-${revision}.tar.gz"
+          if [ -f "$image_bundle" ]; then
+            gzip -dc "$image_bundle" | docker load
+            export SKIP_IMAGE_PULL=1
+          fi
           "$root/compose/remote-deploy.sh" "$root" "$revision"
           "$root/compose/remote-status.sh" "$root"
           EOF

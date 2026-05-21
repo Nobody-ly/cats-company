@@ -14,6 +14,20 @@ concurrency:
 jobs:
   test-and-validate-docker:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: cats_test
+          POSTGRES_USER: catsco
+          POSTGRES_PASSWORD: catsco_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U catsco -d cats_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -34,6 +48,11 @@ jobs:
       - name: Test backend
         run: go test ./server/...
 
+      - name: Test PostgreSQL store contract
+        env:
+          CATS_PG_TEST_DSN: postgres://catsco:catsco_test@127.0.0.1:5432/cats_test?sslmode=disable
+        run: go test ./server/db/postgres -run TestPostgresStoreContract -count=1 -v
+
       - name: Install webapp dependencies
         working-directory: webapp
         run: npm ci
@@ -44,6 +63,9 @@ jobs:
 
       - name: Validate test compose
         run: docker compose -f deploy/test/docker-compose.yml --env-file deploy/test/env.test.example config
+
+      - name: Validate PostgreSQL test compose
+        run: docker compose -f deploy/test/docker-compose.yml --env-file deploy/test/env.test.postgres.example config
 
       - name: Validate prod compose
         run: docker compose -f deploy/prod/docker-compose.yml --env-file deploy/prod/env.prod.example config

@@ -8,18 +8,18 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
 // MessageHandler handles message-related API requests.
 type MessageHandler struct {
-	db  *mysql.Adapter
+	db  store.Store
 	hub *Hub
 }
 
 // NewMessageHandler creates a new MessageHandler.
-func NewMessageHandler(db *mysql.Adapter, hub *Hub) *MessageHandler {
+func NewMessageHandler(db store.Store, hub *Hub) *MessageHandler {
 	return &MessageHandler{db: db, hub: hub}
 }
 
@@ -120,7 +120,7 @@ func (h *MessageHandler) fanoutMessage(uid int64, topicID string, replyTo int, p
 	h.hub.fanoutNormalizedMessage(uid, topicID, replyTo, payload, msgID, nil)
 }
 
-func saveNormalizedMessage(db *mysql.Adapter, topicID string, uid int64, replyTo int, payload *normalizedMessagePayload) (int64, error) {
+func saveNormalizedMessage(db store.MessageStore, topicID string, uid int64, replyTo int, payload *normalizedMessagePayload) (int64, error) {
 	if len(payload.ContentBlocks) > 0 {
 		mode := payload.Mode
 		if mode == "" {

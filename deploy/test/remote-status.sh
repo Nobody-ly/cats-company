@@ -2,17 +2,24 @@
 set -euo pipefail
 
 root="${1:-/srv/catscompany-test}"
-compose_bin="/usr/local/bin/docker-compose"
 compose_file="$root/compose/docker-compose.yml"
 env_file="$root/env/test.env"
+
+compose() {
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
 
 echo "stack root: $root"
 if [ -f "$root/CURRENT_REVISION" ]; then
   echo "current revision: $(cat "$root/CURRENT_REVISION")"
 fi
 
-if [ -x "$compose_bin" ] && [ -f "$compose_file" ] && [ -f "$env_file" ]; then
-  "$compose_bin" -f "$compose_file" --env-file "$env_file" ps
+if [ -f "$compose_file" ] && [ -f "$env_file" ]; then
+  compose -f "$compose_file" --env-file "$env_file" ps
 else
   echo "compose/env not ready"
 fi

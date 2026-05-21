@@ -3,13 +3,20 @@ set -euo pipefail
 
 root="${1:-/srv/catscompany-prod}"
 revision="${2:-}"
-compose_bin="/usr/local/bin/docker-compose"
 compose_dir="$root/compose"
 env_dir="$root/env"
 env_file="$env_dir/prod.env"
 compose_file="$compose_dir/docker-compose.yml"
 health_api="${PROD_HEALTH_API:-http://127.0.0.1:26061/health}"
 health_web="${PROD_HEALTH_WEB:-http://127.0.0.1:28080/health}"
+
+compose() {
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+  else
+    docker compose "$@"
+  fi
+}
 
 wait_for_health() {
   local name="$1"
@@ -43,15 +50,7 @@ mkdir -p \
   "$compose_dir" \
   "$env_dir" \
   "$root/data/uploads" \
-  "$root/logs" \
-  "/usr/local/bin"
-
-if [ ! -x "$compose_bin" ]; then
-  curl -L --fail \
-    https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-    -o "$compose_bin"
-  chmod +x "$compose_bin"
-fi
+  "$root/logs"
 
 if [ ! -f "$compose_file" ]; then
   echo "missing compose file: $compose_file" >&2
@@ -76,7 +75,7 @@ p = Path(r"$env_file")
 text = p.read_text(encoding="utf-8", errors="replace").replace("\ufeff", "")
 
 updates = {
-    "GHCR_REGISTRY": "ghcr.io",
+    "GHCR_REGISTRY": "${GHCR_REGISTRY:-ghcr.io}",
     "GHCR_OWNER": "${GHCR_OWNER:-}",
     "IMAGE_TAG": "$revision",
 }
@@ -100,10 +99,11 @@ p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 
 allow_shared_db_user="$(sed -n 's/^ALLOW_SHARED_DB_USER=//p' "$env_file" | tail -n 1)"
+db_driver="$(sed -n 's/^OC_DB_DRIVER=//p' "$env_file" | tail -n 1)"
 db_dsn="$(sed -n 's/^OC_DB_DSN=//p' "$env_file" | tail -n 1)"
 db_user="${db_dsn%%:*}"
 
-if [ "${allow_shared_db_user:-0}" != "1" ] && [ "$db_user" = "openchat" ]; then
+if [ "${db_driver:-mysql}" = "mysql" ] && [ "${allow_shared_db_user:-0}" != "1" ] && [ "$db_user" = "openchat" ]; then
   cat >&2 <<EOF
 refusing deploy: OC_DB_DSN is using the legacy shared DB user "openchat"
 while ALLOW_SHARED_DB_USER is not enabled.
@@ -126,9 +126,11 @@ if [ -f "$root/CURRENT_REVISION" ]; then
 fi
 
 cd "$compose_dir"
-"$compose_bin" -f "$compose_file" --env-file "$env_file" pull server web
-"$compose_bin" -f "$compose_file" --env-file "$env_file" up -d
-"$compose_bin" -f "$compose_file" --env-file "$env_file" ps
+if [ "${SKIP_IMAGE_PULL:-0}" != "1" ]; then
+  compose -f "$compose_file" --env-file "$env_file" pull server web
+fi
+compose -f "$compose_file" --env-file "$env_file" up -d
+compose -f "$compose_file" --env-file "$env_file" ps
 
 printf '%s\n' "$revision" > "$root/CURRENT_REVISION"
 

@@ -8,16 +8,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 )
 
 // FriendHandler handles friend-related API requests.
 type FriendHandler struct {
-	db *mysql.Adapter
+	db store.Store
 }
 
 // NewFriendHandler creates a new FriendHandler.
-func NewFriendHandler(db *mysql.Adapter) *FriendHandler {
+func NewFriendHandler(db store.Store) *FriendHandler {
 	return &FriendHandler{db: db}
 }
 

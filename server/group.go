@@ -7,17 +7,17 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 )
 
 // GroupHandler handles group-related API requests.
 type GroupHandler struct {
-	db  *mysql.Adapter
+	db  store.Store
 	hub *Hub
 }
 
 // NewGroupHandler creates a new GroupHandler.
-func NewGroupHandler(db *mysql.Adapter, hub *Hub) *GroupHandler {
+func NewGroupHandler(db store.Store, hub *Hub) *GroupHandler {
 	return &GroupHandler{db: db, hub: hub}
 }
 

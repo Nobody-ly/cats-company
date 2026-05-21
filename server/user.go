@@ -9,17 +9,17 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/openchat/openchat/server/db/mysql"
+	"github.com/openchat/openchat/server/store"
 	"github.com/openchat/openchat/server/store/types"
 )
 
 // UserHandler handles user-related API requests.
 type UserHandler struct {
-	db *mysql.Adapter
+	db store.Store
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(db *mysql.Adapter) *UserHandler {
+func NewUserHandler(db store.Store) *UserHandler {
 	return &UserHandler{db: db}
 }
 
@@ -432,7 +432,7 @@ func (h *UserHandler) HandleUpdateMe(w http.ResponseWriter, r *http.Request) {
 }
 
 // autoAddAssistantFriend adds the default AI assistant as a friend for new users.
-func autoAddAssistantFriend(db *mysql.Adapter, uid int64) {
+func autoAddAssistantFriend(db store.Store, uid int64) {
 	assistant, _ := db.GetUserByUsername("ai_assistant")
 	if assistant != nil {
 		db.CreateFriendRequest(assistant.ID, uid, "你好！我是 AI 助手，有什么可以帮你的？")
