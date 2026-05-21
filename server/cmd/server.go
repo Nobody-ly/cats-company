@@ -211,6 +211,11 @@ func main() {
 	}
 
 	userHandler := server.NewUserHandler(db)
+	accountServiceVerifier, err := server.NewEnvAccountServiceVerifier(os.Getenv("OC_ACCOUNT_SERVICE_TOKENS"))
+	if err != nil {
+		log.Fatalf("invalid OC_ACCOUNT_SERVICE_TOKENS: %v", err)
+	}
+	accountCenterHandler := server.NewAccountCenterHandler(db, accountServiceVerifier)
 	friendHandler := server.NewFriendHandler(db)
 	conversationHandler := server.NewConversationHandler(db, hub)
 	botHandler := server.NewBotHandler(db, deployer)
@@ -298,6 +303,10 @@ func main() {
 	mux.HandleFunc("/api/auth/reset-password", chainHTTP(userHandler.HandleResetPassword, authResetPasswordIPLimit, authResetPasswordEmailLimit))
 	mux.HandleFunc("/api/auth/register", chainHTTP(userHandler.HandleRegister, authRegisterIPLimit, authRegisterEmailLimit, authRegisterUsernameLimit))
 	mux.HandleFunc("/api/auth/login", chainHTTP(userHandler.HandleLogin, authLoginIPLimit, authLoginAccountLimit))
+
+	// Account center (service-to-service auth)
+	mux.HandleFunc("/api/account/introspect", accountCenterHandler.HandleIntrospect)
+	mux.HandleFunc("/api/account/users/", accountCenterHandler.HandleGetUser)
 
 	// Friends (require auth — JWT or API Key for bot access)
 	authWithDB := server.AuthMiddlewareWithDB(db)

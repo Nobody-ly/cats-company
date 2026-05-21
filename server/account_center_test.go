@@ -1,0 +1,169 @@
+package server
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/openchat/openchat/server/store/types"
+)
+
+type accountTestUserLookup struct {
+	users map[int64]*types.User
+	err   error
+}
+
+func (s accountTestUserLookup) GetUser(id int64) (*types.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.users[id], nil
+}
+
+func TestEnvAccountServiceVerifierSupportsPlainAndHashTokens(t *testing.T) {
+	sum := sha256.Sum256([]byte("hashed-secret"))
+	verifier, err := NewEnvAccountServiceVerifier("relay=plain-secret;worker=sha256:" + hex.EncodeToString(sum[:]))
+	if err != nil {
+		t.Fatalf("NewEnvAccountServiceVerifier: %v", err)
+	}
+
+	if service, ok := verifier.Verify("plain-secret"); !ok || service.Slug != "relay" {
+		t.Fatalf("plain token not verified: service=%+v ok=%v", service, ok)
+	}
+	if service, ok := verifier.Verify("hashed-secret"); !ok || service.Slug != "worker" {
+		t.Fatalf("hashed token not verified: service=%+v ok=%v", service, ok)
+	}
+	if _, ok := verifier.Verify("wrong-secret"); ok {
+		t.Fatal("unexpected verification success for wrong token")
+	}
+}
+
+func TestAccountCenterIntrospectActiveToken(t *testing.T) {
+	oldSecret := append([]byte(nil), jwtSecret...)
+	defer func() { jwtSecret = oldSecret }()
+	SetJWTSecret("account-center-test-secret")
+	token, err := GenerateToken(42, "alice", "alice@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	verifier, err := NewEnvAccountServiceVerifier("relay=service-secret")
+	if err != nil {
+		t.Fatalf("NewEnvAccountServiceVerifier: %v", err)
+	}
+	handler := NewAccountCenterHandler(accountTestUserLookup{users: map[int64]*types.User{
+		42: {
+			ID:          42,
+			Username:    "alice",
+			Email:       "alice@example.com",
+			DisplayName: "Alice",
+			AccountType: types.AccountHuman,
+			State:       0,
+			CreatedAt:   time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
+		},
+	}}, verifier)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/account/introspect", strings.NewReader(`{"token":"`+token+`"}`))
+	req.Header.Set("Authorization", "Service service-secret")
+	rec := httptest.NewRecorder()
+
+	handler.HandleIntrospect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["active"] != true {
+		t.Fatalf("expected active token, got %v", body)
+	}
+	user, ok := body["user"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing user payload: %v", body)
+	}
+	if user["uid"].(float64) != 42 || user["username"] != "alice" {
+		t.Fatalf("unexpected user payload: %v", user)
+	}
+}
+
+func TestAccountCenterIntrospectInvalidUserToken(t *testing.T) {
+	verifier, err := NewEnvAccountServiceVerifier("relay=service-secret")
+	if err != nil {
+		t.Fatalf("NewEnvAccountServiceVerifier: %v", err)
+	}
+	handler := NewAccountCenterHandler(accountTestUserLookup{users: map[int64]*types.User{}}, verifier)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/account/introspect", strings.NewReader(`{"token":"not-a-jwt"}`))
+	req.Header.Set("Authorization", "Service service-secret")
+	rec := httptest.NewRecorder()
+
+	handler.HandleIntrospect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["active"] != false || body["error"] != "invalid_or_expired_token" {
+		t.Fatalf("unexpected invalid token response: %v", body)
+	}
+}
+
+func TestAccountCenterRejectsMissingServiceToken(t *testing.T) {
+	verifier, err := NewEnvAccountServiceVerifier("relay=service-secret")
+	if err != nil {
+		t.Fatalf("NewEnvAccountServiceVerifier: %v", err)
+	}
+	handler := NewAccountCenterHandler(accountTestUserLookup{users: map[int64]*types.User{}}, verifier)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/account/introspect", strings.NewReader(`{"token":"x"}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleIntrospect(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccountCenterGetUser(t *testing.T) {
+	verifier, err := NewEnvAccountServiceVerifier("relay=service-secret")
+	if err != nil {
+		t.Fatalf("NewEnvAccountServiceVerifier: %v", err)
+	}
+	handler := NewAccountCenterHandler(accountTestUserLookup{users: map[int64]*types.User{
+		7: {
+			ID:          7,
+			Username:    "bob",
+			DisplayName: "Bob",
+			AccountType: types.AccountHuman,
+			State:       0,
+		},
+	}}, verifier)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/account/users/7", nil)
+	req.Header.Set("Authorization", "Service service-secret")
+	rec := httptest.NewRecorder()
+
+	handler.HandleGetUser(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["uid"].(float64) != 7 || body["username"] != "bob" {
+		t.Fatalf("unexpected user response: %v", body)
+	}
+}
