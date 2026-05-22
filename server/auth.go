@@ -192,6 +192,9 @@ func ownerClaimsFromRequest(r *http.Request, lookupUser func(int64) (*types.User
 	if user.AccountType != types.AccountHuman {
 		return nil, http.StatusForbidden, "owner access requires a human user token"
 	}
+	if user.State != 0 {
+		return nil, http.StatusForbidden, "user account is disabled"
+	}
 
 	return claims, 0, ""
 }

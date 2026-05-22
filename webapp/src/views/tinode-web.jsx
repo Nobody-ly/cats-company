@@ -207,6 +207,28 @@ export default function TinodeWeb() {
     };
   }, [user?.uid, persistUser]);
 
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('relay_login') !== '1') return;
+
+    let cancelled = false;
+    api.createRelaySession()
+      .then((session) => {
+        if (!cancelled && session?.url) {
+          window.location.href = session.url;
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to create relay login session:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid]);
+
   const handleLogin = async (account, password) => {
     const res = await api.login({ account, password });
     setToken(res.token);

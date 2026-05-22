@@ -106,10 +106,15 @@ func TestRelayConfigRouteRequiresHumanJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken bot: %v", err)
 	}
+	disabledToken, err := GenerateToken(3, "disabled", "disabled@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken disabled: %v", err)
+	}
 
 	store := relayConfigOwnerStore{users: map[int64]*types.User{
 		1: {ID: 1, Username: "alice", AccountType: types.AccountHuman, State: 0},
 		2: {ID: 2, Username: "bot", AccountType: types.AccountBot, State: 0},
+		3: {ID: 3, Username: "disabled", AccountType: types.AccountHuman, State: 1},
 	}}
 	handler := OwnerMiddlewareWithDB(store)(NewRelayConfigHandler().HandleConfig)
 
@@ -122,6 +127,7 @@ func TestRelayConfigRouteRequiresHumanJWT(t *testing.T) {
 		{name: "missing auth", authorization: "", wantStatus: http.StatusUnauthorized},
 		{name: "bot api key", authorization: "ApiKey cc_2_fake", wantStatus: http.StatusUnauthorized},
 		{name: "bot jwt", authorization: "Bearer " + botToken, wantStatus: http.StatusForbidden},
+		{name: "disabled human jwt", authorization: "Bearer " + disabledToken, wantStatus: http.StatusForbidden},
 	}
 
 	for _, tc := range cases {
