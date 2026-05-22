@@ -3,15 +3,14 @@
 These host-level nginx configs terminate TLS on the Tencent CVM and proxy to
 the Docker stacks bound to `127.0.0.1`.
 
-The current certificate staged on the Tencent CVM covers:
+The Tencent CVM uses Let's Encrypt certificates managed by certbot:
 
 - `api.catsco.cc`
 - `app.catsco.cc`
 
-It does not cover `catsco.cc` or `www.catsco.cc`. Until a wildcard/root-domain
-certificate is installed, root-domain HTTPS should not be advertised. HTTP
-requests for `catsco.cc` and `www.catsco.cc` can redirect to
-`https://app.catsco.cc`.
+They are stored under `/etc/letsencrypt/live/...` and renew automatically via
+the certbot timer. Root-domain HTTPS is not configured here; HTTP requests for
+`catsco.cc` and `www.catsco.cc` can redirect to `https://app.catsco.cc`.
 
 Install without enabling traffic:
 
