@@ -4,7 +4,7 @@ import t from '../i18n';
 import Avatar from './avatar';
 import PasswordResetForm from './password-reset-form';
 
-export default function ProfileEditor({ user, onClose, onSaved }) {
+export default function ProfileEditor({ user, onClose, onSaved, onOpenRelay }) {
   const fileInputRef = useRef(null);
   const [displayName, setDisplayName] = useState(user?.display_name || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || '');
@@ -97,6 +97,24 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
             </button>
           )}
         </div>
+        {onOpenRelay && (
+          <div className="oc-settings-section">
+            <div className="oc-settings-section-title">开发者工具</div>
+            <button
+              type="button"
+              className="oc-settings-list-item oc-settings-list-button"
+              onClick={() => {
+                onClose();
+                onOpenRelay();
+              }}
+            >
+              <div className="oc-settings-list-text">
+                <div>CatsCo 中转站</div>
+                <div className="oc-settings-secondary">查看 OpenAI / Anthropic 兼容接入地址。</div>
+              </div>
+            </button>
+          </div>
+        )}
         {error && <div className="oc-form-error">{error}</div>}
         <div className="oc-settings-actions">
           <button className="oc-btn oc-btn-default" onClick={onClose}>{t('cancel')}</button>

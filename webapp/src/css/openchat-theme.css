@@ -1649,6 +1649,168 @@ body {
   white-space: nowrap;
 }
 
+.relay-access-modal {
+  width: 680px;
+  max-width: 92vw;
+}
+
+.relay-access-header {
+  align-items: flex-start;
+}
+
+.relay-access-header p {
+  margin: 6px 0 0;
+  color: var(--v3-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.relay-access-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 22px;
+}
+
+.relay-access-summary,
+.relay-access-card,
+.relay-access-token-note,
+.relay-access-snippet {
+  border: 1px solid var(--v3-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.relay-access-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+}
+
+.relay-access-summary-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  color: var(--v3-accent);
+  background: rgba(52, 199, 89, 0.12);
+}
+
+.relay-access-list {
+  display: grid;
+  gap: 10px;
+}
+
+.relay-access-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+}
+
+.relay-access-card-copy {
+  min-width: 0;
+}
+
+.relay-access-title {
+  color: var(--v3-text-name);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.relay-access-url {
+  margin-top: 5px;
+  color: var(--v3-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.relay-access-copy-btn,
+.relay-access-snippet-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--v3-text-name);
+  cursor: pointer;
+}
+
+.relay-access-copy-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.relay-access-copy-btn:hover,
+.relay-access-snippet-head button:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.relay-access-token-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--v3-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.relay-access-token-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--v3-accent);
+}
+
+.relay-access-snippet {
+  overflow: hidden;
+}
+
+.relay-access-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--v3-border);
+  color: var(--v3-text-name);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.relay-access-snippet-head button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.relay-access-snippet pre {
+  margin: 0;
+  padding: 12px;
+  color: var(--v3-text-main);
+  background: rgba(0, 0, 0, 0.14);
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.relay-access-doc-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v3-accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
 @media (max-width: 640px) {
   .catsco-download-card {
     grid-template-columns: 36px minmax(0, 1fr) 28px;
@@ -1656,6 +1818,14 @@ body {
 
   .catsco-download-meta {
     grid-column: 2 / 4;
+  }
+
+  .relay-access-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .relay-access-copy-btn {
+    width: 100%;
   }
 }
 
