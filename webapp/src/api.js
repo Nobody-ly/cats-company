@@ -136,6 +136,7 @@ export const api = {
   getMessages: (topicId, limit, offset, latest = false) =>
     request('GET', `/api/messages?topic_id=${encodeURIComponent(topicId)}&limit=${limit || 50}&offset=${offset || 0}${latest ? '&latest=1' : ''}`),
   getConversations: () => request('GET', '/api/conversations'),
+  getRelayConfig: () => request('GET', '/api/relay/config'),
 
   getOnlineStatus: () => request('GET', '/api/users/online'),
 

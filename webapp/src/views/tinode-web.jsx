@@ -7,9 +7,10 @@ import MessagesView from './messages-view';
 import ProfileEditor from '../widgets/profile-editor';
 import FeedbackModal from '../widgets/feedback-modal';
 import CatsCoDownloadModal from '../widgets/catsco-download-modal';
+import RelayAccessModal from '../widgets/relay-access-modal';
 import PasswordResetForm from '../widgets/password-reset-form';
 import Avatar from '../widgets/avatar';
-import { Bug, Download, Settings, LogOut } from 'lucide-react';
+import { Bug, Download, KeyRound, Settings, LogOut } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
 import '../css/openchat-theme.css';
 
@@ -122,6 +123,7 @@ export default function TinodeWeb() {
   const [showProfilePopover, setShowProfilePopover] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [showRelayModal, setShowRelayModal] = useState(false);
 
 
 
@@ -283,6 +285,9 @@ export default function TinodeWeb() {
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowDownloadModal(true); }}>
               <Download size={16} style={{marginRight: 10}} /> 下载 CatsCo 桌面端
             </div>
+            <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowRelayModal(true); }}>
+              <KeyRound size={16} style={{marginRight: 10}} /> CatsCo 中转站
+            </div>
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowProfileEditor(true); }}>
               <Settings size={16} style={{marginRight: 10}} /> Settings & Profile
             </div>
@@ -316,6 +321,7 @@ export default function TinodeWeb() {
           user={user}
           onClose={() => setShowProfileEditor(false)}
           onSaved={handleUserUpdated}
+          onOpenRelay={() => setShowRelayModal(true)}
         />
       )}
 
@@ -325,6 +331,10 @@ export default function TinodeWeb() {
 
       {showDownloadModal && (
         <CatsCoDownloadModal onClose={() => setShowDownloadModal(false)} />
+      )}
+
+      {showRelayModal && (
+        <RelayAccessModal onClose={() => setShowRelayModal(false)} />
       )}
     </div>
   );
