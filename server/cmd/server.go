@@ -225,6 +225,7 @@ func main() {
 	readerHandler := server.NewReaderProxyHandlerFromEnv()
 	feedbackHandler := server.NewFeedbackHandler(db)
 	relayConfigHandler := server.NewRelayConfigHandler()
+	relayKeyHandler := server.NewRelayKeyHandlerFromEnv()
 	// usageHandler := server.NewUsageHandler(db)
 
 	authSendCodeIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
@@ -339,6 +340,8 @@ func main() {
 	mux.HandleFunc("/api/conversations", authWithDB(conversationHandler.HandleList))
 	mux.HandleFunc("/api/feedback", chainHTTP(feedbackHandler.HandleCreateFeedback, feedbackIPLimit, authWithDB, feedbackUserLimit))
 	mux.HandleFunc("/api/relay/config", ownerAuthWithDB(relayConfigHandler.HandleConfig))
+	mux.HandleFunc("/api/relay/key", ownerAuthWithDB(relayKeyHandler.HandleKey))
+	mux.HandleFunc("/api/relay/key/rotate", ownerAuthWithDB(relayKeyHandler.HandleRotate))
 
 	// Online status API
 	mux.HandleFunc("/api/users/online", server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
