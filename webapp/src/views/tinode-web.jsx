@@ -214,14 +214,27 @@ export default function TinodeWeb() {
     if (params.get('relay_login') !== '1') return;
 
     let cancelled = false;
+    const fallBackToRelayPanel = () => {
+      params.delete('relay_login');
+      const nextSearch = params.toString();
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+      window.history.replaceState(null, '', nextUrl);
+      setShowRelayModal(true);
+    };
+
     api.createRelaySession()
       .then((session) => {
         if (!cancelled && session?.url) {
           window.location.href = session.url;
+        } else if (!cancelled) {
+          fallBackToRelayPanel();
         }
       })
       .catch((error) => {
         console.warn('Failed to create relay login session:', error);
+        if (!cancelled) {
+          fallBackToRelayPanel();
+        }
       });
 
     return () => {

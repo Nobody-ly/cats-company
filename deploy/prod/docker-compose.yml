@@ -38,6 +38,7 @@ services:
       CATS_RELAY_ANTHROPIC_BASE_URL: "${CATS_RELAY_ANTHROPIC_BASE_URL:-https://relay.catsco.cc/anthropic}"
       CATS_RELAY_DEFAULT_MODEL: "${CATS_RELAY_DEFAULT_MODEL:-MiniMax-M2.7}"
       CATS_RELAY_DOCS_URL: "${CATS_RELAY_DOCS_URL:-https://relay.catsco.cc}"
+      CATS_RELAY_SSO_SECRET: "${CATS_RELAY_SSO_SECRET:-}"
       APP_ENV: production
       TZ: Asia/Shanghai
     ports:
