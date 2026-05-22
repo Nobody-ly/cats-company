@@ -58,7 +58,8 @@ export default function RelayAccessModal({ onClose }) {
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err.message || '配置读取失败，已显示默认配置');
+          console.warn('Failed to load relay config:', err);
+          setError('配置读取失败，已显示默认配置');
         }
       })
       .finally(() => {
@@ -116,6 +117,8 @@ export default function RelayAccessModal({ onClose }) {
                 <button
                   type="button"
                   className="relay-access-copy-btn"
+                  aria-label={`复制 ${protocolLabel(endpoint.protocol)} 地址`}
+                  title={`复制 ${protocolLabel(endpoint.protocol)} 地址`}
                   onClick={() => copyText(endpoint.protocol, endpoint.base_url)}
                 >
                   {copied === endpoint.protocol ? <Check size={16} /> : <Copy size={16} />}
@@ -132,7 +135,7 @@ export default function RelayAccessModal({ onClose }) {
           <div className="relay-access-snippet">
             <div className="relay-access-snippet-head">
               <span>快速配置</span>
-              <button type="button" onClick={() => copyText('snippet', snippet)}>
+              <button type="button" onClick={() => copyText('snippet', snippet)} aria-label="复制快速配置" title="复制快速配置">
                 {copied === 'snippet' ? <Check size={15} /> : <Copy size={15} />}
                 复制
               </button>

@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/openchat/openchat/server/store"
+	"github.com/openchat/openchat/server/store/types"
 )
 
 func TestRelayConfigDefaults(t *testing.T) {
@@ -78,5 +81,62 @@ func TestRelayConfigRejectsUnsupportedMethod(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type relayConfigOwnerStore struct {
+	store.Store
+	users map[int64]*types.User
+}
+
+func (s relayConfigOwnerStore) GetUser(id int64) (*types.User, error) {
+	return s.users[id], nil
+}
+
+func TestRelayConfigRouteRequiresHumanJWT(t *testing.T) {
+	oldSecret := append([]byte(nil), jwtSecret...)
+	defer func() { jwtSecret = oldSecret }()
+	SetJWTSecret("relay-config-test-secret")
+
+	userToken, err := GenerateToken(1, "alice", "alice@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken human: %v", err)
+	}
+	botToken, err := GenerateToken(2, "bot", "")
+	if err != nil {
+		t.Fatalf("GenerateToken bot: %v", err)
+	}
+
+	store := relayConfigOwnerStore{users: map[int64]*types.User{
+		1: {ID: 1, Username: "alice", AccountType: types.AccountHuman, State: 0},
+		2: {ID: 2, Username: "bot", AccountType: types.AccountBot, State: 0},
+	}}
+	handler := OwnerMiddlewareWithDB(store)(NewRelayConfigHandler().HandleConfig)
+
+	cases := []struct {
+		name          string
+		authorization string
+		wantStatus    int
+	}{
+		{name: "human jwt", authorization: "Bearer " + userToken, wantStatus: http.StatusOK},
+		{name: "missing auth", authorization: "", wantStatus: http.StatusUnauthorized},
+		{name: "bot api key", authorization: "ApiKey cc_2_fake", wantStatus: http.StatusUnauthorized},
+		{name: "bot jwt", authorization: "Bearer " + botToken, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/relay/config", nil)
+			if tc.authorization != "" {
+				req.Header.Set("Authorization", tc.authorization)
+			}
+			rec := httptest.NewRecorder()
+
+			handler(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
 	}
 }

@@ -1571,7 +1571,7 @@ body {
   background: rgba(250, 81, 81, 0.1);
 }
 
-.catsco-download-modal {
+.oc-modal.catsco-download-modal {
   width: 640px;
   max-width: 92vw;
 }
@@ -1649,9 +1649,13 @@ body {
   white-space: nowrap;
 }
 
-.relay-access-modal {
+.oc-modal.relay-access-modal {
   width: 680px;
   max-width: 92vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .relay-access-header {
@@ -1669,7 +1673,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
   padding: 18px 20px 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .relay-access-summary,
@@ -1809,6 +1816,27 @@ body {
   color: var(--v3-accent);
   font-size: 13px;
   text-decoration: none;
+}
+
+.oc-modal.oc-profile-editor-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  overflow: hidden;
+}
+
+.oc-profile-editor-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  overscroll-behavior: contain;
+}
+
+.oc-profile-editor-actions {
+  flex-shrink: 0;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--v3-border);
 }
 
 @media (max-width: 640px) {
