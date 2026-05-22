@@ -106,6 +106,26 @@ export default function RelayAccessModal({ onClose }) {
     }
   };
 
+  const openRelayPortal = async (event) => {
+    event.preventDefault();
+    setActionLoading('portal');
+    setError('');
+    try {
+      const session = await api.createRelaySession();
+      if (session?.url) {
+        window.open(session.url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      throw new Error('中转站登录链接生成失败');
+    } catch (err) {
+      const fallback = config.docs_url || config.base_url || FALLBACK_CONFIG.docs_url;
+      setError(err.message || '自动登录中转站失败，已打开普通页面');
+      window.open(fallback, '_blank', 'noopener,noreferrer');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const applyKeyResponse = (data) => {
     const nextKey = data?.key || null;
     setRelayKey(nextKey);
@@ -289,8 +309,8 @@ export default function RelayAccessModal({ onClose }) {
           </div>
 
           {config.docs_url && (
-            <a className="relay-access-doc-link" href={config.docs_url} target="_blank" rel="noopener noreferrer">
-              打开中转站页面 <ExternalLink size={14} />
+            <a className="relay-access-doc-link" href={config.docs_url} onClick={openRelayPortal}>
+              {actionLoading === 'portal' ? '正在登录中转站...' : '打开中转站页面'} <ExternalLink size={14} />
             </a>
           )}
         </div>

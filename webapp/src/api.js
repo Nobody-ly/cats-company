@@ -137,6 +137,7 @@ export const api = {
     request('GET', `/api/messages?topic_id=${encodeURIComponent(topicId)}&limit=${limit || 50}&offset=${offset || 0}${latest ? '&latest=1' : ''}`),
   getConversations: () => request('GET', '/api/conversations'),
   getRelayConfig: () => request('GET', '/api/relay/config'),
+  createRelaySession: () => request('POST', '/api/relay/session', {}),
   getRelayKey: () => request('GET', '/api/relay/key'),
   createRelayKey: (name) => request('POST', '/api/relay/key', name ? { name } : {}),
   rotateRelayKey: () => request('POST', '/api/relay/key/rotate', {}),

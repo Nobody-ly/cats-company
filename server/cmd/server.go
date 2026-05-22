@@ -340,6 +340,7 @@ func main() {
 	mux.HandleFunc("/api/conversations", authWithDB(conversationHandler.HandleList))
 	mux.HandleFunc("/api/feedback", chainHTTP(feedbackHandler.HandleCreateFeedback, feedbackIPLimit, authWithDB, feedbackUserLimit))
 	mux.HandleFunc("/api/relay/config", ownerAuthWithDB(relayConfigHandler.HandleConfig))
+	mux.HandleFunc("/api/relay/session", ownerAuthWithDB(relayConfigHandler.HandleSession))
 	mux.HandleFunc("/api/relay/key", ownerAuthWithDB(relayKeyHandler.HandleKey))
 	mux.HandleFunc("/api/relay/key/rotate", ownerAuthWithDB(relayKeyHandler.HandleRotate))
 
