@@ -49,16 +49,14 @@ type relayKeyResponse struct {
 }
 
 type relayKeyInfo struct {
-	ID               string  `json:"id"`
-	Name             string  `json:"name"`
-	Prefix           string  `json:"prefix,omitempty"`
-	State            string  `json:"state"`
-	Key              string  `json:"key,omitempty"`
-	CreatedAt        string  `json:"created_at,omitempty"`
-	UpdatedAt        string  `json:"updated_at,omitempty"`
-	RevokedAt        *string `json:"revoked_at,omitempty"`
-	BifrostCreatedAt string  `json:"bifrost_created_at,omitempty"`
-	BifrostUpdatedAt string  `json:"bifrost_updated_at,omitempty"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Prefix    string  `json:"prefix,omitempty"`
+	State     string  `json:"state"`
+	Key       string  `json:"key,omitempty"`
+	CreatedAt string  `json:"created_at,omitempty"`
+	UpdatedAt string  `json:"updated_at,omitempty"`
+	RevokedAt *string `json:"revoked_at,omitempty"`
 }
 
 func NewRelayKeyHandlerFromEnv() *RelayKeyHandler {

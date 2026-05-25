@@ -174,14 +174,16 @@ func TestRelayKeyGetStripsPlaintextFromAdminResponse(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/internal/users/8/key" {
 			t.Fatalf("unexpected relay admin request: %s %s", r.Method, r.URL.Path)
 		}
-		writeJSON(w, http.StatusOK, relayKeyResponse{
-			Configured: true,
-			Key: &relayKeyInfo{
-				ID:     "vk-unsafe",
-				Name:   "unsafe admin response",
-				Prefix: "sk-bf-un...safe",
-				State:  "active",
-				Key:    "sk-bf-should-not-leak",
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"configured": true,
+			"key": map[string]interface{}{
+				"id":                 "vk-unsafe",
+				"name":               "unsafe admin response",
+				"prefix":             "sk-bf-un...safe",
+				"state":              "active",
+				"key":                "sk-bf-should-not-leak",
+				"bifrost_created_at": "2026-05-22T00:00:00Z",
+				"bifrost_updated_at": "2026-05-22T00:00:00Z",
 			},
 		})
 	}))
@@ -205,6 +207,9 @@ func TestRelayKeyGetStripsPlaintextFromAdminResponse(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "sk-bf-should-not-leak") {
 		t.Fatalf("GET response leaked plaintext key: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "bifrost_") {
+		t.Fatalf("GET response leaked relay implementation fields: %s", rec.Body.String())
 	}
 }
 

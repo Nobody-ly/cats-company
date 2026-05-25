@@ -1684,7 +1684,8 @@ body {
   flex: 0 0 auto;
 }
 
-.relay-access-summary,
+.relay-access-hero,
+.relay-access-connect,
 .relay-access-card,
 .relay-access-key-panel,
 .relay-access-token-note,
@@ -1694,11 +1695,35 @@ body {
   background: rgba(255, 255, 255, 0.03);
 }
 
-.relay-access-summary {
+.relay-access-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.relay-access-hero-main {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px;
+  min-width: 0;
+}
+
+.relay-access-hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.relay-access-eyebrow {
+  color: var(--v3-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin-bottom: 4px;
 }
 
 .relay-access-summary-icon {
@@ -1714,7 +1739,12 @@ body {
 
 .relay-access-list {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.relay-access-connect {
+  padding: 12px;
 }
 
 .relay-access-card {
@@ -1722,7 +1752,8 @@ body {
   grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
   gap: 12px;
-  padding: 14px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .relay-access-card-copy {
@@ -1744,6 +1775,7 @@ body {
 }
 
 .relay-access-copy-btn,
+.relay-access-open-btn,
 .relay-access-snippet-head button {
   display: inline-flex;
   align-items: center;
@@ -1761,7 +1793,20 @@ body {
   height: 36px;
 }
 
+.relay-access-open-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  color: var(--v3-text-main);
+  font-weight: 700;
+}
+
+.relay-access-open-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .relay-access-copy-btn:hover,
+.relay-access-open-btn:hover,
 .relay-access-snippet-head button:hover {
   border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.08);
@@ -1793,6 +1838,10 @@ body {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.relay-access-section-head-compact {
+  margin-bottom: 10px;
 }
 
 .relay-access-state {
@@ -1962,18 +2011,9 @@ body {
   color: var(--v3-text-main);
   background: rgba(0, 0, 0, 0.14);
   overflow: auto;
-  max-height: min(260px, 32vh);
+  max-height: min(190px, 26vh);
   font-size: 12px;
   line-height: 1.55;
-}
-
-.relay-access-doc-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--v3-accent);
-  font-size: 13px;
-  text-decoration: none;
 }
 
 .oc-modal.oc-profile-editor-modal {
@@ -2006,11 +2046,23 @@ body {
     grid-column: 2 / 4;
   }
 
+  .relay-access-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .relay-access-hero-actions,
+  .relay-access-list {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .relay-access-card {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .relay-access-copy-btn {
+  .relay-access-copy-btn,
+  .relay-access-open-btn,
+  .relay-access-primary-btn {
     width: 100%;
   }
 
@@ -3755,6 +3807,6 @@ body {
   }
 
   .relay-access-snippet pre {
-    max-height: 180px;
+    max-height: min(180px, 24vh);
   }
 }

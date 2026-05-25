@@ -51,9 +51,9 @@ func (h *RelayConfigHandler) HandleConfig(w http.ResponseWriter, r *http.Request
 	anthropicBaseURL := relayEnv("CATS_RELAY_ANTHROPIC_BASE_URL", baseURL+"/anthropic")
 
 	selfServiceEnabled := RelaySelfServiceEnabled()
-	keyHint := "可以在这里生成自己的 Bifrost Virtual Key。明文只展示一次，泄露后可撤销并重新生成。"
+	keyHint := "可以在这里生成自己的中转 Key。明文只展示一次，泄露后可撤销并重新生成。"
 	if !selfServiceEnabled {
-		keyHint = "访问凭证由 CatsCo 管理员发放，使用 Bifrost Virtual Key。请妥善保存，泄露后可联系管理员撤销并重建。"
+		keyHint = "访问凭证由 CatsCo 管理员发放。请妥善保存，泄露后可联系管理员撤销并重建。"
 	}
 
 	writeJSON(w, http.StatusOK, relayConfigResponse{

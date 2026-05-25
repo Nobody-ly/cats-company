@@ -9,7 +9,7 @@ const FALLBACK_CONFIG = {
     { protocol: 'OpenAI-compatible', base_url: 'https://relay.catsco.cc/v1' },
     { protocol: 'Anthropic-compatible', base_url: 'https://relay.catsco.cc/anthropic' },
   ],
-  key_hint: '访问凭证由 CatsCo 管理员发放，使用 Bifrost Virtual Key。请妥善保存，泄露后可联系管理员撤销并重建。',
+  key_hint: '访问凭证由 CatsCo 管理员发放。请妥善保存，泄露后可联系管理员撤销并重建。',
   docs_url: 'https://relay.catsco.cc',
   self_service_enabled: false,
 };
@@ -20,21 +20,41 @@ function protocolLabel(protocol) {
   return protocol;
 }
 
+function endpointFor(config, pattern, fallbackPath) {
+  const endpoint = config.endpoints?.find((item) => pattern.test(item.protocol));
+  return endpoint?.base_url || `${config.base_url}${fallbackPath}`;
+}
+
 function configSnippet(config, plainKey) {
-  const openAI = config.endpoints?.find((item) => /openai/i.test(item.protocol));
-  const anthropic = config.endpoints?.find((item) => /anthropic/i.test(item.protocol));
-  const keyLine = plainKey ? `API Key: ${plainKey}` : 'API Key: sk-bf-...（在“我的 Key”里生成后复制）';
+  const openAIBaseURL = endpointFor(config, /openai/i, '/v1');
+  const anthropicBaseURL = endpointFor(config, /anthropic/i, '/anthropic');
+  const keyLine = plainKey ? `API Key: ${plainKey}` : 'API Key: sk-...（在“我的 Key”里生成后复制）';
   return [
-    'OpenAI-compatible',
-    `Base URL: ${openAI?.base_url || `${config.base_url}/v1`}`,
+    'OpenAI 兼容',
+    `Base URL: ${openAIBaseURL}`,
     `Model: ${config.default_model}`,
     keyLine,
     '',
-    'Anthropic-compatible',
-    `Base URL: ${anthropic?.base_url || `${config.base_url}/anthropic`}`,
+    'Anthropic 兼容',
+    `Base URL: ${anthropicBaseURL}`,
     `Model: ${config.default_model}`,
     keyLine,
   ].join('\n');
+}
+
+function relayStateLabel(relayKey, selfServiceEnabled, keyLoading) {
+  if (!selfServiceEnabled) return '管理员发放';
+  if (keyLoading) return '读取中';
+  if (!relayKey) return '未生成 Key';
+  if (relayKey.state === 'active') return 'Key 可用';
+  if (relayKey.state === 'revoked') return 'Key 已撤销';
+  if (relayKey.state === 'inactive') return 'Key 未启用';
+  return relayKey.state || 'Key 可用';
+}
+
+function relayStateClass(relayKey, selfServiceEnabled) {
+  if (!selfServiceEnabled || relayKey?.state === 'active') return 'active';
+  return relayKey?.state || 'inactive';
 }
 
 function formatTime(value) {
@@ -95,6 +115,8 @@ export default function RelayAccessModal({ onClose }) {
   }, []);
 
   const snippet = useMemo(() => configSnippet(config, plainKey), [config, plainKey]);
+  const stateText = relayStateLabel(relayKey, config.self_service_enabled, keyLoading);
+  const stateClass = relayStateClass(relayKey, config.self_service_enabled);
 
   const copyText = async (key, text) => {
     try {
@@ -106,21 +128,33 @@ export default function RelayAccessModal({ onClose }) {
     }
   };
 
-  const openRelayPortal = async (event) => {
-    event.preventDefault();
+  const openRelayPortal = async () => {
+    const portalWindow = window.open('about:blank', '_blank');
+    if (portalWindow) {
+      portalWindow.opener = null;
+      portalWindow.document.title = '正在打开 CatsCo 中转站';
+    }
+    const navigatePortal = (url) => {
+      if (portalWindow) {
+        portalWindow.location.href = url;
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+    };
+
     setActionLoading('portal');
     setError('');
     try {
       const session = await api.createRelaySession();
       if (session?.url) {
-        window.open(session.url, '_blank', 'noopener,noreferrer');
+        navigatePortal(session.url);
         return;
       }
       throw new Error('中转站登录链接生成失败');
     } catch (err) {
       const fallback = config.docs_url || config.base_url || FALLBACK_CONFIG.docs_url;
       setError(err.message || '自动登录中转站失败，已打开普通页面');
-      window.open(fallback, '_blank', 'noopener,noreferrer');
+      navigatePortal(fallback);
     } finally {
       setActionLoading('');
     }
@@ -180,7 +214,11 @@ export default function RelayAccessModal({ onClose }) {
         <div className="oc-modal-header relay-access-header">
           <div>
             <h3>CatsCo 中转站</h3>
-            <p>用于 OpenAI / Anthropic 兼容客户端，账号和凭证统一由 CatsCo 管理。</p>
+            <p>
+              {config.self_service_enabled
+                ? '生成并管理自己的中转 Key，接到第三方客户端或 CatsCo 自定义模型。'
+                : '查看中转连接地址，并使用管理员发放的访问凭证。'}
+            </p>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭">
             <X size={18} />
@@ -191,41 +229,79 @@ export default function RelayAccessModal({ onClose }) {
           {loading && <div className="oc-settings-secondary">正在读取中转配置...</div>}
           {error && <div className="oc-form-error">{error}</div>}
 
-          <div className="relay-access-summary">
-            <span className="relay-access-summary-icon"><Server size={18} /></span>
-            <div>
-              <div className="relay-access-title">{config.base_url}</div>
-              <div className="oc-settings-secondary">默认模型：{config.default_model}</div>
+          <div className="relay-access-hero">
+            <div className="relay-access-hero-main">
+              <span className="relay-access-summary-icon"><Server size={18} /></span>
+              <div>
+                <div className="relay-access-eyebrow">当前中转</div>
+                <div className="relay-access-title">{config.base_url}</div>
+                <div className="oc-settings-secondary">默认模型：{config.default_model}</div>
+              </div>
+            </div>
+            <div className="relay-access-hero-actions">
+              <span className={`relay-access-state ${stateClass}`}>{stateText}</span>
+              <button
+                type="button"
+                className="relay-access-primary-btn"
+                onClick={() => copyText('snippet', snippet)}
+                title="复制快速配置"
+              >
+                {copied === 'snippet' ? <Check size={15} /> : <Copy size={15} />}
+                复制配置
+              </button>
+              {config.docs_url && (
+                <button
+                  type="button"
+                  className="relay-access-open-btn"
+                  onClick={openRelayPortal}
+                  disabled={actionLoading === 'portal'}
+                >
+                  {actionLoading === 'portal' ? '登录中...' : '打开中转站'}
+                  <ExternalLink size={14} />
+                </button>
+              )}
             </div>
           </div>
 
-          <div className="relay-access-list">
-            {config.endpoints.map((endpoint) => (
-              <div className="relay-access-card" key={`${endpoint.protocol}:${endpoint.base_url}`}>
-                <div className="relay-access-card-copy">
-                  <div className="relay-access-title">{protocolLabel(endpoint.protocol)}</div>
-                  <div className="relay-access-url">{endpoint.base_url}</div>
-                </div>
-                <button
-                  type="button"
-                  className="relay-access-copy-btn"
-                  aria-label={`复制 ${protocolLabel(endpoint.protocol)} 地址`}
-                  title={`复制 ${protocolLabel(endpoint.protocol)} 地址`}
-                  onClick={() => copyText(endpoint.protocol, endpoint.base_url)}
-                >
-                  {copied === endpoint.protocol ? <Check size={16} /> : <Copy size={16} />}
-                </button>
+          <div className="relay-access-connect">
+            <div className="relay-access-section-head relay-access-section-head-compact">
+              <div>
+                <div className="relay-access-title">连接地址</div>
+                <div className="oc-settings-secondary">按客户端 SDK 类型选择一个 Base URL。</div>
               </div>
-            ))}
+            </div>
+            <div className="relay-access-list">
+              {config.endpoints.map((endpoint) => (
+                <div className="relay-access-card" key={`${endpoint.protocol}:${endpoint.base_url}`}>
+                  <div className="relay-access-card-copy">
+                    <div className="relay-access-title">{protocolLabel(endpoint.protocol)}</div>
+                    <div className="relay-access-url">{endpoint.base_url}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="relay-access-copy-btn"
+                    aria-label={`复制 ${protocolLabel(endpoint.protocol)} 地址`}
+                    title={`复制 ${protocolLabel(endpoint.protocol)} 地址`}
+                    onClick={() => copyText(endpoint.protocol, endpoint.base_url)}
+                  >
+                    {copied === endpoint.protocol ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
 
           <section className="relay-access-key-panel">
             <div className="relay-access-section-head">
               <div>
                 <div className="relay-access-title">我的 Key</div>
-                <div className="oc-settings-secondary">每个账号一把中转 Key，用于第三方客户端或 CatsCo 自定义模型。</div>
+                <div className="oc-settings-secondary">
+                  {config.self_service_enabled
+                    ? '每个账号一把中转 Key，用于第三方客户端或 CatsCo 自定义模型。'
+                    : '如需访问凭证，请联系管理员发放或重置。'}
+                </div>
               </div>
-              {relayKey?.state && <span className={`relay-access-state ${relayKey.state}`}>{relayKey.state}</span>}
+              <span className={`relay-access-state ${stateClass}`}>{stateText}</span>
             </div>
 
             {!config.self_service_enabled && (
@@ -261,7 +337,7 @@ export default function RelayAccessModal({ onClose }) {
                   </div>
                   <div>
                     <span>前缀</span>
-                    <strong>{relayKey.prefix || 'sk-bf-...'}</strong>
+                    <strong>{relayKey.prefix || 'sk-...'}</strong>
                   </div>
                   <div>
                     <span>更新时间</span>
@@ -307,12 +383,6 @@ export default function RelayAccessModal({ onClose }) {
             </div>
             <pre>{snippet}</pre>
           </div>
-
-          {config.docs_url && (
-            <a className="relay-access-doc-link" href={config.docs_url} onClick={openRelayPortal}>
-              {actionLoading === 'portal' ? '正在登录中转站...' : '打开中转站页面'} <ExternalLink size={14} />
-            </a>
-          )}
         </div>
       </div>
     </div>
