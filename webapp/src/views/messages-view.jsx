@@ -14,6 +14,7 @@ const MAX_ATTACHMENT_SIZE_MB = 300;
 const MAX_ATTACHMENT_SIZE = MAX_ATTACHMENT_SIZE_MB * 1024 * 1024;
 const MAX_DROPPED_FILES = 200;
 const HISTORY_AUTO_LOAD_THRESHOLD = 120;
+const STICK_TO_BOTTOM_THRESHOLD = 96;
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']);
 
 export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
@@ -43,6 +44,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const peerTypingTimer = useRef(null);
   const timelineRef = useRef(null);
   const previousScrollRef = useRef(null);
+  const stickToBottomRef = useRef(true);
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
   const textareaRef = useRef(null);
@@ -106,6 +108,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     historyOffsetRef.current = 0;
     hasMoreHistoryRef.current = false;
     loadingOlderRef.current = false;
+    stickToBottomRef.current = true;
     setHasMoreHistory(false);
     setLoadingOlder(false);
     setIsStopRequested(false);
@@ -282,17 +285,21 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   // Auto-scroll to bottom or restore scroll anchor depending on state
   React.useLayoutEffect(() => {
-    if (previousScrollRef.current && timelineRef.current) {
+    const timeline = timelineRef.current;
+    if (!timeline) return;
+
+    if (previousScrollRef.current) {
       // Anchoring condition: We just prepended older history.
       const { scrollHeight, scrollTop } = previousScrollRef.current;
-      const newScrollHeight = timelineRef.current.scrollHeight;
-      timelineRef.current.scrollTop = scrollTop + (newScrollHeight - scrollHeight);
+      const newScrollHeight = timeline.scrollHeight;
+      timeline.scrollTop = scrollTop + (newScrollHeight - scrollHeight);
       previousScrollRef.current = null; // Clear atomic lock
-    } else {
-      // Standard condition: New message arrived or initial load. Scroll to bottom.
+      stickToBottomRef.current = isTimelineNearBottom(timeline);
+    } else if (stickToBottomRef.current) {
+      // Only follow fresh messages while the user is already near the bottom.
       bottomRef.current?.scrollIntoView({ behavior: 'auto' });
     }
-  }, [messages.length, peerTyping]);
+  }, [messages, runtimePlan, peerTyping]);
 
   const loadHistory = async () => {
     try {
@@ -415,6 +422,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       : text;
 
     const tempId = Date.now();
+    stickToBottomRef.current = true;
     setMessages((prev) => mergeMessages(prev, [{
       id: tempId,
       seq_id: tempId,
@@ -775,6 +783,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   const handleTimelineScroll = (e) => {
     const el = e.target;
+    stickToBottomRef.current = isTimelineNearBottom(el);
     if (el.scrollTop <= HISTORY_AUTO_LOAD_THRESHOLD) {
       loadOlderHistory();
     }
@@ -1308,6 +1317,11 @@ function RuntimePlanCard({ plan }) {
 function getStreamId(message) {
   const id = message?.metadata?.stream_id || message?._stream_id;
   return typeof id === 'string' && id.trim() ? id.trim() : '';
+}
+
+function isTimelineNearBottom(el) {
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_TO_BOTTOM_THRESHOLD;
 }
 
 function streamDeltaText(content) {
