@@ -19,9 +19,16 @@ var accountAdminAssets embed.FS
 // center. It intentionally lives outside /api so public nginx routes do not
 // expose it.
 type AccountAdminHandler struct {
-	users        AccountUserLookup
+	users        AccountAdminUserLookup
 	services     AccountServiceVerifier
 	serviceStore AccountAdminServiceStore
+}
+
+type AccountAdminUserLookup interface {
+	AccountUserLookup
+	GetUserByUsername(username string) (*types.User, error)
+	GetUserByEmail(email string) (*types.User, error)
+	SearchUsers(query string, limit int) ([]*types.User, error)
 }
 
 type AccountAdminServiceStore interface {
@@ -30,7 +37,7 @@ type AccountAdminServiceStore interface {
 	RevokeAuthService(id int64) error
 }
 
-func NewAccountAdminHandler(users AccountUserLookup, services AccountServiceVerifier, serviceStore AccountAdminServiceStore) *AccountAdminHandler {
+func NewAccountAdminHandler(users AccountAdminUserLookup, services AccountServiceVerifier, serviceStore AccountAdminServiceStore) *AccountAdminHandler {
 	return &AccountAdminHandler{users: users, services: services, serviceStore: serviceStore}
 }
 
@@ -85,6 +92,93 @@ func (h *AccountAdminHandler) HandleUserLookup(w http.ResponseWriter, r *http.Re
 			"service_tokens_configured": h.services != nil && h.services.Configured(),
 		},
 	})
+}
+
+func (h *AccountAdminHandler) HandleUserSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAccountAdminJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireLocal(w, r) {
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		writeAccountAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "empty query"})
+		return
+	}
+
+	users, err := h.searchUsers(query)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+
+	payload := make([]accountUserResponse, 0, len(users))
+	for _, user := range users {
+		payload = append(payload, accountUserPayload(user))
+	}
+	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
+		"users": payload,
+		"count": len(payload),
+	})
+}
+
+func (h *AccountAdminHandler) searchUsers(query string) ([]*types.User, error) {
+	const limit = 20
+
+	seen := map[int64]bool{}
+	var out []*types.User
+	add := func(user *types.User) {
+		if user == nil || seen[user.ID] {
+			return
+		}
+		seen[user.ID] = true
+		out = append(out, user)
+	}
+
+	if uid, err := strconv.ParseInt(query, 10, 64); err == nil && uid > 0 {
+		user, err := h.users.GetUser(uid)
+		if err != nil {
+			return nil, err
+		}
+		add(user)
+		return out, nil
+	}
+
+	if strings.Contains(query, "@") {
+		user, err := h.users.GetUserByEmail(query)
+		if err != nil {
+			return nil, err
+		}
+		add(user)
+	}
+
+	user, err := h.users.GetUserByUsername(query)
+	if err != nil {
+		return nil, err
+	}
+	add(user)
+
+	matches, err := h.users.SearchUsers(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	for _, match := range matches {
+		if match == nil || seen[match.ID] {
+			continue
+		}
+		full, err := h.users.GetUser(match.ID)
+		if err != nil {
+			return nil, err
+		}
+		add(full)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (h *AccountAdminHandler) HandleServices(w http.ResponseWriter, r *http.Request) {

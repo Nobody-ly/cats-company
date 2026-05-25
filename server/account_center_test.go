@@ -25,6 +25,50 @@ func (s accountTestUserLookup) GetUser(id int64) (*types.User, error) {
 	return s.users[id], nil
 }
 
+func (s accountTestUserLookup) GetUserByUsername(username string) (*types.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	for _, user := range s.users {
+		if strings.EqualFold(user.Username, username) {
+			return user, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s accountTestUserLookup) GetUserByEmail(email string) (*types.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	for _, user := range s.users {
+		if strings.EqualFold(user.Email, email) {
+			return user, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s accountTestUserLookup) SearchUsers(query string, limit int) ([]*types.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	query = strings.ToLower(strings.TrimSpace(query))
+	if limit <= 0 {
+		limit = len(s.users)
+	}
+	var out []*types.User
+	for _, user := range s.users {
+		if strings.Contains(strings.ToLower(user.Username), query) || strings.Contains(strings.ToLower(user.DisplayName), query) {
+			out = append(out, user)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func TestEnvAccountServiceVerifierSupportsPlainAndHashTokens(t *testing.T) {
 	sum := sha256.Sum256([]byte("hashed-secret"))
 	verifier, err := NewEnvAccountServiceVerifier("relay=plain-secret;worker=sha256:" + hex.EncodeToString(sum[:]))

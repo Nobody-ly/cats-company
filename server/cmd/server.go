@@ -313,6 +313,7 @@ func main() {
 	mux.HandleFunc("/local/account-admin", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/users", accountAdminHandler.HandleUserLookup)
+	mux.HandleFunc("/local/account-admin/users/search", accountAdminHandler.HandleUserSearch)
 	mux.HandleFunc("/local/account-admin/services", accountAdminHandler.HandleServices)
 	mux.HandleFunc("/local/account-admin/services/revoke", accountAdminHandler.HandleRevokeService)
 

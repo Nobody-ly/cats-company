@@ -87,6 +87,93 @@ func TestAccountAdminUserLookup(t *testing.T) {
 	}
 }
 
+func TestAccountAdminUserSearchByEmail(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{
+		12: {
+			ID:          12,
+			Username:    "dora",
+			Email:       "dora@example.com",
+			DisplayName: "Dora",
+			AccountType: types.AccountHuman,
+			State:       0,
+		},
+	}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users/search?q=dora@example.com", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleUserSearch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Users []struct {
+			UID   int64  `json:"uid"`
+			Email string `json:"email"`
+		} `json:"users"`
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Count != 1 || len(body.Users) != 1 || body.Users[0].UID != 12 || body.Users[0].Email != "dora@example.com" {
+		t.Fatalf("unexpected search response: %+v", body)
+	}
+}
+
+func TestAccountAdminUserSearchDeduplicatesUsernameAndFuzzyMatches(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{
+		21: {
+			ID:          21,
+			Username:    "carol",
+			Email:       "carol@example.com",
+			DisplayName: "Carol",
+			AccountType: types.AccountHuman,
+			State:       0,
+		},
+		22: {
+			ID:          22,
+			Username:    "carol-helper",
+			Email:       "helper@example.com",
+			DisplayName: "Carol Helper",
+			AccountType: types.AccountHuman,
+			State:       0,
+		},
+	}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users/search?q=carol", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleUserSearch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Users []struct {
+			UID int64 `json:"uid"`
+		} `json:"users"`
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Count != 2 || len(body.Users) != 2 {
+		t.Fatalf("expected two deduplicated users, got %+v", body)
+	}
+	seen := map[int64]bool{}
+	for _, user := range body.Users {
+		if seen[user.UID] {
+			t.Fatalf("duplicate uid in search response: %+v", body)
+		}
+		seen[user.UID] = true
+	}
+	if !seen[21] || !seen[22] {
+		t.Fatalf("missing expected users: %+v", body)
+	}
+}
+
 type accountTestAuthServiceStore struct {
 	nextID   int64
 	services map[int64]*types.AuthService
