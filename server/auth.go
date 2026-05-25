@@ -119,7 +119,11 @@ func contextWithClaims(ctx context.Context, claims *JWTClaims) context.Context {
 }
 
 func activeUserFromClaims(claims *JWTClaims, lookupUser func(int64) (*types.User, error)) (*types.User, int, string) {
-	user, err := lookupUser(claims.UID)
+	return activeUserByID(claims.UID, lookupUser)
+}
+
+func activeUserByID(uid int64, lookupUser func(int64) (*types.User, error)) (*types.User, int, string) {
+	user, err := lookupUser(uid)
 	if err != nil || user == nil {
 		return nil, http.StatusUnauthorized, "invalid or expired token"
 	}
@@ -202,6 +206,10 @@ func AuthMiddlewareWithDB(db store.Store) func(http.HandlerFunc) http.HandlerFun
 				if err == nil {
 					botUID, err := db.GetBotByAPIKey(apiKey)
 					if err == nil && botUID == parsedUID {
+						if _, status, msg := activeUserByID(parsedUID, db.GetUser); status != 0 {
+							writeJSON(w, status, map[string]string{"error": msg})
+							return
+						}
 						ctx := context.WithValue(r.Context(), uidKey, parsedUID)
 						next(w, r.WithContext(ctx))
 						return

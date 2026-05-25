@@ -304,14 +304,20 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid api key", http.StatusUnauthorized)
 			return
 		}
+		usr, err := hub.db.GetUser(parsedUID)
+		if err != nil || usr == nil {
+			http.Error(w, "invalid api key", http.StatusUnauthorized)
+			return
+		}
+		if usr.State != 0 {
+			http.Error(w, "user account is disabled", http.StatusForbidden)
+			return
+		}
 		uid = parsedUID
 		acctType = types.AccountBot
-		usr, _ := hub.db.GetUser(uid)
-		if usr != nil {
-			acctType = usr.AccountType
-			if usr.DisplayName != "" {
-				displayName = usr.DisplayName
-			}
+		acctType = usr.AccountType
+		if usr.DisplayName != "" {
+			displayName = usr.DisplayName
 		}
 	} else {
 		http.Error(w, "missing token or api_key", http.StatusUnauthorized)

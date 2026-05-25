@@ -399,11 +399,24 @@ func (h *AccountAdminHandler) requireLocal(w http.ResponseWriter, r *http.Reques
 }
 
 func isLocalAdminRequest(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
+	if !isLocalAdminAddress(r.RemoteAddr) {
+		return false
 	}
-	ip := net.ParseIP(strings.TrimSpace(host))
+	for _, raw := range forwardedAdminAddresses(r) {
+		if !isLocalAdminAddress(raw) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLocalAdminAddress(raw string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(raw))
+	if err != nil {
+		host = raw
+	}
+	host = strings.Trim(strings.TrimSpace(host), `"[]`)
+	ip := net.ParseIP(host)
 	if ip == nil {
 		return false
 	}
@@ -411,6 +424,30 @@ func isLocalAdminRequest(r *http.Request) bool {
 	// or a private bridge address inside the container. Public clients are not
 	// accepted here, and the route is not exposed by public nginx config.
 	return ip.IsLoopback() || ip.IsPrivate()
+}
+
+func forwardedAdminAddresses(r *http.Request) []string {
+	var out []string
+	for _, item := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		out = append(out, realIP)
+	}
+	for _, forwarded := range r.Header.Values("Forwarded") {
+		for _, section := range strings.Split(forwarded, ",") {
+			for _, part := range strings.Split(section, ";") {
+				key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+				if ok && strings.EqualFold(key, "for") {
+					out = append(out, strings.TrimSpace(value))
+				}
+			}
+		}
+	}
+	return out
 }
 
 var authServiceSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,62}[a-z0-9]$`)

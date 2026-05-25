@@ -42,6 +42,37 @@ func TestAccountAdminRejectsPublicAddress(t *testing.T) {
 	}
 }
 
+func TestAccountAdminRejectsForwardedPublicAddressFromLocalProxy(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	req.Header.Set("X-Forwarded-For", "203.0.113.20")
+	req.Header.Set("X-Real-IP", "203.0.113.20")
+	rec := httptest.NewRecorder()
+
+	handler.HandlePage(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccountAdminRejectsForwardedHeaderPublicAddress(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	req.Header.Set("Forwarded", `for=203.0.113.20;proto=https`)
+	rec := httptest.NewRecorder()
+
+	handler.HandlePage(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAccountAdminUserLookup(t *testing.T) {
 	verifier, err := NewEnvAccountServiceVerifier("relay=service-secret")
 	if err != nil {

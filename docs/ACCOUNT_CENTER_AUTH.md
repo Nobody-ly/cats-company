@@ -15,7 +15,7 @@
 用户资料里的 `state` 用于限制账号：
 
 - `0`：正常，可登录、可通过账号中心校验。
-- `1`：已禁用，不能登录；已有 JWT 访问 CatsCompany API 会被拒绝；账号中心 introspect 会返回不可用，业务服务应拒绝访问。
+- `1`：已禁用，不能登录；已有 JWT 访问 CatsCompany API 会被拒绝；机器人 API Key 和 WebSocket 连接会被拒绝；账号中心 introspect 会返回不可用，业务服务应拒绝访问。
 
 本地账号后台可以禁用或恢复用户账号。这个能力用于风控、测试账号隔离、异常账号处理。
 
@@ -34,7 +34,7 @@
 
 Service Token 是业务服务调用账号中心的内部凭证。它只放在服务端环境变量、Secret Manager 或 CI/CD Secret 中，不能放到浏览器、桌面客户端或公开仓库。
 
-后台入口仅供 SSH 隧道或内网运维访问，不能暴露到公网。推荐通过 SSH 隧道打开：
+后台入口仅供 SSH 隧道访问，不能暴露到公网。生产 nginx 配置应显式拦截 `/local` 和 `/local/` 路径；后端也会拒绝带公网 `X-Forwarded-For` / `X-Real-IP` / `Forwarded` 的代理请求。因为 Docker 端口转发可能让 SSH 隧道在容器内表现为私网 bridge 地址，所以后台页面仍允许本机和私网 bridge 来源；不要把后端端口绑定到公网或内网负载均衡。
 
 ```bash
 ssh -N -L 26061:127.0.0.1:26061 <server-alias>
@@ -50,7 +50,7 @@ http://127.0.0.1:26061/local/account-admin
 
 - 服务标识：稳定的机器名，例如 `writing-app`、`ops-tool`、`internal-api`。
 - 显示名称：给人看的名称，例如 `写作平台`、`运维工具`。
-- 权限范围：可选。当前主要用于记录、审计和后续精细化授权；目前账号中心还没有按 scope 做接口级强制拦截。
+- 权限范围：可选。留空表示允许使用当前全部账号中心接口；一旦选择了权限，账号中心会按接口强制检查。
 
 常用权限：
 
@@ -58,6 +58,8 @@ http://127.0.0.1:26061/local/account-admin
 - `account.users.read`：按 UID 读取用户基础资料。
 
 创建后会显示一次性明文 token。请立刻保存到对应业务服务的 secret 或环境变量里。数据库只保存 hash 和 token 前缀，后续无法找回明文；丢失或疑似泄露时，在后台重新生成并替换业务服务配置。
+
+兼容旧部署时，也可以通过环境变量预置 service token，格式为 `slug=plain-token` 或 `slug=sha256:<hex-encoded-sha256>`，多个条目可用逗号、分号或换行分隔。优先推荐用后台创建数据库 token，便于撤销和轮换。
 
 ## 第二步：用户登录
 
@@ -279,6 +281,25 @@ HTTP/1.1 401 Unauthorized
 ```
 
 说明业务服务端传错了 `Authorization: Service <service_token>`。
+
+### Service Token 权限不足
+
+```http
+HTTP/1.1 403 Forbidden
+```
+
+```json
+{
+  "error": "service scope denied"
+}
+```
+
+说明该 service token 已配置权限范围，但缺少当前接口需要的 scope：
+
+- `POST /api/account/introspect` 需要 `account.introspect`。
+- `GET /api/account/users/{uid}` 需要 `account.users.read`。
+
+如果 token 没有配置任何 scope，则兼容为允许使用当前全部账号中心接口。
 
 ### 用户 JWT 无效
 

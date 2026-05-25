@@ -44,7 +44,7 @@ func (s authStateTestStore) GetBotByAPIKey(apiKey string) (int64, error) {
 	return s.botKeys[apiKey], nil
 }
 
-func TestAuthMiddlewareWithDBRejectsDisabledJWTButKeepsBotAPIKey(t *testing.T) {
+func TestAuthMiddlewareWithDBRejectsDisabledJWTAndDisabledBotAPIKey(t *testing.T) {
 	oldSecret := append([]byte(nil), jwtSecret...)
 	defer func() { jwtSecret = oldSecret }()
 	SetJWTSecret("auth-state-test-secret")
@@ -58,13 +58,16 @@ func TestAuthMiddlewareWithDBRejectsDisabledJWTButKeepsBotAPIKey(t *testing.T) {
 		t.Fatalf("GenerateToken disabled: %v", err)
 	}
 
-	const botKey = "cc_7_test"
+	const activeBotKey = "cc_7_test"
+	const disabledBotKey = "cc_8_test"
 	store := authStateTestStore{
 		users: map[int64]*types.User{
 			1: {ID: 1, Username: "alice", AccountType: types.AccountHuman, State: 0},
 			2: {ID: 2, Username: "bob", AccountType: types.AccountHuman, State: 1},
+			7: {ID: 7, Username: "active-bot", AccountType: types.AccountBot, State: 0},
+			8: {ID: 8, Username: "disabled-bot", AccountType: types.AccountBot, State: 1},
 		},
-		botKeys: map[string]int64{botKey: 7},
+		botKeys: map[string]int64{activeBotKey: 7, disabledBotKey: 8},
 	}
 	handler := AuthMiddlewareWithDB(store)(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]int64{"uid": UIDFromContext(r.Context())})
@@ -77,7 +80,8 @@ func TestAuthMiddlewareWithDBRejectsDisabledJWTButKeepsBotAPIKey(t *testing.T) {
 	}{
 		{name: "active jwt", authorization: "Bearer " + activeToken, wantStatus: http.StatusOK},
 		{name: "disabled jwt", authorization: "Bearer " + disabledToken, wantStatus: http.StatusForbidden},
-		{name: "bot api key", authorization: "ApiKey " + botKey, wantStatus: http.StatusOK},
+		{name: "active bot api key", authorization: "ApiKey " + activeBotKey, wantStatus: http.StatusOK},
+		{name: "disabled bot api key", authorization: "ApiKey " + disabledBotKey, wantStatus: http.StatusForbidden},
 	}
 
 	for _, tc := range cases {
@@ -170,6 +174,24 @@ func TestServeWSRejectsDisabledJWT(t *testing.T) {
 		10: {ID: 10, Username: "disabled", AccountType: types.AccountHuman, State: 1},
 	}}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v0/channels?token="+token, nil)
+	rec := httptest.NewRecorder()
+
+	ServeWS(hub, rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+func TestServeWSRejectsDisabledBotAPIKey(t *testing.T) {
+	const disabledBotKey = "cc_b_test"
+	hub := NewHub(authStateTestStore{
+		users: map[int64]*types.User{
+			11: {ID: 11, Username: "disabled-bot", AccountType: types.AccountBot, State: 1},
+		},
+		botKeys: map[string]int64{disabledBotKey: 11},
+	}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v0/channels?api_key="+disabledBotKey, nil)
 	rec := httptest.NewRecorder()
 
 	ServeWS(hub, rec, req)

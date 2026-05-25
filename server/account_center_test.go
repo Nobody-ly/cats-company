@@ -199,6 +199,25 @@ func TestAccountServiceVerifierRejectsRevokedDatabaseTokens(t *testing.T) {
 	}
 }
 
+func createTestDBServiceToken(t *testing.T, store *accountTestAuthServiceStore, slug string, scopes []string) string {
+	t.Helper()
+	token, prefix, hash, err := GenerateAccountServiceToken()
+	if err != nil {
+		t.Fatalf("GenerateAccountServiceToken: %v", err)
+	}
+	if _, err := store.CreateAuthService(&types.AuthService{
+		Slug:        slug,
+		Name:        slug,
+		TokenPrefix: prefix,
+		TokenHash:   hash,
+		Scopes:      scopes,
+		State:       0,
+	}); err != nil {
+		t.Fatalf("CreateAuthService: %v", err)
+	}
+	return token
+}
+
 func TestAccountCenterIntrospectActiveToken(t *testing.T) {
 	oldSecret := append([]byte(nil), jwtSecret...)
 	defer func() { jwtSecret = oldSecret }()
@@ -362,5 +381,70 @@ func TestAccountCenterGetUser(t *testing.T) {
 	}
 	if body["uid"].(float64) != 7 || body["username"] != "bob" {
 		t.Fatalf("unexpected user response: %v", body)
+	}
+}
+
+func TestAccountCenterEnforcesDatabaseTokenScopes(t *testing.T) {
+	store := newAccountTestAuthServiceStore()
+	usersReadToken := createTestDBServiceToken(t, store, "users-reader", []string{"account.users.read"})
+	introspectToken := createTestDBServiceToken(t, store, "login-checker", []string{"account.introspect"})
+	verifier, err := NewAccountServiceVerifier("", store)
+	if err != nil {
+		t.Fatalf("NewAccountServiceVerifier: %v", err)
+	}
+	handler := NewAccountCenterHandler(accountTestUserLookup{users: map[int64]*types.User{
+		7: {ID: 7, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman, State: 0},
+	}}, verifier)
+
+	introspectReq := httptest.NewRequest(http.MethodPost, "/api/account/introspect", strings.NewReader(`{"token":"x"}`))
+	introspectReq.Header.Set("Authorization", "Service "+usersReadToken)
+	introspectRec := httptest.NewRecorder()
+	handler.HandleIntrospect(introspectRec, introspectReq)
+	if introspectRec.Code != http.StatusForbidden {
+		t.Fatalf("introspect status=%d body=%s", introspectRec.Code, introspectRec.Body.String())
+	}
+
+	allowedIntrospectReq := httptest.NewRequest(http.MethodPost, "/api/account/introspect", strings.NewReader(`{"token":"x"}`))
+	allowedIntrospectReq.Header.Set("Authorization", "Service "+introspectToken)
+	allowedIntrospectRec := httptest.NewRecorder()
+	handler.HandleIntrospect(allowedIntrospectRec, allowedIntrospectReq)
+	if allowedIntrospectRec.Code != http.StatusOK {
+		t.Fatalf("allowed introspect status=%d body=%s", allowedIntrospectRec.Code, allowedIntrospectRec.Body.String())
+	}
+
+	getUserReq := httptest.NewRequest(http.MethodGet, "/api/account/users/7", nil)
+	getUserReq.Header.Set("Authorization", "Service "+introspectToken)
+	getUserRec := httptest.NewRecorder()
+	handler.HandleGetUser(getUserRec, getUserReq)
+	if getUserRec.Code != http.StatusForbidden {
+		t.Fatalf("get user status=%d body=%s", getUserRec.Code, getUserRec.Body.String())
+	}
+
+	allowedGetUserReq := httptest.NewRequest(http.MethodGet, "/api/account/users/7", nil)
+	allowedGetUserReq.Header.Set("Authorization", "Service "+usersReadToken)
+	allowedGetUserRec := httptest.NewRecorder()
+	handler.HandleGetUser(allowedGetUserRec, allowedGetUserReq)
+	if allowedGetUserRec.Code != http.StatusOK {
+		t.Fatalf("allowed get user status=%d body=%s", allowedGetUserRec.Code, allowedGetUserRec.Body.String())
+	}
+}
+
+func TestAccountCenterEmptyDatabaseScopesAllowCurrentEndpoints(t *testing.T) {
+	store := newAccountTestAuthServiceStore()
+	token := createTestDBServiceToken(t, store, "legacy-service", nil)
+	verifier, err := NewAccountServiceVerifier("", store)
+	if err != nil {
+		t.Fatalf("NewAccountServiceVerifier: %v", err)
+	}
+	handler := NewAccountCenterHandler(accountTestUserLookup{users: map[int64]*types.User{
+		7: {ID: 7, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman, State: 0},
+	}}, verifier)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/account/users/7", nil)
+	req.Header.Set("Authorization", "Service "+token)
+	rec := httptest.NewRecorder()
+	handler.HandleGetUser(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
