@@ -1680,6 +1680,10 @@ body {
   overscroll-behavior: contain;
 }
 
+.relay-access-body > * {
+  flex: 0 0 auto;
+}
+
 .relay-access-summary,
 .relay-access-card,
 .relay-access-key-panel,
@@ -1931,6 +1935,7 @@ body {
 
 .relay-access-snippet {
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .relay-access-snippet-head {
