@@ -1653,6 +1653,7 @@ body {
   width: 680px;
   max-width: 92vw;
   max-height: 90vh;
+  height: min(760px, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1956,6 +1957,7 @@ body {
   color: var(--v3-text-main);
   background: rgba(0, 0, 0, 0.14);
   overflow: auto;
+  max-height: min(260px, 32vh);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -3724,6 +3726,10 @@ body {
   max-height: calc(100vh - 32px) !important;
 }
 
+.oc-modal.relay-access-modal {
+  height: min(760px, calc(100vh - 32px)) !important;
+}
+
 @media (max-width: 640px), (max-height: 640px) {
   .oc-modal-overlay {
     align-items: stretch !important;
@@ -3737,5 +3743,13 @@ body {
     width: min(100%, calc(100vw - 24px)) !important;
     max-width: none !important;
     max-height: calc(100vh - 24px) !important;
+  }
+
+  .oc-modal.relay-access-modal {
+    height: calc(100vh - 24px) !important;
+  }
+
+  .relay-access-snippet pre {
+    max-height: 180px;
   }
 }
