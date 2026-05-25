@@ -313,13 +313,17 @@ func main() {
 	mux.HandleFunc("/local/account-admin", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/", accountAdminHandler.HandlePage)
 	mux.HandleFunc("/local/account-admin/users", accountAdminHandler.HandleUserLookup)
+	mux.HandleFunc("/local/account-admin/users/list", accountAdminHandler.HandleUserList)
 	mux.HandleFunc("/local/account-admin/users/search", accountAdminHandler.HandleUserSearch)
+	mux.HandleFunc("/local/account-admin/users/state", accountAdminHandler.HandleUserState)
 	mux.HandleFunc("/local/account-admin/services", accountAdminHandler.HandleServices)
 	mux.HandleFunc("/local/account-admin/services/revoke", accountAdminHandler.HandleRevokeService)
 
 	// Friends (require auth — JWT or API Key for bot access)
 	authWithDB := server.AuthMiddlewareWithDB(db)
+	jwtAuthWithDB := server.JWTAuthMiddlewareWithDB(db)
 	ownerAuthWithDB := server.OwnerMiddlewareWithDB(db)
+	adminAuthWithDB := server.AdminMiddlewareWithDB(db)
 	mux.HandleFunc("/api/friends", authWithDB(friendHandler.HandleGetFriends))
 	mux.HandleFunc("/api/friends/pending", authWithDB(friendHandler.HandleGetPendingRequests))
 	mux.HandleFunc("/api/friends/request", authWithDB(friendHandler.HandleSendRequest))
@@ -333,7 +337,7 @@ func main() {
 
 	// User profile (require auth — JWT or API Key)
 	mux.HandleFunc("/api/me", authWithDB(userHandler.HandleMe))
-	mux.HandleFunc("/api/me/update", server.AuthMiddleware(userHandler.HandleUpdateMe))
+	mux.HandleFunc("/api/me/update", jwtAuthWithDB(userHandler.HandleUpdateMe))
 
 	// Messages (require auth — JWT or API Key for bot access)
 	mux.HandleFunc("/api/messages/send", authWithDB(msgHandler.HandleSendMessage))
@@ -346,7 +350,7 @@ func main() {
 	mux.HandleFunc("/api/relay/key/rotate", ownerAuthWithDB(relayKeyHandler.HandleRotate))
 
 	// Online status API
-	mux.HandleFunc("/api/users/online", server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/users/online", jwtAuthWithDB(func(w http.ResponseWriter, r *http.Request) {
 		uid := server.UIDFromContext(r.Context())
 		onlineList, err := server.BuildOnlineStatusList(db, hub, uid)
 		if err != nil {
@@ -357,12 +361,12 @@ func main() {
 	}))
 
 	// Bot management (admin — legacy)
-	mux.HandleFunc("/api/admin/bots", server.AdminMiddleware(botHandler.HandleListBots))
-	mux.HandleFunc("/api/admin/bots/register", server.AdminMiddleware(botHandler.HandleRegisterBot))
-	mux.HandleFunc("/api/admin/bots/toggle", server.AdminMiddleware(botHandler.HandleToggleBot))
-	mux.HandleFunc("/api/admin/bots/rotate-key", server.AdminMiddleware(botHandler.HandleRotateAPIKey))
-	mux.HandleFunc("/api/admin/bots/stats", server.AdminMiddleware(botHandler.HandleBotStats))
-	mux.HandleFunc("/api/admin/bots/debug", server.AdminMiddleware(botHandler.HandleBotDebugLog))
+	mux.HandleFunc("/api/admin/bots", adminAuthWithDB(botHandler.HandleListBots))
+	mux.HandleFunc("/api/admin/bots/register", adminAuthWithDB(botHandler.HandleRegisterBot))
+	mux.HandleFunc("/api/admin/bots/toggle", adminAuthWithDB(botHandler.HandleToggleBot))
+	mux.HandleFunc("/api/admin/bots/rotate-key", adminAuthWithDB(botHandler.HandleRotateAPIKey))
+	mux.HandleFunc("/api/admin/bots/stats", adminAuthWithDB(botHandler.HandleBotStats))
+	mux.HandleFunc("/api/admin/bots/debug", adminAuthWithDB(botHandler.HandleBotDebugLog))
 
 	// Bot management (user-facing — owner creates/manages their bots)
 	mux.HandleFunc("/api/bots", ownerAuthWithDB(botHandler.HandleBotsRouter))
@@ -374,18 +378,18 @@ func main() {
 
 	// Groups (require auth)
 	groupHandler := server.NewGroupHandler(db, hub)
-	mux.HandleFunc("/api/groups", server.AuthMiddleware(groupHandler.HandleGetGroups))
-	mux.HandleFunc("/api/groups/create", server.AuthMiddleware(groupHandler.HandleCreateGroup))
-	mux.HandleFunc("/api/groups/info", server.AuthMiddleware(groupHandler.HandleGetGroupInfo))
-	mux.HandleFunc("/api/groups/update", server.AuthMiddleware(groupHandler.HandleUpdateGroup))
-	mux.HandleFunc("/api/groups/invite", server.AuthMiddleware(groupHandler.HandleInviteMembers))
-	mux.HandleFunc("/api/groups/leave", server.AuthMiddleware(groupHandler.HandleLeaveGroup))
-	mux.HandleFunc("/api/groups/kick", server.AuthMiddleware(groupHandler.HandleKickMember))
-	mux.HandleFunc("/api/groups/mute", server.AuthMiddleware(groupHandler.HandleMuteMember))
-	mux.HandleFunc("/api/groups/unmute", server.AuthMiddleware(groupHandler.HandleUnmuteMember))
-	mux.HandleFunc("/api/groups/announcement", server.AuthMiddleware(groupHandler.HandleSetAnnouncement))
-	mux.HandleFunc("/api/groups/disband", server.AuthMiddleware(groupHandler.HandleDisbandGroup))
-	mux.HandleFunc("/api/groups/role", server.AuthMiddleware(groupHandler.HandleUpdateRole))
+	mux.HandleFunc("/api/groups", jwtAuthWithDB(groupHandler.HandleGetGroups))
+	mux.HandleFunc("/api/groups/create", jwtAuthWithDB(groupHandler.HandleCreateGroup))
+	mux.HandleFunc("/api/groups/info", jwtAuthWithDB(groupHandler.HandleGetGroupInfo))
+	mux.HandleFunc("/api/groups/update", jwtAuthWithDB(groupHandler.HandleUpdateGroup))
+	mux.HandleFunc("/api/groups/invite", jwtAuthWithDB(groupHandler.HandleInviteMembers))
+	mux.HandleFunc("/api/groups/leave", jwtAuthWithDB(groupHandler.HandleLeaveGroup))
+	mux.HandleFunc("/api/groups/kick", jwtAuthWithDB(groupHandler.HandleKickMember))
+	mux.HandleFunc("/api/groups/mute", jwtAuthWithDB(groupHandler.HandleMuteMember))
+	mux.HandleFunc("/api/groups/unmute", jwtAuthWithDB(groupHandler.HandleUnmuteMember))
+	mux.HandleFunc("/api/groups/announcement", jwtAuthWithDB(groupHandler.HandleSetAnnouncement))
+	mux.HandleFunc("/api/groups/disband", jwtAuthWithDB(groupHandler.HandleDisbandGroup))
+	mux.HandleFunc("/api/groups/role", jwtAuthWithDB(groupHandler.HandleUpdateRole))
 
 	// File upload (accepts both JWT and API Key for bot uploads)
 	mux.HandleFunc("/api/upload", chainHTTP(uploadHandler.HandleUpload, uploadIPLimit, authWithDB, uploadUserLimit))

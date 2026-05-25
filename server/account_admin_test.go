@@ -72,9 +72,6 @@ func TestAccountAdminUserLookup(t *testing.T) {
 			UID      int64  `json:"uid"`
 			Username string `json:"username"`
 		} `json:"user"`
-		AccountCenter struct {
-			ServiceTokensConfigured bool `json:"service_tokens_configured"`
-		} `json:"account_center"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -82,8 +79,69 @@ func TestAccountAdminUserLookup(t *testing.T) {
 	if body.User.UID != 9 || body.User.Username != "carol" {
 		t.Fatalf("unexpected user payload: %+v", body.User)
 	}
-	if !body.AccountCenter.ServiceTokensConfigured {
-		t.Fatal("expected configured service token flag")
+}
+
+func TestAccountAdminUserListSupportsPaginationAndSearch(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{
+		1:  {ID: 1, Username: "alice", Email: "alice@example.com", DisplayName: "Alice", AccountType: types.AccountHuman, State: 0},
+		2:  {ID: 2, Username: "bob", Email: "bob@example.com", DisplayName: "Bob", AccountType: types.AccountHuman, State: 0},
+		30: {ID: 30, Username: "carol", Email: "carol@example.com", DisplayName: "Carol", AccountType: types.AccountHuman, State: 1},
+	}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users/list?page=1&page_size=2&q=car", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleUserList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Users []struct {
+			UID   int64 `json:"uid"`
+			State int   `json:"state"`
+		} `json:"users"`
+		Count     int `json:"count"`
+		Page      int `json:"page"`
+		TotalPage int `json:"total_page"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Count != 1 || body.Page != 1 || body.TotalPage != 1 || len(body.Users) != 1 {
+		t.Fatalf("unexpected list response: %+v", body)
+	}
+	if body.Users[0].UID != 30 || body.Users[0].State != 1 {
+		t.Fatalf("expected disabled matching user first, got %+v", body.Users)
+	}
+}
+
+func TestAccountAdminUserStateCanDisableAndRestore(t *testing.T) {
+	users := map[int64]*types.User{
+		7: {ID: 7, Username: "erin", Email: "erin@example.com", DisplayName: "Erin", AccountType: types.AccountHuman, State: 0},
+	}
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: users}, nil, nil)
+
+	disableReq := httptest.NewRequest(http.MethodPost, "/local/account-admin/users/state", strings.NewReader(`{"uid":7,"state":1}`))
+	disableReq.RemoteAddr = "127.0.0.1:40200"
+	disableRec := httptest.NewRecorder()
+	handler.HandleUserState(disableRec, disableReq)
+	if disableRec.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", disableRec.Code, disableRec.Body.String())
+	}
+	if users[7].State != 1 {
+		t.Fatalf("expected disabled state, got %d", users[7].State)
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/local/account-admin/users/state", strings.NewReader(`{"uid":7,"state":0}`))
+	restoreReq.RemoteAddr = "127.0.0.1:40200"
+	restoreRec := httptest.NewRecorder()
+	handler.HandleUserState(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore status=%d body=%s", restoreRec.Code, restoreRec.Body.String())
+	}
+	if users[7].State != 0 {
+		t.Fatalf("expected restored state, got %d", users[7].State)
 	}
 }
 

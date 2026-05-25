@@ -28,7 +28,10 @@ type AccountAdminUserLookup interface {
 	AccountUserLookup
 	GetUserByUsername(username string) (*types.User, error)
 	GetUserByEmail(email string) (*types.User, error)
+	ListAdminUsers(query string, limit, offset int) ([]*types.User, error)
+	CountAdminUsers(query string) (int, error)
 	SearchUsers(query string, limit int) ([]*types.User, error)
+	UpdateUserState(uid int64, state int) error
 }
 
 type AccountAdminServiceStore interface {
@@ -88,9 +91,47 @@ func (h *AccountAdminHandler) HandleUserLookup(w http.ResponseWriter, r *http.Re
 
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
 		"user": accountUserPayload(user),
-		"account_center": map[string]interface{}{
-			"service_tokens_configured": h.services != nil && h.services.Configured(),
-		},
+	})
+}
+
+func (h *AccountAdminHandler) HandleUserList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAccountAdminJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireLocal(w, r) {
+		return
+	}
+
+	page := parseAccountAdminPositiveInt(r.URL.Query().Get("page"), 1)
+	pageSize := parseAccountAdminPositiveInt(r.URL.Query().Get("page_size"), 20)
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	offset := (page - 1) * pageSize
+
+	users, err := h.users.ListAdminUsers(query, pageSize, offset)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+	count, err := h.users.CountAdminUsers(query)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+	payload := make([]accountUserResponse, 0, len(users))
+	for _, user := range users {
+		payload = append(payload, accountUserPayload(user))
+	}
+	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
+		"users":      payload,
+		"count":      count,
+		"page":       page,
+		"page_size":  pageSize,
+		"total_page": accountAdminTotalPages(count, pageSize),
+		"query":      query,
 	})
 }
 
@@ -122,6 +163,47 @@ func (h *AccountAdminHandler) HandleUserSearch(w http.ResponseWriter, r *http.Re
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
 		"users": payload,
 		"count": len(payload),
+	})
+}
+
+func (h *AccountAdminHandler) HandleUserState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAccountAdminJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireLocal(w, r) {
+		return
+	}
+
+	var req struct {
+		UID   int64 `json:"uid"`
+		State int   `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UID <= 0 {
+		writeAccountAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user state request"})
+		return
+	}
+	if req.State != 0 && req.State != 1 {
+		writeAccountAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported user state"})
+		return
+	}
+	user, err := h.users.GetUser(req.UID)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
+		return
+	}
+	if user == nil {
+		writeAccountAdminJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		return
+	}
+	if err := h.users.UpdateUserState(req.UID, req.State); err != nil {
+		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update user state"})
+		return
+	}
+	user.State = req.State
+	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":   true,
+		"user": accountUserPayload(user),
 	})
 }
 
@@ -179,6 +261,21 @@ func (h *AccountAdminHandler) searchUsers(query string) ([]*types.User, error) {
 		}
 	}
 	return out, nil
+}
+
+func parseAccountAdminPositiveInt(raw string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func accountAdminTotalPages(count, pageSize int) int {
+	if count <= 0 || pageSize <= 0 {
+		return 0
+	}
+	return (count + pageSize - 1) / pageSize
 }
 
 func (h *AccountAdminHandler) HandleServices(w http.ResponseWriter, r *http.Request) {

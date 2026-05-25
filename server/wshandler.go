@@ -278,6 +278,19 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		}
 		uid = claims.UID
 		displayName = claims.Username
+		usr, err := hub.db.GetUser(uid)
+		if err != nil || usr == nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		if usr.State != 0 {
+			http.Error(w, "user account is disabled", http.StatusForbidden)
+			return
+		}
+		acctType = usr.AccountType
+		if usr.DisplayName != "" {
+			displayName = usr.DisplayName
+		}
 	} else if apiKeyStr != "" {
 		// API Key authentication for bots
 		parsedUID, err := ParseAPIKey(apiKeyStr)
@@ -293,18 +306,16 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		}
 		uid = parsedUID
 		acctType = types.AccountBot
+		usr, _ := hub.db.GetUser(uid)
+		if usr != nil {
+			acctType = usr.AccountType
+			if usr.DisplayName != "" {
+				displayName = usr.DisplayName
+			}
+		}
 	} else {
 		http.Error(w, "missing token or api_key", http.StatusUnauthorized)
 		return
-	}
-
-	// Get user info for both JWT and API Key
-	usr, _ := hub.db.GetUser(uid)
-	if usr != nil {
-		acctType = usr.AccountType
-		if usr.DisplayName != "" {
-			displayName = usr.DisplayName
-		}
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
