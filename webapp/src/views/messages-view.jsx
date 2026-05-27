@@ -54,6 +54,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const historyOffsetRef = useRef(0);
   const hasMoreHistoryRef = useRef(false);
   const loadingOlderRef = useRef(false);
+  const activeTopicRef = useRef(topic);
 
   const clearRuntimePlan = useCallback(() => {
     if (runtimePlanClearTimer.current) {
@@ -94,12 +95,16 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   // Load message history and group members when topic changes
   useEffect(() => {
     if (!topic) return;
+    activeTopicRef.current = topic;
+    setInput('');
     setMessages([]);
     setPendingAttachments([]);
     setIsUploadingAttachment(false);
     setIsDragActive(false);
     dragDepthRef.current = 0;
     setPeerTyping(false);
+    setShowMentionPicker(false);
+    setMentionFilter('');
     clearRuntimePlan();
     setReplyTo(null);
     setMembers([]);
@@ -404,6 +409,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     if (!text && pendingAttachments.length === 0) return;
     if (isUploadingAttachment) return;
 
+    const sendTopic = topic;
     clearRuntimePlan();
     const attachmentsToSend = pendingAttachments;
     setInput('');
@@ -426,7 +432,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setMessages((prev) => mergeMessages(prev, [{
       id: tempId,
       seq_id: tempId,
-      topic_id: topic,
+      topic_id: sendTopic,
       from_uid: user.uid,
       content: displayContent,
       content_blocks: attachmentsToSend.length > 0 ? contentBlocks : undefined,
@@ -438,10 +444,11 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     }]));
 
     try {
-      const result = await api.sendMessage(topic, payload, currentReplyTo ? currentReplyTo.id : undefined);
+      const result = await api.sendMessage(sendTopic, payload, currentReplyTo ? currentReplyTo.id : undefined);
       finalizeOptimisticMessage(tempId, result);
     } catch (err) {
       removeOptimisticMessage(tempId);
+      if (activeTopicRef.current !== sendTopic) return;
       setInput(text);
       setPendingAttachments(attachmentsToSend);
       setReplyTo(currentReplyTo);
@@ -512,6 +519,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   };
 
   const uploadAttachmentFile = async (file, requestedType) => {
+    const uploadTopic = activeTopicRef.current;
     const type = inferAttachmentType(file, requestedType);
     if (file.size > MAX_ATTACHMENT_SIZE) {
       window.alert(`文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB。当前最多支持 ${MAX_ATTACHMENT_SIZE_MB}MB。`);
@@ -560,6 +568,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
         size: data.size,
         content,
       };
+      if (activeTopicRef.current !== uploadTopic) return attachment;
       setPendingAttachments((prev) => [...prev, attachment]);
       setTimeout(() => textareaRef.current?.focus(), 0);
       return attachment;
