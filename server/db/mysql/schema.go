@@ -35,6 +35,8 @@ func (a *Adapter) CreateSchema() error {
 		migrateBotConfigAddVisibility,
 		migrateBotConfigAddTenantName,
 		migrateMessagesAddCodeMode,
+		migrateMessagesAddClientMsgID,
+		migrateMessagesAddClientMsgIDIndex,
 		migrateGroupsAddAnnouncement,
 		migrateGroupMembersAddMuted,
 		migrateFriendsAddFromStatusIndex,
@@ -118,9 +120,11 @@ CREATE TABLE IF NOT EXISTS messages (
     from_uid BIGINT NOT NULL,
     content TEXT NOT NULL,
     msg_type ENUM('text','image','voice','file') NOT NULL DEFAULT 'text',
+    client_msg_id VARCHAR(128) DEFAULT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_messages_topic (topic_id, created_at),
     INDEX idx_messages_topic_id (topic_id, id),
+    UNIQUE KEY uk_messages_client_msg_id (topic_id, from_uid, client_msg_id),
     FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
     FOREIGN KEY (from_uid) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -249,6 +253,16 @@ ALTER TABLE messages
   ADD COLUMN content_blocks JSON DEFAULT NULL,
   ADD COLUMN mode VARCHAR(20) DEFAULT 'normal',
   ADD COLUMN role VARCHAR(20) DEFAULT NULL;
+`
+
+// Migration: add a client-generated id for safe retry deduplication.
+const migrateMessagesAddClientMsgID = `
+ALTER TABLE messages ADD COLUMN client_msg_id VARCHAR(128) DEFAULT NULL;
+`
+
+// Migration: add a retry deduplication index for client-generated ids.
+const migrateMessagesAddClientMsgIDIndex = `
+ALTER TABLE messages ADD UNIQUE KEY uk_messages_client_msg_id (topic_id, from_uid, client_msg_id);
 `
 
 // Migration: add group announcement support.

@@ -155,9 +155,7 @@ func (c *Client) ReadPump(handler func(client *Client, msg *ClientMessage)) {
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("ws read error: %v", err)
-			}
+			log.Printf("ws read closed: uid=%d addr=%s err=%v", c.uid, c.remoteAddr, err)
 			break
 		}
 
@@ -190,17 +188,20 @@ func (c *Client) WritePump() {
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				log.Printf("ws write next writer failed: uid=%d addr=%s err=%v", c.uid, c.remoteAddr, err)
 				return
 			}
 			w.Write(message)
 
 			if err := w.Close(); err != nil {
+				log.Printf("ws write close failed: uid=%d addr=%s err=%v", c.uid, c.remoteAddr, err)
 				return
 			}
 
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("ws ping failed: uid=%d addr=%s err=%v", c.uid, c.remoteAddr, err)
 				return
 			}
 		}

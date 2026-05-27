@@ -60,6 +60,7 @@ type MessageStore interface {
 	SaveMessage(topicID string, fromUID int64, content, msgType string) (int64, error)
 	SaveMessageWithBlocks(topicID string, fromUID int64, content string, blocks []types.ContentBlock, mode, role, msgType string) (int64, error)
 	SaveMessageWithReply(topicID string, fromUID int64, content, msgType string, replyTo int64) (int64, error)
+	SaveMessageIdempotent(topicID string, fromUID int64, content string, blocks []types.ContentBlock, mode, role, msgType string, replyTo int64, clientMsgID string) (id int64, duplicate bool, err error)
 	GetMessagesSince(topicID string, sinceID int64, limit int) ([]*types.Message, error)
 	GetMessages(topicID string, limit, offset int) ([]*types.Message, error)
 	GetLatestMessages(topicID string, limit, offset int) ([]*types.Message, error)

@@ -391,13 +391,50 @@ func (h *Hub) handleHi(client *Client, displayName string, msg *MsgClientHi) {
 			Code: 200,
 			Text: "ok",
 			Params: map[string]interface{}{
-				"ver":   "0.1.0",
-				"build": "catscompany",
-				"uid":   formatUID(client.uid),
-				"name":  displayName,
+				"ver":      "0.1.0",
+				"build":    "catscompany",
+				"features": []string{"client_msg_id"},
+				"uid":      formatUID(client.uid),
+				"name":     displayName,
 			},
 		},
 	})
+}
+
+func (h *Hub) validateMessagePublish(uid int64, accountType types.AccountType, topic string, applyRateLimit bool) (int, string) {
+	if h == nil {
+		return 0, ""
+	}
+	if applyRateLimit && h.rateLimiter != nil {
+		if !h.rateLimiter.Allow(uid, accountType) {
+			return http.StatusTooManyRequests, "rate limit exceeded"
+		}
+	}
+
+	if isGroupTopic(topic) {
+		groupID := extractGroupID(topic)
+		if groupID == 0 {
+			return http.StatusBadRequest, "invalid group topic"
+		}
+		isMember, err := h.db.IsGroupMember(groupID, uid)
+		if err != nil || !isMember {
+			return http.StatusForbidden, "not a group member"
+		}
+		isMuted, _ := h.db.IsMemberMuted(groupID, uid)
+		if isMuted {
+			return http.StatusForbidden, "you are muted in this group"
+		}
+		return 0, ""
+	}
+
+	peerUID := extractPeerUID(topic, uid)
+	if peerUID == 0 {
+		return http.StatusBadRequest, "invalid p2p topic"
+	}
+	if !h.checkBotToBot(uid, peerUID) {
+		return http.StatusTooManyRequests, "bot-to-bot conversation limit reached"
+	}
+	return 0, ""
 }
 
 // handlePub handles a publish (send message) request.
@@ -428,6 +465,13 @@ func (h *Hub) handlePub(client *Client, msg *MsgClientPub) {
 		return
 	}
 
+	if code, text := h.validateMessagePublish(uid, client.accountType, topic, false); code != 0 {
+		h.SendToClient(client, &ServerMessage{
+			Ctrl: &MsgServerCtrl{ID: msg.ID, Code: code, Text: text},
+		})
+		return
+	}
+
 	// Route based on topic type
 	if isGroupTopic(topic) {
 		h.handleGroupPub(client, msg, topic, payload)
@@ -435,15 +479,6 @@ func (h *Hub) handlePub(client *Client, msg *MsgClientPub) {
 	}
 
 	// --- P2P message handling ---
-
-	// Bot-to-Bot loop protection
-	peerUID := extractPeerUID(topic, uid)
-	if peerUID > 0 && !h.checkBotToBot(uid, peerUID) {
-		h.SendToClient(client, &ServerMessage{
-			Ctrl: &MsgServerCtrl{ID: msg.ID, Code: 429, Text: "bot-to-bot conversation limit reached"},
-		})
-		return
-	}
 
 	// Ensure topic exists
 	h.db.CreateTopic(topic, "p2p", uid)
@@ -464,7 +499,7 @@ func (h *Hub) handlePub(client *Client, msg *MsgClientPub) {
 		return
 	}
 
-	msgID, err := saveNormalizedMessage(h.db, topic, uid, msg.ReplyTo, payload)
+	result, err := saveNormalizedMessage(h.db, topic, uid, msg.ReplyTo, payload)
 	if err != nil {
 		log.Printf("save message error: %v", err)
 		h.SendToClient(client, &ServerMessage{
@@ -481,12 +516,16 @@ func (h *Hub) handlePub(client *Client, msg *MsgClientPub) {
 			Code:  200,
 			Text:  "ok",
 			Params: map[string]interface{}{
-				"seq": msgID,
+				"seq":           result.ID,
+				"duplicate":     result.Duplicate,
+				"client_msg_id": payload.ClientMsgID,
 			},
 		},
 	})
 
-	h.fanoutNormalizedMessage(uid, topic, msg.ReplyTo, payload, msgID, client)
+	if !result.Duplicate {
+		h.fanoutNormalizedMessage(uid, topic, msg.ReplyTo, payload, result.ID, client)
+	}
 }
 
 func isStreamPub(msg *MsgClientPub) bool {
@@ -667,7 +706,7 @@ func (h *Hub) handleGroupPub(client *Client, msg *MsgClientPub, topic string, pa
 		return
 	}
 
-	msgID, err := saveNormalizedMessage(h.db, topic, uid, msg.ReplyTo, payload)
+	result, err := saveNormalizedMessage(h.db, topic, uid, msg.ReplyTo, payload)
 	if err != nil {
 		log.Printf("save group message error: %v", err)
 		h.SendToClient(client, &ServerMessage{
@@ -684,12 +723,16 @@ func (h *Hub) handleGroupPub(client *Client, msg *MsgClientPub, topic string, pa
 			Code:  200,
 			Text:  "ok",
 			Params: map[string]interface{}{
-				"seq": msgID,
+				"seq":           result.ID,
+				"duplicate":     result.Duplicate,
+				"client_msg_id": payload.ClientMsgID,
 			},
 		},
 	})
 
-	h.fanoutNormalizedMessage(uid, topic, msg.ReplyTo, payload, msgID, client)
+	if !result.Duplicate {
+		h.fanoutNormalizedMessage(uid, topic, msg.ReplyTo, payload, result.ID, client)
+	}
 }
 
 func messageRequestFromPub(msg *MsgClientPub) *SendMessageRequest {
@@ -698,6 +741,7 @@ func messageRequestFromPub(msg *MsgClientPub) *SendMessageRequest {
 	}
 	return &SendMessageRequest{
 		TopicID:       msg.Topic,
+		ClientMsgID:   msg.ClientMsgID,
 		Content:       msg.Content,
 		ContentBlocks: msg.ContentBlocks,
 		Metadata:      msg.Metadata,
@@ -854,7 +898,10 @@ func extractPeerUID(topic string, selfUID int64) int64 {
 			if uid1 == selfUID {
 				return uid2
 			}
-			return uid1
+			if uid2 == selfUID {
+				return uid1
+			}
+			return 0
 		}
 	}
 	return 0

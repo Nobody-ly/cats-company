@@ -23,6 +23,7 @@ func (a *Adapter) CreateSchema() error {
 		migrateBotConfigAddVisibility,
 		migrateBotConfigAddTenantName,
 		migrateMessagesAddCodeMode,
+		migrateMessagesAddClientMsgID,
 		migrateGroupsAddAnnouncement,
 		migrateGroupMembersAddMuted,
 		createUsersIndexes,
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS messages (
     mode VARCHAR(20) DEFAULT 'normal',
     role VARCHAR(20) DEFAULT NULL,
     reply_to BIGINT DEFAULT NULL,
+    client_msg_id VARCHAR(128) DEFAULT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 `
@@ -200,6 +202,7 @@ ALTER TABLE messages
   ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'normal',
   ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT NULL;
 `
+const migrateMessagesAddClientMsgID = `ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_msg_id VARCHAR(128) DEFAULT NULL;`
 const migrateGroupsAddAnnouncement = `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS announcement TEXT DEFAULT NULL;`
 const migrateGroupMembersAddMuted = `ALTER TABLE group_members ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT FALSE;`
 
@@ -220,6 +223,7 @@ const createMessagesIndexes = `
 CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages (topic_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages (topic_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages (reply_to);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_messages_client_msg_id ON messages (topic_id, from_uid, client_msg_id) WHERE client_msg_id IS NOT NULL AND client_msg_id <> '';
 `
 const createBotConfigIndexes = `
 CREATE UNIQUE INDEX IF NOT EXISTS uk_bot_config_api_key ON bot_config (api_key) WHERE api_key IS NOT NULL;

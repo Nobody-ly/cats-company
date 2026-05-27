@@ -26,6 +26,7 @@ func NewMessageHandler(db store.Store, hub *Hub) *MessageHandler {
 // SendMessageRequest is the JSON body for sending a message.
 type SendMessageRequest struct {
 	TopicID       string                 `json:"topic_id"`
+	ClientMsgID   string                 `json:"client_msg_id,omitempty"`
 	Content       json.RawMessage        `json:"content,omitempty"`
 	ContentBlocks []types.ContentBlock   `json:"content_blocks,omitempty"`
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
@@ -41,10 +42,16 @@ type normalizedMessagePayload struct {
 	DisplayContent interface{}
 	StoredType     string
 	DisplayType    string
+	ClientMsgID    string
 	ContentBlocks  []types.ContentBlock
 	Metadata       map[string]interface{}
 	Mode           string
 	Role           string
+}
+
+type savedMessageResult struct {
+	ID        int64
+	Duplicate bool
 }
 
 // HandleSendMessage handles POST /api/messages/send
@@ -56,11 +63,19 @@ func (h *MessageHandler) HandleSendMessage(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
+	req.TopicID = strings.TrimSpace(req.TopicID)
 
 	payload, err := normalizeMessageRequest(&req)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+
+	if h.hub != nil {
+		if code, text := h.hub.validateMessagePublish(uid, h.accountTypeForUID(uid), req.TopicID, true); code != 0 {
+			writeJSON(w, code, map[string]string{"error": text})
+			return
+		}
 	}
 
 	if isTransientRuntimePayload(payload) {
@@ -82,20 +97,24 @@ func (h *MessageHandler) HandleSendMessage(w http.ResponseWriter, r *http.Reques
 		h.db.CreateTopic(req.TopicID, "p2p", uid)
 	}
 
-	id, err := saveNormalizedMessage(h.db, req.TopicID, uid, req.ReplyTo, payload)
+	result, err := saveNormalizedMessage(h.db, req.TopicID, uid, req.ReplyTo, payload)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send"})
 		return
 	}
 
 	resp := map[string]interface{}{
-		"id":       id,
-		"seq_id":   id,
+		"id":       result.ID,
+		"seq_id":   result.ID,
 		"topic_id": req.TopicID,
 		"from_uid": uid,
 		"msg_type": payload.StoredType,
 		"type":     payload.DisplayType,
 		"reply_to": req.ReplyTo,
+	}
+	if payload.ClientMsgID != "" {
+		resp["client_msg_id"] = payload.ClientMsgID
+		resp["duplicate"] = result.Duplicate
 	}
 	if payload.Metadata != nil {
 		resp["metadata"] = payload.Metadata
@@ -109,8 +128,21 @@ func (h *MessageHandler) HandleSendMessage(w http.ResponseWriter, r *http.Reques
 		resp["content"] = payload.DisplayContent
 	}
 
-	h.fanoutMessage(uid, req.TopicID, req.ReplyTo, payload, id)
+	if !result.Duplicate {
+		h.fanoutMessage(uid, req.TopicID, req.ReplyTo, payload, result.ID)
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *MessageHandler) accountTypeForUID(uid int64) types.AccountType {
+	if h == nil || h.db == nil {
+		return types.AccountHuman
+	}
+	user, err := h.db.GetUser(uid)
+	if err != nil || user == nil || user.AccountType == "" {
+		return types.AccountHuman
+	}
+	return user.AccountType
 }
 
 func (h *MessageHandler) fanoutMessage(uid int64, topicID string, replyTo int, payload *normalizedMessagePayload, msgID int64) {
@@ -120,18 +152,34 @@ func (h *MessageHandler) fanoutMessage(uid int64, topicID string, replyTo int, p
 	h.hub.fanoutNormalizedMessage(uid, topicID, replyTo, payload, msgID, nil)
 }
 
-func saveNormalizedMessage(db store.MessageStore, topicID string, uid int64, replyTo int, payload *normalizedMessagePayload) (int64, error) {
+func saveNormalizedMessage(db store.MessageStore, topicID string, uid int64, replyTo int, payload *normalizedMessagePayload) (*savedMessageResult, error) {
+	if payload.ClientMsgID != "" {
+		id, duplicate, err := db.SaveMessageIdempotent(topicID, uid, payload.StoredContent, payload.ContentBlocks, payload.Mode, payload.Role, payload.StoredType, int64(replyTo), payload.ClientMsgID)
+		if err != nil {
+			return nil, err
+		}
+		return &savedMessageResult{ID: id, Duplicate: duplicate}, nil
+	}
+
+	var (
+		id  int64
+		err error
+	)
 	if len(payload.ContentBlocks) > 0 {
 		mode := payload.Mode
 		if mode == "" {
 			mode = "code"
 		}
-		return db.SaveMessageWithBlocks(topicID, uid, payload.StoredContent, payload.ContentBlocks, mode, payload.Role, payload.StoredType)
+		id, err = db.SaveMessageWithBlocks(topicID, uid, payload.StoredContent, payload.ContentBlocks, mode, payload.Role, payload.StoredType)
+	} else if replyTo > 0 {
+		id, err = db.SaveMessageWithReply(topicID, uid, payload.StoredContent, payload.StoredType, int64(replyTo))
+	} else {
+		id, err = db.SaveMessage(topicID, uid, payload.StoredContent, payload.StoredType)
 	}
-	if replyTo > 0 {
-		return db.SaveMessageWithReply(topicID, uid, payload.StoredContent, payload.StoredType, int64(replyTo))
+	if err != nil {
+		return nil, err
 	}
-	return db.SaveMessage(topicID, uid, payload.StoredContent, payload.StoredType)
+	return &savedMessageResult{ID: id}, nil
 }
 
 func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, payload *normalizedMessagePayload, msgID int64, exclude *Client) {
@@ -247,11 +295,23 @@ func normalizeMessageRequest(req *SendMessageRequest) (*normalizedMessagePayload
 		DisplayContent: displayContent,
 		StoredType:     normalizeStoredMsgType(displayType),
 		DisplayType:    displayType,
+		ClientMsgID:    normalizeClientMsgID(req.ClientMsgID, req.Metadata),
 		ContentBlocks:  blocks,
 		Metadata:       req.Metadata,
 		Mode:           mode,
 		Role:           role,
 	}, nil
+}
+
+func normalizeClientMsgID(raw string, metadata map[string]interface{}) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		value = firstMetadataString(metadata, "client_msg_id", "clientMessageId", "client_message_id")
+	}
+	if len(value) > 128 {
+		value = value[:128]
+	}
+	return value
 }
 
 func normalizeRawContent(raw json.RawMessage) (string, interface{}) {
