@@ -20,7 +20,7 @@ sudo install -o root -g root -m 644 deploy/tencent/nginx/catscompany-api.conf /e
 sudo nginx -t
 ```
 
-Enable during cutover:
+Enable on the host:
 
 ```bash
 sudo ln -sfn /etc/nginx/sites-available/catscompany-app /etc/nginx/sites-enabled/catscompany-app
