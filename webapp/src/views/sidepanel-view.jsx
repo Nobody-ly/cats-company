@@ -22,13 +22,15 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const loadAll = async () => {
     try {
       const [resC, resF, resG, resP, resB] = await Promise.all([
-        api.getConversations().catch(()=>({})),
+        api.getConversations().catch((error) => ({ error })),
         api.getFriends().catch(()=>({})),
         api.getGroups().catch(()=>({})),
         api.getPendingRequests().catch(()=>({})),
         api.getMyBots().catch(()=>({}))
       ]);
-      const conversations = (resC.conversations || []).map((item) => ({
+      const groups = resG.groups || [];
+      const conversationItems = resC.conversations || [];
+      const conversations = conversationItems.map((item) => ({
         id: item.id,
         friendId: item.friend_id,
         groupId: item.group_id,
@@ -41,9 +43,16 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
         isOnline: item.is_online,
         seq: item.latest_seq || 0,
       }));
-      setChats(conversations);
-      setFriends(resF.friends || []);
-      setGroups(resG.groups || []);
+      const friends = resF.friends || [];
+      const fallbackConversations = resC.error
+        ? [...groups.map(groupToConversation), ...friends.map((friend) => friendToConversation(user.uid, friend))]
+        : [];
+      setChats(resC.error ? fallbackConversations : conversations);
+      setFriends(friends);
+      setGroups(groups);
+      if (resC.error) {
+        console.error('Failed to load conversations, falling back to groups:', resC.error);
+      }
       setPending(resP.requests || []);
       setBots(resB.bots || []);
     } catch (e) {
@@ -102,7 +111,27 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
     return () => unsub();
   }, []);
 
-  const handleGroupCreated = () => loadAll();
+  const handleGroupCreated = (created) => {
+    const group = normalizeCreatedGroup(created);
+    if (group) {
+      const topicId = created.topic || `grp_${group.id}`;
+      setChats((prev) => [
+        {
+          id: topicId,
+          groupId: group.id,
+          name: group.name,
+          preview: '',
+          time: formatTime(new Date(group.created_at || Date.now())),
+          isGroup: true,
+          avatar_url: group.avatar_url,
+          seq: 0,
+        },
+        ...prev.filter((chat) => chat.id !== topicId),
+      ]);
+      setGroups((prev) => [group, ...prev.filter((item) => String(item.id) !== String(group.id))]);
+    }
+    loadAll();
+  };
   const handleAccept = async (userId) => { await api.acceptFriend(userId); loadAll(); };
   const handleReject = async (userId) => { await api.rejectFriend(userId); loadAll(); };
   const groupOwnerById = new Map(groups.map((group) => [String(group.id), String(group.owner_id)]));
@@ -315,6 +344,49 @@ function formatTime(date) {
   const h = date.getHours().toString().padStart(2, '0');
   const m = date.getMinutes().toString().padStart(2, '0');
   return `${h}:${m}`;
+}
+
+function normalizeCreatedGroup(created) {
+  if (!created) return null;
+  const rawGroup = created.group || {};
+  const id = rawGroup.id || created.group_id;
+  const name = rawGroup.name || created.name;
+  if (!id || !name) return null;
+  return {
+    ...rawGroup,
+    id,
+    name,
+    owner_id: rawGroup.owner_id,
+    avatar_url: rawGroup.avatar_url || created.avatar_url || '',
+    created_at: rawGroup.created_at || created.created_at || new Date().toISOString(),
+  };
+}
+
+function groupToConversation(group) {
+  return {
+    id: `grp_${group.id}`,
+    groupId: group.id,
+    name: group.name,
+    preview: '',
+    time: group.created_at ? formatTime(new Date(group.created_at)) : '',
+    isGroup: true,
+    avatar_url: group.avatar_url,
+    seq: 0,
+  };
+}
+
+function friendToConversation(currentUid, friend) {
+  return {
+    id: p2pTopicId(currentUid, friend.id),
+    friendId: friend.id,
+    name: friend.display_name || friend.username,
+    preview: '',
+    time: '',
+    isGroup: false,
+    avatar_url: friend.avatar_url,
+    isBot: friend.bot,
+    seq: 0,
+  };
 }
 
 function summarizeMessage(message) {

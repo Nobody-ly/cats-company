@@ -88,6 +88,42 @@ func TestBuildGroupConversationSummary_UsesLatestMessageWhenAvailable(t *testing
 	}
 }
 
+// TestBuildGroupConversationSummary_UsesCreatedAtWhenLatestIsOlder 测试：
+// 如果群组最新消息时间早于创建时间，仍使用 created_at 作为排序时间
+func TestBuildGroupConversationSummary_UsesCreatedAtWhenLatestIsOlder(t *testing.T) {
+	groupCreatedAt := time.Now()
+	messageTime := groupCreatedAt.Add(-10 * time.Minute)
+
+	group := &types.Group{
+		ID:        3,
+		Name:      "New Topic",
+		OwnerID:   100,
+		CreatedAt: groupCreatedAt,
+	}
+
+	latestMsg := &types.Message{
+		ID:        1000,
+		CreatedAt: messageTime,
+		Content:   "Older message",
+		MsgType:   "text",
+	}
+
+	summary := buildGroupConversationSummary("grp_3", group, latestMsg)
+
+	if summary.LastTime == nil {
+		t.Fatal("LastTime should not be nil")
+	}
+	if !summary.LastTime.Equal(groupCreatedAt) {
+		t.Fatalf("expected LastTime=%v (group created time), got %v", groupCreatedAt, summary.LastTime)
+	}
+	if summary.Preview != "Older message" {
+		t.Fatalf("expected Preview=Older message, got %s", summary.Preview)
+	}
+	if summary.LatestSeq != 1000 {
+		t.Fatalf("expected LatestSeq=1000, got %d", summary.LatestSeq)
+	}
+}
+
 // TestConversationLess_NoMessagesGroupAtTop 测试：
 // 验证无消息群组按创建时间降序排列（越新越靠前），复用实际排序函数
 func TestConversationLess_NoMessagesGroupAtTop(t *testing.T) {
@@ -127,6 +163,63 @@ func TestConversationLess_NoMessagesGroupAtTop(t *testing.T) {
 	// 验证排序结果：新群在前
 	if conversations[0].GroupID != 11 {
 		t.Fatalf("expected newer group first, got groupID=%d", conversations[0].GroupID)
+	}
+}
+
+// TestConversationLess_SameCreatedAtUsesGroupIDDesc 测试：
+// MySQL 时间戳可能只有秒级精度，同一秒创建的群应使用 ID 确定新群优先
+func TestConversationLess_SameCreatedAtUsesGroupIDDesc(t *testing.T) {
+	createdAt := time.Now().Truncate(time.Second)
+
+	olderIDGroup := buildGroupConversationSummary("grp_30", &types.Group{
+		ID:        30,
+		Name:      "Older ID",
+		OwnerID:   100,
+		CreatedAt: createdAt,
+	}, nil)
+	newerIDGroup := buildGroupConversationSummary("grp_31", &types.Group{
+		ID:        31,
+		Name:      "Newer ID",
+		OwnerID:   100,
+		CreatedAt: createdAt,
+	}, nil)
+
+	conversations := []*types.ConversationSummary{olderIDGroup, newerIDGroup}
+	sort.SliceStable(conversations, conversationLess(conversations))
+
+	if conversations[0].GroupID != 31 {
+		t.Fatalf("expected higher group ID first when timestamps tie, got GroupID=%d", conversations[0].GroupID)
+	}
+}
+
+// TestConversationLess_SameTimePrefersGroup 测试：
+// 同秒情况下，新话题应优先浮到会话区顶部，避免创建后看起来仍在底部
+func TestConversationLess_SameTimePrefersGroup(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	groupSummary := buildGroupConversationSummary("grp_40", &types.Group{
+		ID:        40,
+		Name:      "New Topic",
+		OwnerID:   100,
+		CreatedAt: now,
+	}, nil)
+	friendSummary := buildFriendConversationSummary("p2p_100_200", &types.User{
+		ID:          200,
+		DisplayName: "Friend",
+		Username:    "friend",
+	}, &types.Message{
+		ID:        999,
+		TopicID:   "p2p_100_200",
+		FromUID:   200,
+		Content:   "Same second",
+		MsgType:   "text",
+		CreatedAt: now,
+	}, nil)
+
+	conversations := []*types.ConversationSummary{friendSummary, groupSummary}
+	sort.SliceStable(conversations, conversationLess(conversations))
+
+	if conversations[0].GroupID != 40 {
+		t.Fatalf("expected group first when timestamps tie, got %#v", conversations[0])
 	}
 }
 

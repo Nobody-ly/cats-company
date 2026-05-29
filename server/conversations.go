@@ -90,12 +90,19 @@ func buildGroupConversationSummary(topicID string, group *types.Group, latest *t
 		AvatarURL: group.AvatarURL,
 	}
 	applyLatestMessage(summary, latest)
-	// 当没有最新消息时，使用群组创建时间，确保新群排在顶部
-	if summary.LastTime == nil {
-		t := group.CreatedAt // 局部变量拷贝，避免悬挂指针
-		summary.LastTime = &t
-	}
+	applyGroupCreatedTime(summary, group)
 	return summary
+}
+
+func applyGroupCreatedTime(summary *types.ConversationSummary, group *types.Group) {
+	if summary == nil || group == nil || group.CreatedAt.IsZero() {
+		return
+	}
+	if summary.LastTime != nil && !group.CreatedAt.After(*summary.LastTime) {
+		return
+	}
+	t := group.CreatedAt
+	summary.LastTime = &t
 }
 
 func applyLatestMessage(summary *types.ConversationSummary, latest *types.Message) {
@@ -187,9 +194,28 @@ func conversationLess(items []*types.ConversationSummary) func(int, int) bool {
 		case right == nil:
 			return true
 		default:
+			if left.Equal(*right) {
+				return conversationTieLess(items[i], items[j])
+			}
 			return left.After(*right)
 		}
 	}
+}
+
+func conversationTieLess(left, right *types.ConversationSummary) bool {
+	if left == nil || right == nil {
+		return right != nil
+	}
+	if left.IsGroup != right.IsGroup {
+		return left.IsGroup
+	}
+	if left.IsGroup {
+		return left.GroupID > right.GroupID
+	}
+	if left.FriendID != right.FriendID {
+		return left.FriendID > right.FriendID
+	}
+	return left.ID > right.ID
 }
 
 func formatInt64(v int64) string {

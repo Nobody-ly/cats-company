@@ -24,6 +24,10 @@ func (a *Adapter) CreateSchema() error {
 		migrateBotConfigAddTenantName,
 		migrateMessagesAddCodeMode,
 		migrateMessagesAddClientMsgID,
+		migrateGroupsAddCreatedAtColumn,
+		migrateGroupsBackfillCreatedAt,
+		migrateGroupsCreatedAtDefault,
+		migrateGroupsCreatedAtNotNull,
 		migrateGroupsAddAnnouncement,
 		migrateGroupMembersAddMuted,
 		createUsersIndexes,
@@ -203,6 +207,19 @@ ALTER TABLE messages
   ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT NULL;
 `
 const migrateMessagesAddClientMsgID = `ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_msg_id VARCHAR(128) DEFAULT NULL;`
+const migrateGroupsAddCreatedAtColumn = `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NULL;`
+const migrateGroupsBackfillCreatedAt = `
+UPDATE "groups" g
+SET created_at = COALESCE(
+  g.created_at,
+  (SELECT t.created_at FROM topics t WHERE t.id = 'grp_' || g.id::text),
+  (SELECT MIN(gm.joined_at) FROM group_members gm WHERE gm.group_id = g.id),
+  CURRENT_TIMESTAMP
+)
+WHERE g.created_at IS NULL;
+`
+const migrateGroupsCreatedAtDefault = `ALTER TABLE "groups" ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`
+const migrateGroupsCreatedAtNotNull = `ALTER TABLE "groups" ALTER COLUMN created_at SET NOT NULL;`
 const migrateGroupsAddAnnouncement = `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS announcement TEXT DEFAULT NULL;`
 const migrateGroupMembersAddMuted = `ALTER TABLE group_members ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT FALSE;`
 

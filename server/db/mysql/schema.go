@@ -37,6 +37,9 @@ func (a *Adapter) CreateSchema() error {
 		migrateMessagesAddCodeMode,
 		migrateMessagesAddClientMsgID,
 		migrateMessagesAddClientMsgIDIndex,
+		migrateGroupsAddCreatedAtColumn,
+		migrateGroupsBackfillCreatedAt,
+		migrateGroupsCreatedAtNotNull,
 		migrateGroupsAddAnnouncement,
 		migrateGroupMembersAddMuted,
 		migrateFriendsAddFromStatusIndex,
@@ -263,6 +266,27 @@ ALTER TABLE messages ADD COLUMN client_msg_id VARCHAR(128) DEFAULT NULL;
 // Migration: add a retry deduplication index for client-generated ids.
 const migrateMessagesAddClientMsgIDIndex = `
 ALTER TABLE messages ADD UNIQUE KEY uk_messages_client_msg_id (topic_id, from_uid, client_msg_id);
+`
+
+// Migration: add and backfill created_at for legacy groups tables.
+const migrateGroupsAddCreatedAtColumn = `
+ALTER TABLE ` + "`groups`" + ` ADD COLUMN created_at TIMESTAMP NULL DEFAULT NULL;
+`
+
+const migrateGroupsBackfillCreatedAt = `
+UPDATE ` + "`groups`" + ` g
+LEFT JOIN topics t ON t.id = CONCAT('grp_', g.id)
+LEFT JOIN (
+    SELECT group_id, MIN(joined_at) AS first_joined_at
+    FROM group_members
+    GROUP BY group_id
+) gm ON gm.group_id = g.id
+SET g.created_at = COALESCE(g.created_at, t.created_at, gm.first_joined_at, CURRENT_TIMESTAMP)
+WHERE g.created_at IS NULL;
+`
+
+const migrateGroupsCreatedAtNotNull = `
+ALTER TABLE ` + "`groups`" + ` MODIFY COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
 `
 
 // Migration: add group announcement support.
