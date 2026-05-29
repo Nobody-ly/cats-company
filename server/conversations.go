@@ -62,20 +62,7 @@ func (h *ConversationHandler) HandleList(w http.ResponseWriter, r *http.Request)
 		conversations = append(conversations, summary)
 	}
 
-	sort.SliceStable(conversations, func(i, j int) bool {
-		left := conversations[i].LastTime
-		right := conversations[j].LastTime
-		switch {
-		case left == nil && right == nil:
-			return conversations[i].Name < conversations[j].Name
-		case left == nil:
-			return false
-		case right == nil:
-			return true
-		default:
-			return left.After(*right)
-		}
-	})
+	sort.SliceStable(conversations, conversationLess(conversations))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"conversations": conversations})
 }
@@ -184,6 +171,25 @@ func displayNameOrUsername(displayName, username string) string {
 		return displayName
 	}
 	return username
+}
+
+// conversationLess returns a sort comparison function for ConversationSummary slices.
+// Conversations are sorted by LastTime descending; nil LastTime items sink to the bottom.
+func conversationLess(items []*types.ConversationSummary) func(int, int) bool {
+	return func(i, j int) bool {
+		left := items[i].LastTime
+		right := items[j].LastTime
+		switch {
+		case left == nil && right == nil:
+			return items[i].Name < items[j].Name
+		case left == nil:
+			return false
+		case right == nil:
+			return true
+		default:
+			return left.After(*right)
+		}
+	}
 }
 
 func formatInt64(v int64) string {

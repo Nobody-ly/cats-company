@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -87,11 +88,9 @@ func TestBuildGroupConversationSummary_UsesLatestMessageWhenAvailable(t *testing
 	}
 }
 
-// TestHandleList_NoMessagesGroupAtTop 测试：
-// 验证无消息群组按创建时间降序排列（越新越靠前）
-func TestHandleList_NoMessagesGroupAtTop(t *testing.T) {
-	// 这个测试需要完整的 handler 和 mock store
-	// 这里用单元测试验证 buildGroupConversationSummary 的行为
+// TestConversationLess_NoMessagesGroupAtTop 测试：
+// 验证无消息群组按创建时间降序排列（越新越靠前），复用实际排序函数
+func TestConversationLess_NoMessagesGroupAtTop(t *testing.T) {
 	now := time.Now()
 
 	// 创建两个群：一个早，一个晚
@@ -121,16 +120,9 @@ func TestHandleList_NoMessagesGroupAtTop(t *testing.T) {
 		t.Fatal("newer group should have later LastTime")
 	}
 
-	// 模拟排序逻辑
+	// 使用实际排序函数
 	conversations := []*types.ConversationSummary{olderSummary, newerSummary}
-	// 按时间降序排列
-	for i := 0; i < len(conversations)-1; i++ {
-		for j := i + 1; j < len(conversations); j++ {
-			if conversations[i].LastTime.Before(*conversations[j].LastTime) {
-				conversations[i], conversations[j] = conversations[j], conversations[i]
-			}
-		}
-	}
+	sort.SliceStable(conversations, conversationLess(conversations))
 
 	// 验证排序结果：新群在前
 	if conversations[0].GroupID != 11 {
@@ -138,9 +130,9 @@ func TestHandleList_NoMessagesGroupAtTop(t *testing.T) {
 	}
 }
 
-// TestHandleList_MixedWithP2P 测试：
-// 验证无消息群组 vs 无消息 P2P 会话的排序
-func TestHandleList_MixedWithP2P(t *testing.T) {
+// TestConversationLess_MixedWithP2P 测试：
+// 验证无消息群组 vs 无消息 P2P 会话的排序，复用实际排序函数
+func TestConversationLess_MixedWithP2P(t *testing.T) {
 	now := time.Now()
 
 	// 无消息群组
@@ -170,27 +162,12 @@ func TestHandleList_MixedWithP2P(t *testing.T) {
 		t.Fatal("P2P LastTime should be nil when no messages")
 	}
 
-	// 模拟排序：无消息的群会排在无消息的 P2P 前面（因为 nil 会排在后面）
+	// 使用实际排序函数
 	conversations := []*types.ConversationSummary{friendSummary, groupSummary}
-	// 应用 HandleList 的排序逻辑
-	for i := 0; i < len(conversations)-1; i++ {
-		for j := i + 1; j < len(conversations); j++ {
-			left := conversations[i].LastTime
-			right := conversations[j].LastTime
-			// nil 会排在后面
-			if left == nil && right != nil {
-				conversations[i], conversations[j] = conversations[j], conversations[i]
-			} else if left != nil && right != nil && left.Before(*right) {
-				conversations[i], conversations[j] = conversations[j], conversations[i]
-			}
-		}
-	}
+	sort.SliceStable(conversations, conversationLess(conversations))
 
-	// 验证群组排在 P2P 前面（这是当前行为）
+	// 验证群组排在 P2P 前面（因为 P2P 的 LastTime 为 nil，会沉到底部）
 	if conversations[0].GroupID != 20 {
 		t.Fatalf("expected empty group first, got GroupID=%d", conversations[0].GroupID)
 	}
 }
-
-// 注：/api/conversations 端点需要 auth context，属于集成测试范畴
-// 排序逻辑在上面 4 个单元测试中已充分覆盖
