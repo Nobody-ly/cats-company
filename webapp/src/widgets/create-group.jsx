@@ -86,7 +86,7 @@ export default function CreateGroup({ onClose, onCreated }) {
         {error && <div style={{ color: '#FA5151', fontSize: 13, marginBottom: 8 }}>{error}</div>}
         <input
           className="oc-auth-input"
-          placeholder="#新的话题"
+          placeholder={t('group_topic_placeholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           style={{ marginBottom: 12 }}
@@ -97,13 +97,13 @@ export default function CreateGroup({ onClose, onCreated }) {
         <div style={{ maxHeight: 280, overflowY: 'auto', marginBottom: 16 }}>
           {userFriends.length > 0 && (
             <>
-              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4 }}>好友</div>
+              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4 }}>{t('group_friends_label')}</div>
               {userFriends.map(renderMember)}
             </>
           )}
           {botFriends.length > 0 && (
             <>
-              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4, marginTop: 8 }}>机器人</div>
+              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4, marginTop: 8 }}>{t('group_bots_label')}</div>
               {botFriends.map(renderMember)}
             </>
           )}
