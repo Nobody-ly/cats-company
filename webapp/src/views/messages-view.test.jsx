@@ -140,4 +140,30 @@ describe('MessagesView composer draft isolation', () => {
 
     expect(container.querySelector('textarea.v3-composer-input').value).toBe('');
   });
+
+  it('grows the composer until it reaches the scroll cap', async () => {
+    await mountTopic(root, 'p2p_1_2');
+
+    const textarea = container.querySelector('textarea.v3-composer-input');
+    let scrollHeight = 128;
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+
+    await act(async () => {
+      typeDraft(textarea, 'line 1\nline 2\nline 3');
+    });
+
+    expect(textarea.style.height).toBe('128px');
+    expect(textarea.style.overflowY).toBe('hidden');
+
+    scrollHeight = 260;
+    await act(async () => {
+      typeDraft(textarea, 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8');
+    });
+
+    expect(textarea.style.height).toBe('220px');
+    expect(textarea.style.overflowY).toBe('auto');
+  });
 });

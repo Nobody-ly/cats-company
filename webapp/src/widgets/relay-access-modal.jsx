@@ -64,6 +64,25 @@ function formatTime(value) {
   return date.toLocaleString();
 }
 
+function extractPlainRelayKey(data) {
+  const key = data?.key;
+  const candidates = typeof key === 'string'
+    ? [key]
+    : [
+        key?.key,
+        key?.value,
+        key?.plain_key,
+        key?.api_key,
+        key?.token,
+        data?.plain_key,
+        data?.api_key,
+        data?.token,
+        data?.key_value,
+      ];
+  const value = candidates.find(item => typeof item === 'string' && item.trim().startsWith('sk-bf-'));
+  return value ? value.trim() : '';
+}
+
 export default function RelayAccessModal({ onClose }) {
   const [config, setConfig] = useState(FALLBACK_CONFIG);
   const [relayKey, setRelayKey] = useState(null);
@@ -163,12 +182,13 @@ export default function RelayAccessModal({ onClose }) {
   const applyKeyResponse = (data) => {
     const nextKey = data?.key || null;
     setRelayKey(nextKey);
-    setPlainKey(nextKey?.key || '');
+    setPlainKey(extractPlainRelayKey(data));
   };
 
   const createKey = async () => {
     setActionLoading('create');
     setError('');
+    setPlainKey('');
     try {
       applyKeyResponse(await api.createRelayKey());
     } catch (err) {
@@ -182,6 +202,7 @@ export default function RelayAccessModal({ onClose }) {
     if (!window.confirm('重新生成后，旧 Key 会立即失效。确定继续吗？')) return;
     setActionLoading('rotate');
     setError('');
+    setPlainKey('');
     try {
       applyKeyResponse(await api.rotateRelayKey());
     } catch (err) {

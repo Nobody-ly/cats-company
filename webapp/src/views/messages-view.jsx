@@ -56,6 +56,20 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const loadingOlderRef = useRef(false);
   const activeTopicRef = useRef(topic);
 
+  const resizeComposerInput = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const maxHeight = 220;
+    textarea.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 44), maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  useEffect(() => {
+    resizeComposerInput();
+  }, [input, resizeComposerInput]);
+
   const clearRuntimePlan = useCallback(() => {
     if (runtimePlanClearTimer.current) {
       clearTimeout(runtimePlanClearTimer.current);

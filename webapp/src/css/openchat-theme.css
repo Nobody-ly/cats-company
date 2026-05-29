@@ -1382,8 +1382,8 @@ body {
 
 .v3-composer-input {
   min-height: 44px;
-  max-height: 200px;
-  overflow-y: auto;
+  max-height: 220px;
+  overflow-y: hidden;
   padding: 12px;
   color: var(--v3-text-main);
   outline: none;
