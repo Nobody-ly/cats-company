@@ -50,8 +50,8 @@ export default function CreateGroup({ onClose, onCreated }) {
     }
   };
 
-  // 鍒嗙粍锛氬ソ鍙?vs 鏈哄櫒浜?  const userFriends = friends.filter(f => f.account_type !== 'bot');
-  const botFriends = friends.filter(f => f.account_type === 'bot');
+  const userFriends = friends.filter(f => !f.bot);
+  const botFriends = friends.filter(f => f.bot);
 
   const renderMember = (f) => (
     <label
@@ -72,7 +72,7 @@ export default function CreateGroup({ onClose, onCreated }) {
         name={f.display_name || f.username}
         src={f.avatar_url}
         size={32}
-        isBot={f.account_type === 'bot'}
+        isBot={f.bot}
         className="oc-contact-avatar"
       />
       <span style={{ fontSize: 14, color: 'var(--v3-text-name)' }}>{f.display_name || f.username}</span>
@@ -86,7 +86,7 @@ export default function CreateGroup({ onClose, onCreated }) {
         {error && <div style={{ color: '#FA5151', fontSize: 13, marginBottom: 8 }}>{error}</div>}
         <input
           className="oc-auth-input"
-          placeholder="#鏂扮殑璇濋"
+          placeholder="#新的话题"
           value={name}
           onChange={(e) => setName(e.target.value)}
           style={{ marginBottom: 12 }}
@@ -97,13 +97,13 @@ export default function CreateGroup({ onClose, onCreated }) {
         <div style={{ maxHeight: 280, overflowY: 'auto', marginBottom: 16 }}>
           {userFriends.length > 0 && (
             <>
-              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4 }}>濂藉弸</div>
+              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4 }}>好友</div>
               {userFriends.map(renderMember)}
             </>
           )}
           {botFriends.length > 0 && (
             <>
-              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4, marginTop: 8 }}>鏈哄櫒浜?/div>
+              <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 4, marginTop: 8 }}>机器人</div>
               {botFriends.map(renderMember)}
             </>
           )}
