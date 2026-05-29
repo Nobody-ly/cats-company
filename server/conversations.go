@@ -103,6 +103,11 @@ func buildGroupConversationSummary(topicID string, group *types.Group, latest *t
 		AvatarURL: group.AvatarURL,
 	}
 	applyLatestMessage(summary, latest)
+	// 当没有最新消息时，使用群组创建时间，确保新群排在顶部
+	if summary.LastTime == nil {
+		t := group.CreatedAt // 局部变量拷贝，避免悬挂指针
+		summary.LastTime = &t
+	}
 	return summary
 }
 
