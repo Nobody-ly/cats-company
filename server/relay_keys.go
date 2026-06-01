@@ -132,6 +132,23 @@ func (h *RelayKeyHandler) HandleRotate(w http.ResponseWriter, r *http.Request) {
 	h.forward(w, r, http.MethodPost, uid, "/rotate", nil)
 }
 
+func (h *RelayKeyHandler) HandleReveal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.admin == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "relay self-service is not configured"})
+		return
+	}
+	uid := UIDFromContext(r.Context())
+	if uid <= 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	h.forward(w, r, http.MethodPost, uid, "/reveal", nil)
+}
+
 func (h *RelayKeyHandler) forward(w http.ResponseWriter, r *http.Request, method string, uid int64, suffix string, body interface{}) {
 	var out relayKeyResponse
 	err := h.admin.Do(r.Context(), method, fmt.Sprintf("/internal/users/%d/key%s", uid, suffix), body, &out)

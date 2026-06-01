@@ -113,6 +113,17 @@ func TestRelayKeyCreateAndRotateProxy(t *testing.T) {
 					Key:    "sk-bf-rotated",
 				},
 			})
+		case r.Method == http.MethodPost && r.URL.Path == "/internal/users/7/key/reveal":
+			writeJSON(w, http.StatusOK, relayKeyResponse{
+				Configured: true,
+				Key: &relayKeyInfo{
+					ID:     "vk-1",
+					Name:   "my key",
+					Prefix: "sk-bf-cu...rent",
+					State:  "active",
+					Key:    "sk-bf-current",
+				},
+			})
 		default:
 			t.Fatalf("unexpected relay admin request: %s %s", r.Method, r.URL.Path)
 		}
@@ -128,6 +139,7 @@ func TestRelayKeyCreateAndRotateProxy(t *testing.T) {
 	keyHandler := NewRelayKeyHandlerFromEnv()
 	createHandler := OwnerMiddlewareWithDB(store)(keyHandler.HandleKey)
 	rotateHandler := OwnerMiddlewareWithDB(store)(keyHandler.HandleRotate)
+	revealHandler := OwnerMiddlewareWithDB(store)(keyHandler.HandleReveal)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/relay/key", strings.NewReader(`{"name":"my key"}`))
 	createReq.Header.Set("Authorization", "Bearer "+userToken)
@@ -157,6 +169,19 @@ func TestRelayKeyCreateAndRotateProxy(t *testing.T) {
 	}
 	if !strings.Contains(rotateRec.Body.String(), "sk-bf-rotated") {
 		t.Fatalf("expected one-time key in rotate response, body=%s", rotateRec.Body.String())
+	}
+
+	revealReq := httptest.NewRequest(http.MethodPost, "/api/relay/key/reveal", nil)
+	revealReq.Header.Set("Authorization", "Bearer "+userToken)
+	revealRec := httptest.NewRecorder()
+
+	revealHandler(revealRec, revealReq)
+
+	if revealRec.Code != http.StatusOK {
+		t.Fatalf("reveal status=%d body=%s", revealRec.Code, revealRec.Body.String())
+	}
+	if !strings.Contains(revealRec.Body.String(), "sk-bf-current") {
+		t.Fatalf("expected current key in reveal response, body=%s", revealRec.Body.String())
 	}
 }
 

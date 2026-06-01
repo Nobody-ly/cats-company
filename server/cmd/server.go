@@ -352,6 +352,7 @@ func main() {
 	mux.HandleFunc("/api/relay/session", ownerAuthWithDB(relayConfigHandler.HandleSession))
 	mux.HandleFunc("/api/relay/key", ownerAuthWithDB(relayKeyHandler.HandleKey))
 	mux.HandleFunc("/api/relay/key/rotate", ownerAuthWithDB(relayKeyHandler.HandleRotate))
+	mux.HandleFunc("/api/relay/key/reveal", ownerAuthWithDB(relayKeyHandler.HandleReveal))
 
 	// Online status API
 	mux.HandleFunc("/api/users/online", jwtAuthWithDB(func(w http.ResponseWriter, r *http.Request) {

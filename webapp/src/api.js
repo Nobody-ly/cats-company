@@ -127,6 +127,7 @@ export const api = {
   getRelayKey: () => request('GET', '/api/relay/key'),
   createRelayKey: (name) => request('POST', '/api/relay/key', name ? { name } : {}),
   rotateRelayKey: () => request('POST', '/api/relay/key/rotate', {}),
+  revealRelayKey: () => request('POST', '/api/relay/key/reveal', {}),
   revokeRelayKey: () => request('DELETE', '/api/relay/key'),
 
   getOnlineStatus: () => request('GET', '/api/users/online'),

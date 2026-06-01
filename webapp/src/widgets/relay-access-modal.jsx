@@ -212,6 +212,23 @@ export default function RelayAccessModal({ onClose }) {
     }
   };
 
+  const revealKey = async () => {
+    setActionLoading('reveal');
+    setError('');
+    try {
+      const data = await api.revealRelayKey();
+      applyKeyResponse(data);
+      const revealed = extractPlainRelayKey(data);
+      if (revealed) {
+        await copyText('plain-key', revealed);
+      }
+    } catch (err) {
+      setError(err.message || '显示 Key 失败');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const revokeKey = async () => {
     if (!window.confirm('撤销后，当前 Key 会失效。确定撤销吗？')) return;
     setActionLoading('revoke');
@@ -370,7 +387,7 @@ export default function RelayAccessModal({ onClose }) {
                   <div className="relay-access-secret-box">
                     <AlertTriangle size={16} />
                     <div>
-                      <div>Key 明文只显示这一次，关闭窗口后无法再次查看。</div>
+                      <div>Key 明文已显示并可复制，请只放在你信任的客户端里。</div>
                       <code>{plainKey}</code>
                     </div>
                     <button type="button" onClick={() => copyText('plain-key', plainKey)}>
@@ -381,6 +398,10 @@ export default function RelayAccessModal({ onClose }) {
                 )}
 
                 <div className="relay-access-key-actions">
+                  <button type="button" disabled={busy} onClick={revealKey}>
+                    <Copy size={15} />
+                    {actionLoading === 'reveal' ? '显示中...' : '显示并复制'}
+                  </button>
                   <button type="button" disabled={busy} onClick={rotateKey}>
                     <RotateCcw size={15} />
                     {actionLoading === 'rotate' ? '重新生成中...' : '重新生成'}
