@@ -84,6 +84,11 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       clearTimeout(runtimePlanClearTimer.current);
       runtimePlanClearTimer.current = null;
     }
+    if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
+      runtimePlanRef.current = null;
+      setRuntimePlan(null);
+      return;
+    }
     runtimePlanRef.current = plan;
     setRuntimePlan(plan);
   }, []);
@@ -1261,7 +1266,6 @@ function normalizeRuntimePlan(content) {
       status: normalizePlanStatus(step?.status),
     }))
     .filter((step) => step.text);
-  if (steps.length === 0) return null;
   return {
     revision: Number(value.revision || 0),
     updatedAt: Number(value.updatedAt || value.updated_at || Date.now()),

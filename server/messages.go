@@ -475,7 +475,7 @@ func isTransientRuntimePayload(payload *normalizedMessagePayload) bool {
 	if payload == nil {
 		return false
 	}
-	return payload.DisplayType == "runtime_plan" && metadataBool(payload.Metadata, "transient")
+	return payload.DisplayType == "runtime_plan"
 }
 
 func isStructuredDisplayType(displayType string) bool {

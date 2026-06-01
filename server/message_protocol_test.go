@@ -86,6 +86,24 @@ func TestRuntimePlanMessageIsTransient(t *testing.T) {
 	}
 }
 
+func TestRuntimePlanMessageIsTransientWithoutMetadata(t *testing.T) {
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_1_2",
+		Type:    "runtime_plan",
+		Content: json.RawMessage(`{"revision":2,"steps":[],"updatedAt":1780295905379}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize empty runtime plan: %v", err)
+	}
+
+	if !isTransientRuntimePayload(payload) {
+		t.Fatalf("runtime_plan should not be stored even without transient metadata")
+	}
+	if payload.StoredContent == "" {
+		t.Fatalf("StoredContent should keep payload for fanout")
+	}
+}
+
 func TestContentBlocksKeepAttachmentPayload(t *testing.T) {
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
 		TopicID: "grp_80",
