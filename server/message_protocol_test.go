@@ -116,6 +116,51 @@ func TestContentBlocksKeepAttachmentPayload(t *testing.T) {
 	}
 }
 
+func TestMessagePayloadStripsNullBytesBeforeStore(t *testing.T) {
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID:     "grp_80",
+		Type:        "text\x00",
+		Content:     json.RawMessage(`"hello\u0000world"`),
+		ClientMsgID: "client\x00id",
+		Metadata: map[string]interface{}{
+			"client_msg_id": "metadata\x00id",
+			"nested": map[string]interface{}{
+				"text": "meta\x00value",
+			},
+		},
+		ContentBlocks: []types.ContentBlock{
+			{Type: "text", Text: "block\x00text"},
+			{
+				Type: "tool_use",
+				ID:   "call\x001",
+				Name: "read\x00file",
+				Input: map[string]interface{}{
+					"path": "a\x00.txt",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+
+	if payload.StoredContent != "helloworld" || payload.DisplayContent != "helloworld" {
+		t.Fatalf("content was not sanitized: stored=%q display=%q", payload.StoredContent, payload.DisplayContent)
+	}
+	if payload.DisplayType != "text" || payload.ClientMsgID != "clientid" {
+		t.Fatalf("top-level fields were not sanitized: type=%q client=%q", payload.DisplayType, payload.ClientMsgID)
+	}
+	if payload.Metadata["nested"].(map[string]interface{})["text"] != "metavalue" {
+		t.Fatalf("metadata was not sanitized: %#v", payload.Metadata)
+	}
+	if payload.ContentBlocks[0].Text != "blocktext" || payload.ContentBlocks[1].ID != "call1" {
+		t.Fatalf("content blocks were not sanitized: %#v", payload.ContentBlocks)
+	}
+	if payload.ContentBlocks[1].Input["path"] != "a.txt" {
+		t.Fatalf("content block input was not sanitized: %#v", payload.ContentBlocks[1].Input)
+	}
+}
+
 func TestClientMessageIDNormalizesFromTopLevelAndMetadata(t *testing.T) {
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
 		TopicID:     "p2p_1_2",

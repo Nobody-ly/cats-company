@@ -353,7 +353,7 @@ func normalizeMessageRequest(req *SendMessageRequest) (*normalizedMessagePayload
 	}
 
 	storedContent, displayContent := normalizeRawContent(req.Content)
-	displayType := firstNonEmpty(strings.TrimSpace(req.Type), strings.TrimSpace(req.MsgType))
+	displayType := stripMessageNullBytes(firstNonEmpty(strings.TrimSpace(req.Type), strings.TrimSpace(req.MsgType)))
 	if displayType == "" {
 		displayType = inferDisplayTypeFromContent(displayContent)
 	}
@@ -361,11 +361,12 @@ func normalizeMessageRequest(req *SendMessageRequest) (*normalizedMessagePayload
 		displayType = "text"
 	}
 
-	blocks := req.ContentBlocks
-	mode := strings.TrimSpace(req.Mode)
-	role := strings.TrimSpace(req.Role)
+	blocks := sanitizeContentBlocks(req.ContentBlocks)
+	metadata := sanitizeMessageMap(req.Metadata)
+	mode := stripMessageNullBytes(strings.TrimSpace(req.Mode))
+	role := stripMessageNullBytes(strings.TrimSpace(req.Role))
 	if len(blocks) == 0 && isStructuredDisplayType(displayType) {
-		blocks = buildStructuredContentBlocks(displayType, displayContent, req.Metadata)
+		blocks = buildStructuredContentBlocks(displayType, displayContent, metadata)
 		if mode == "" {
 			mode = "code"
 		}
@@ -383,16 +384,16 @@ func normalizeMessageRequest(req *SendMessageRequest) (*normalizedMessagePayload
 		DisplayContent: displayContent,
 		StoredType:     normalizeStoredMsgType(displayType),
 		DisplayType:    displayType,
-		ClientMsgID:    normalizeClientMsgID(req.ClientMsgID, req.Metadata),
+		ClientMsgID:    normalizeClientMsgID(req.ClientMsgID, metadata),
 		ContentBlocks:  blocks,
-		Metadata:       req.Metadata,
+		Metadata:       metadata,
 		Mode:           mode,
 		Role:           role,
 	}, nil
 }
 
 func normalizeClientMsgID(raw string, metadata map[string]interface{}) string {
-	value := strings.TrimSpace(raw)
+	value := strings.TrimSpace(stripMessageNullBytes(raw))
 	if value == "" {
 		value = firstMetadataString(metadata, "client_msg_id", "clientMessageId", "client_message_id")
 	}
@@ -412,15 +413,17 @@ func normalizeRawContent(raw json.RawMessage) (string, interface{}) {
 	if err := json.Unmarshal(raw, &parsed); err == nil {
 		switch value := parsed.(type) {
 		case string:
-			return value, value
+			sanitized := stripMessageNullBytes(value)
+			return sanitized, sanitized
 		case nil:
 			return "", ""
 		default:
-			return trimmed, value
+			return stripMessageNullBytes(trimmed), sanitizeMessageValue(value)
 		}
 	}
 
-	return trimmed, trimmed
+	sanitized := stripMessageNullBytes(trimmed)
+	return sanitized, sanitized
 }
 
 func decodeStoredContent(content string) interface{} {
@@ -511,17 +514,72 @@ func buildStructuredContentBlocks(displayType string, content interface{}, metad
 func normalizeContentText(content interface{}) string {
 	switch value := content.(type) {
 	case string:
-		return value
+		return stripMessageNullBytes(value)
 	case map[string]interface{}:
 		if text, ok := value["text"].(string); ok {
-			return text
+			return stripMessageNullBytes(text)
 		}
 		bytes, _ := json.Marshal(value)
-		return string(bytes)
+		return stripMessageNullBytes(string(bytes))
 	default:
 		bytes, _ := json.Marshal(value)
-		return string(bytes)
+		return stripMessageNullBytes(string(bytes))
 	}
+}
+
+func stripMessageNullBytes(value string) string {
+	if strings.IndexByte(value, 0) < 0 {
+		return value
+	}
+	return strings.ReplaceAll(value, "\x00", "")
+}
+
+func sanitizeMessageValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case string:
+		return stripMessageNullBytes(typed)
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for i, item := range typed {
+			out[i] = sanitizeMessageValue(item)
+		}
+		return out
+	case map[string]interface{}:
+		return sanitizeMessageMap(typed)
+	default:
+		return value
+	}
+}
+
+func sanitizeMessageMap(input map[string]interface{}) map[string]interface{} {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		out[stripMessageNullBytes(key)] = sanitizeMessageValue(value)
+	}
+	return out
+}
+
+func sanitizeContentBlocks(blocks []types.ContentBlock) []types.ContentBlock {
+	if len(blocks) == 0 {
+		return blocks
+	}
+	out := make([]types.ContentBlock, len(blocks))
+	for i, block := range blocks {
+		out[i] = block
+		out[i].Type = stripMessageNullBytes(block.Type)
+		out[i].Text = stripMessageNullBytes(block.Text)
+		out[i].Thinking = stripMessageNullBytes(block.Thinking)
+		out[i].Payload = sanitizeMessageMap(block.Payload)
+		out[i].ID = stripMessageNullBytes(block.ID)
+		out[i].Name = stripMessageNullBytes(block.Name)
+		out[i].Input = sanitizeMessageMap(block.Input)
+		out[i].ToolUseID = stripMessageNullBytes(block.ToolUseID)
+		out[i].Content = stripMessageNullBytes(block.Content)
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {
