@@ -176,6 +176,22 @@ func (a *Adapter) EnsureBotBodyBinding(botUID int64, bodyID string) (string, boo
 	return boundBodyID, boundBodyID == bodyID, nil
 }
 
+// SetBotBodyBinding force-updates the persistent body binding for a bot.
+func (a *Adapter) SetBotBodyBinding(botUID int64, bodyID string) error {
+	if botUID <= 0 || bodyID == "" {
+		return fmt.Errorf("invalid bot body binding")
+	}
+	if _, err := a.db.Exec(
+		`UPDATE bot_config
+		 SET body_id = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE user_id = ?`,
+		bodyID, botUID,
+	); err != nil {
+		return fmt.Errorf("set bot body binding: %w", err)
+	}
+	return nil
+}
+
 // GetBotBodyID returns the persistent body binding for a bot.
 func (a *Adapter) GetBotBodyID(botUID int64) (string, error) {
 	var bodyID string

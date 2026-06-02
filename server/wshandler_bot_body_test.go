@@ -44,6 +44,17 @@ func (s *wsBotBodyStore) EnsureBotBodyBinding(botUID int64, bodyID string) (stri
 	return s.bodyID, s.bodyID == bodyID, nil
 }
 
+func (s *wsBotBodyStore) SetBotBodyBinding(botUID int64, bodyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if botUID != s.botUID {
+		return errors.New("bot not found")
+	}
+	s.bodyID = bodyID
+	return nil
+}
+
 func (s *wsBotBodyStore) GetBotBodyID(botUID int64) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,7 +237,7 @@ func TestServeWSRejectsDifferentActiveBotBody(t *testing.T) {
 	}
 }
 
-func TestServeWSAllowsSameBodyReconnectAndRejectsDifferentBodyAfterDisconnect(t *testing.T) {
+func TestServeWSAllowsSameBodyReconnectAndRebindsDifferentBodyAfterDisconnect(t *testing.T) {
 	botUID := int64(44)
 	apiKey := GenerateAPIKey(botUID)
 	wsURL, hub, cleanup := newBotBodyTestServer(apiKey, botUID)
@@ -257,14 +268,14 @@ func TestServeWSAllowsSameBodyReconnectAndRejectsDifferentBodyAfterDisconnect(t 
 
 	next, resp, err := dialBotBody(wsURL, apiKey, "body-b")
 	closeResponse(resp)
-	if next != nil {
-		next.Close()
+	if err != nil {
+		t.Fatalf("expected inactive persistent body binding to rebind automatically: %v", err)
 	}
-	if err == nil {
-		t.Fatal("expected persistent body binding to reject a different body after disconnect")
-	}
-	if resp == nil || resp.StatusCode != http.StatusConflict {
-		t.Fatalf("different body after disconnect status = %v, want 409", responseStatus(resp))
+	defer next.Close()
+	waitForClientCount(t, hub, botUID, 1)
+	store := hub.db.(*wsBotBodyStore)
+	if got, err := store.GetBotBodyID(botUID); err != nil || got != "body-b" {
+		t.Fatalf("body binding after auto rebind = %q, %v; want body-b", got, err)
 	}
 }
 
