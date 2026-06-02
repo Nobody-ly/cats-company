@@ -74,6 +74,7 @@ function typeDraft(textarea, value) {
 describe('MessagesView composer draft isolation', () => {
   let container;
   let root;
+  let wsHandler;
 
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true;
@@ -81,7 +82,11 @@ describe('MessagesView composer draft isolation', () => {
     api.getFriends.mockResolvedValue({ friends: [] });
     api.getGroupInfo.mockResolvedValue({ members: [], group: null });
     api.sendMessage.mockResolvedValue({ seq_id: 100 });
-    onWSMessage.mockImplementation(() => jest.fn());
+    wsHandler = null;
+    onWSMessage.mockImplementation((handler) => {
+      wsHandler = handler;
+      return jest.fn();
+    });
 
     window.HTMLElement.prototype.scrollIntoView = jest.fn();
     container = document.createElement('div');
@@ -165,5 +170,37 @@ describe('MessagesView composer draft isolation', () => {
 
     expect(textarea.style.height).toBe('220px');
     expect(textarea.style.overflowY).toBe('auto');
+  });
+
+  it('clears peer typing immediately when a peer final reply arrives', async () => {
+    await mountTopic(root, 'p2p_1_2');
+
+    await act(async () => {
+      wsHandler({
+        info: {
+          topic: 'p2p_1_2',
+          what: 'kp',
+          from: 'usr2',
+        },
+      });
+    });
+
+    expect(container.textContent).toContain('输入');
+
+    await act(async () => {
+      wsHandler({
+        data: {
+          seq_id: 22,
+          seq: 22,
+          topic: 'p2p_1_2',
+          from: 'usr2',
+          content: 'done',
+          type: 'text',
+          msg_type: 'text',
+        },
+      });
+    });
+
+    expect(container.textContent).not.toContain('输入');
   });
 });

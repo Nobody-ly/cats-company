@@ -279,6 +279,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           clearRuntimePlan();
         } else if (fromUid !== user.uid && isFinalTextMessage(serverMsg)) {
           clearRuntimePlan();
+          clearTimeout(peerTypingTimer.current);
+          setPeerTyping(false);
         }
         updateTopicSeq(topic, serverMsg.id);
 
