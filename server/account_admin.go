@@ -28,8 +28,8 @@ type AccountAdminUserLookup interface {
 	AccountUserLookup
 	GetUserByUsername(username string) (*types.User, error)
 	GetUserByEmail(email string) (*types.User, error)
-	ListAdminUsers(query string, limit, offset int) ([]*types.User, error)
-	CountAdminUsers(query string) (int, error)
+	ListAdminUsers(query string, accountType types.AccountType, limit, offset int) ([]*types.User, error)
+	CountAdminUsers(query string, accountType types.AccountType) (int, error)
 	SearchUsers(query string, limit int) ([]*types.User, error)
 	UpdateUserState(uid int64, state int) error
 }
@@ -109,14 +109,19 @@ func (h *AccountAdminHandler) HandleUserList(w http.ResponseWriter, r *http.Requ
 		pageSize = 100
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	accountType, ok := parseAccountAdminAccountType(r.URL.Query().Get("account_type"))
+	if !ok {
+		writeAccountAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported account type"})
+		return
+	}
 	offset := (page - 1) * pageSize
 
-	users, err := h.users.ListAdminUsers(query, pageSize, offset)
+	users, err := h.users.ListAdminUsers(query, accountType, pageSize, offset)
 	if err != nil {
 		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
 	}
-	count, err := h.users.CountAdminUsers(query)
+	count, err := h.users.CountAdminUsers(query, accountType)
 	if err != nil {
 		writeAccountAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": "database error"})
 		return
@@ -126,12 +131,13 @@ func (h *AccountAdminHandler) HandleUserList(w http.ResponseWriter, r *http.Requ
 		payload = append(payload, accountUserPayload(user))
 	}
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
-		"users":      payload,
-		"count":      count,
-		"page":       page,
-		"page_size":  pageSize,
-		"total_page": accountAdminTotalPages(count, pageSize),
-		"query":      query,
+		"users":        payload,
+		"count":        count,
+		"page":         page,
+		"page_size":    pageSize,
+		"total_page":   accountAdminTotalPages(count, pageSize),
+		"query":        query,
+		"account_type": string(accountType),
 	})
 }
 
@@ -269,6 +275,19 @@ func parseAccountAdminPositiveInt(raw string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func parseAccountAdminAccountType(raw string) (types.AccountType, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "all":
+		return "", true
+	case string(types.AccountHuman):
+		return types.AccountHuman, true
+	case string(types.AccountBot):
+		return types.AccountBot, true
+	default:
+		return "", false
+	}
 }
 
 func accountAdminTotalPages(count, pageSize int) int {

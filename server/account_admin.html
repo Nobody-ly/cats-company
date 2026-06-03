@@ -96,7 +96,7 @@
     }
 
     #search-form {
-      grid-template-columns: minmax(220px, 1fr) auto auto;
+      grid-template-columns: minmax(220px, 1fr) auto auto auto;
       margin-bottom: 12px;
     }
 
@@ -135,6 +135,37 @@
     button:disabled {
       opacity: 0.55;
       cursor: wait;
+    }
+
+    .account-type-filter {
+      display: inline-flex;
+      align-items: center;
+      height: 44px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .type-filter {
+      height: 34px;
+      padding: 0 12px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 6px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .type-filter:hover {
+      background: rgba(214, 168, 79, 0.08);
+      color: var(--accent-2);
+    }
+
+    .type-filter.active {
+      background: rgba(214, 168, 79, 0.16);
+      color: var(--accent-2);
     }
 
     .hint {
@@ -411,6 +442,17 @@
         width: 100%;
       }
 
+      .account-type-filter {
+        display: flex;
+        width: 100%;
+        margin-top: 12px;
+      }
+
+      .type-filter {
+        flex: 1;
+        margin-top: 0;
+      }
+
       #service-form {
         display: grid;
         gap: 12px;
@@ -460,6 +502,11 @@
       <h2>账号管理</h2>
       <form id="search-form">
         <input id="user-query" name="q" autocomplete="off" placeholder="搜索 UID、用户名、邮箱或昵称；留空显示全部" />
+        <div class="account-type-filter" role="group" aria-label="账号类型筛选">
+          <button class="type-filter active" type="button" data-account-type="all" aria-pressed="true">全部</button>
+          <button class="type-filter" type="button" data-account-type="human" aria-pressed="false">用户</button>
+          <button class="type-filter" type="button" data-account-type="bot" aria-pressed="false">机器人</button>
+        </div>
         <button id="search-button" type="submit">搜索</button>
         <button id="clear-search-button" type="button">显示全部</button>
       </form>
@@ -520,6 +567,7 @@ http://127.0.0.1:26061/local/account-admin</code>
     const userQueryInput = document.querySelector('#user-query');
     const searchButton = document.querySelector('#search-button');
     const clearSearchButton = document.querySelector('#clear-search-button');
+    const accountTypeButtons = Array.from(document.querySelectorAll('[data-account-type]'));
     const searchResult = document.querySelector('#search-result');
     const searchError = document.querySelector('#search-error');
     const userToolbar = document.querySelector('#user-toolbar');
@@ -535,6 +583,7 @@ http://127.0.0.1:26061/local/account-admin</code>
     const serviceList = document.querySelector('#service-list');
     let currentUserPage = 1;
     let currentUserQuery = '';
+    let currentAccountType = 'all';
     const userPageSize = 20;
     const pendingUserStateUIDs = new Set();
 
@@ -572,6 +621,25 @@ http://127.0.0.1:26061/local/account-admin</code>
 
     function stateLabel(state) {
       return Number(state || 0) === 0 ? '正常' : `已禁用(${state})`;
+    }
+
+    function normalizeAccountType(value) {
+      return ['human', 'bot'].includes(value) ? value : 'all';
+    }
+
+    function accountTypeLabel(value) {
+      if (value === 'human') return '用户';
+      if (value === 'bot') return '机器人';
+      return '全部类型';
+    }
+
+    function setAccountTypeFilter(value) {
+      currentAccountType = normalizeAccountType(value);
+      accountTypeButtons.forEach((item) => {
+        const active = item.dataset.accountType === currentAccountType;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
     }
 
     function stateActionButton(user) {
@@ -631,7 +699,7 @@ http://127.0.0.1:26061/local/account-admin</code>
       const count = Number(payload.count || 0);
       const page = Number(payload.page || currentUserPage || 1);
       const totalPage = Number(payload.total_page || 0);
-      userToolbar.textContent = `共 ${count} 个账号${currentUserQuery ? `，当前搜索：${currentUserQuery}` : ''}`;
+      userToolbar.textContent = `共 ${count} 个账号，${accountTypeLabel(currentAccountType)}${currentUserQuery ? `，当前搜索：${currentUserQuery}` : ''}`;
       userPager.innerHTML = totalPage > 1 ? `
         <button type="button" data-page="${Math.max(1, page - 1)}" ${page <= 1 ? 'disabled' : ''}>上一页</button>
         <span>第 ${page} / ${totalPage} 页</span>
@@ -641,17 +709,20 @@ http://127.0.0.1:26061/local/account-admin</code>
       searchResult.classList.add('visible');
     }
 
-    async function loadUsersList(page = 1, query = currentUserQuery) {
+    async function loadUsersList(page = 1, query = currentUserQuery, accountType = currentAccountType) {
       currentUserPage = page;
       currentUserQuery = query.trim();
+      setAccountTypeFilter(accountType);
       searchButton.disabled = true;
       clearSearchButton.disabled = true;
+      accountTypeButtons.forEach((item) => { item.disabled = true; });
       try {
         const params = new URLSearchParams({
           page: String(currentUserPage),
           page_size: String(userPageSize),
         });
         if (currentUserQuery) params.set('q', currentUserQuery);
+        if (currentAccountType !== 'all') params.set('account_type', currentAccountType);
         const resp = await fetch(`/local/account-admin/users/list?${params.toString()}`, {
           headers: { Accept: 'application/json' },
         });
@@ -666,6 +737,7 @@ http://127.0.0.1:26061/local/account-admin</code>
       } finally {
         searchButton.disabled = false;
         clearSearchButton.disabled = false;
+        accountTypeButtons.forEach((item) => { item.disabled = false; });
       }
     }
 
@@ -695,7 +767,7 @@ http://127.0.0.1:26061/local/account-admin</code>
           else showSearchError(message);
           return;
         }
-        await loadUsersList(currentUserPage, currentUserQuery);
+        await loadUsersList(currentUserPage, currentUserQuery, currentAccountType);
         if (uidInput.value.trim() === String(uid)) {
           form.requestSubmit();
         }
@@ -711,18 +783,26 @@ http://127.0.0.1:26061/local/account-admin</code>
 
     searchForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      await loadUsersList(1, userQueryInput.value);
+      await loadUsersList(1, userQueryInput.value, currentAccountType);
     });
 
     clearSearchButton.addEventListener('click', async () => {
       userQueryInput.value = '';
-      await loadUsersList(1, '');
+      await loadUsersList(1, '', 'all');
+    });
+
+    accountTypeButtons.forEach((item) => {
+      item.addEventListener('click', async () => {
+        const nextAccountType = normalizeAccountType(item.dataset.accountType);
+        if (nextAccountType === currentAccountType) return;
+        await loadUsersList(1, currentUserQuery, nextAccountType);
+      });
     });
 
     userPager.addEventListener('click', async (event) => {
       const target = event.target.closest('[data-page]');
       if (!target || !userPager.contains(target) || target.disabled) return;
-      await loadUsersList(Number(target.dataset.page), currentUserQuery);
+      await loadUsersList(Number(target.dataset.page), currentUserQuery, currentAccountType);
     });
 
     searchResult.addEventListener('click', (event) => {

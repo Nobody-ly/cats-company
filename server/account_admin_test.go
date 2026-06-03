@@ -147,6 +147,55 @@ func TestAccountAdminUserListSupportsPaginationAndSearch(t *testing.T) {
 	}
 }
 
+func TestAccountAdminUserListFiltersAccountType(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{
+		1:  {ID: 1, Username: "alice", Email: "alice@example.com", DisplayName: "Alice", AccountType: types.AccountHuman, State: 0},
+		20: {ID: 20, Username: "weather-bot", Email: "bot@example.com", DisplayName: "Weather Bot", AccountType: types.AccountBot, State: 0},
+		30: {ID: 30, Username: "qa-bot", Email: "qa@example.com", DisplayName: "QA Bot", AccountType: types.AccountBot, State: 1},
+	}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users/list?page=1&page_size=10&account_type=bot", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleUserList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Users []struct {
+			UID         int64             `json:"uid"`
+			AccountType types.AccountType `json:"account_type"`
+		} `json:"users"`
+		Count       int    `json:"count"`
+		AccountType string `json:"account_type"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Count != 2 || len(body.Users) != 2 || body.AccountType != string(types.AccountBot) {
+		t.Fatalf("unexpected bot-filter response: %+v", body)
+	}
+	for _, user := range body.Users {
+		if user.AccountType != types.AccountBot {
+			t.Fatalf("expected only bot users, got %+v", body.Users)
+		}
+	}
+}
+
+func TestAccountAdminUserListRejectsUnsupportedAccountType(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users/list?account_type=service", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleUserList(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAccountAdminUserStateCanDisableAndRestore(t *testing.T) {
 	users := map[int64]*types.User{
 		7: {ID: 7, Username: "erin", Email: "erin@example.com", DisplayName: "Erin", AccountType: types.AccountHuman, State: 0},

@@ -38,7 +38,7 @@ func (a *Adapter) GetUser(id int64) (*types.User, error) {
 }
 
 // ListAdminUsers returns users for local account administration.
-func (a *Adapter) ListAdminUsers(query string, limit, offset int) ([]*types.User, error) {
+func (a *Adapter) ListAdminUsers(query string, accountType types.AccountType, limit, offset int) ([]*types.User, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -52,10 +52,11 @@ func (a *Adapter) ListAdminUsers(query string, limit, offset int) ([]*types.User
 	rows, err := a.db.Query(
 		`SELECT id, username, COALESCE(email,''), COALESCE(phone,''), display_name, COALESCE(avatar_url,''), account_type, state, created_at, updated_at
 		 FROM users
-		 WHERE (? = '' OR CAST(id AS CHAR) = ? OR username LIKE ? OR COALESCE(email, '') LIKE ? OR display_name LIKE ?)
+		 WHERE (? = '' OR account_type = ?)
+		   AND (? = '' OR CAST(id AS CHAR) = ? OR username LIKE ? OR COALESCE(email, '') LIKE ? OR display_name LIKE ?)
 		 ORDER BY id DESC
 		 LIMIT ? OFFSET ?`,
-		query, query, pattern, pattern, pattern, limit, offset,
+		string(accountType), string(accountType), query, query, pattern, pattern, pattern, limit, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list admin users: %w", err)
@@ -74,14 +75,15 @@ func (a *Adapter) ListAdminUsers(query string, limit, offset int) ([]*types.User
 }
 
 // CountAdminUsers returns the number of users matching the local admin query.
-func (a *Adapter) CountAdminUsers(query string) (int, error) {
+func (a *Adapter) CountAdminUsers(query string, accountType types.AccountType) (int, error) {
 	pattern := "%" + query + "%"
 	var count int
 	err := a.db.QueryRow(
 		`SELECT COUNT(*)
 		 FROM users
-		 WHERE (? = '' OR CAST(id AS CHAR) = ? OR username LIKE ? OR COALESCE(email, '') LIKE ? OR display_name LIKE ?)`,
-		query, query, pattern, pattern, pattern,
+		 WHERE (? = '' OR account_type = ?)
+		   AND (? = '' OR CAST(id AS CHAR) = ? OR username LIKE ? OR COALESCE(email, '') LIKE ? OR display_name LIKE ?)`,
+		string(accountType), string(accountType), query, query, pattern, pattern, pattern,
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count admin users: %w", err)

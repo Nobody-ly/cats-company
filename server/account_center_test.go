@@ -51,7 +51,7 @@ func (s accountTestUserLookup) GetUserByEmail(email string) (*types.User, error)
 	return nil, nil
 }
 
-func (s accountTestUserLookup) ListAdminUsers(query string, limit, offset int) ([]*types.User, error) {
+func (s accountTestUserLookup) ListAdminUsers(query string, accountType types.AccountType, limit, offset int) ([]*types.User, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -61,6 +61,9 @@ func (s accountTestUserLookup) ListAdminUsers(query string, limit, offset int) (
 	}
 	var all []*types.User
 	for _, user := range s.users {
+		if accountType != "" && user.AccountType != accountType {
+			continue
+		}
 		if query == "" ||
 			strings.Contains(strings.ToLower(user.Username), query) ||
 			strings.Contains(strings.ToLower(user.Email), query) ||
@@ -80,8 +83,8 @@ func (s accountTestUserLookup) ListAdminUsers(query string, limit, offset int) (
 	return all[offset:end], nil
 }
 
-func (s accountTestUserLookup) CountAdminUsers(query string) (int, error) {
-	users, err := s.ListAdminUsers(query, len(s.users), 0)
+func (s accountTestUserLookup) CountAdminUsers(query string, accountType types.AccountType) (int, error) {
+	users, err := s.ListAdminUsers(query, accountType, len(s.users), 0)
 	if err != nil {
 		return 0, err
 	}

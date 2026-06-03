@@ -9,8 +9,8 @@ type UserStore interface {
 	GetUser(id int64) (*types.User, error)
 	GetUserByUsername(username string) (*types.User, error)
 	GetUserByEmail(email string) (*types.User, error)
-	ListAdminUsers(query string, limit, offset int) ([]*types.User, error)
-	CountAdminUsers(query string) (int, error)
+	ListAdminUsers(query string, accountType types.AccountType, limit, offset int) ([]*types.User, error)
+	CountAdminUsers(query string, accountType types.AccountType) (int, error)
 	UpdateUserDisplayName(uid int64, displayName string) error
 	UpdateUserPasswordHash(uid int64, passHash []byte) error
 	UpdateUserState(uid int64, state int) error

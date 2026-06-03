@@ -39,7 +39,7 @@ func (a *Adapter) GetUser(id int64) (*types.User, error) {
 }
 
 // ListAdminUsers returns users for local account administration.
-func (a *Adapter) ListAdminUsers(query string, limit, offset int) ([]*types.User, error) {
+func (a *Adapter) ListAdminUsers(query string, accountType types.AccountType, limit, offset int) ([]*types.User, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -53,10 +53,11 @@ func (a *Adapter) ListAdminUsers(query string, limit, offset int) ([]*types.User
 	rows, err := a.db.Query(
 		`SELECT id, username, COALESCE(email,''), COALESCE(phone,''), display_name, COALESCE(avatar_url,''), account_type, state, created_at, updated_at
 		 FROM users
-		 WHERE ($1 = '' OR CAST(id AS TEXT) = $1 OR username ILIKE $2 OR COALESCE(email, '') ILIKE $2 OR display_name ILIKE $2)
+		 WHERE ($3 = '' OR account_type = $3)
+		   AND ($1 = '' OR CAST(id AS TEXT) = $1 OR username ILIKE $2 OR COALESCE(email, '') ILIKE $2 OR display_name ILIKE $2)
 		 ORDER BY id DESC
-		 LIMIT $3 OFFSET $4`,
-		query, pattern, limit, offset,
+		 LIMIT $4 OFFSET $5`,
+		query, pattern, string(accountType), limit, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list admin users: %w", err)
@@ -75,14 +76,15 @@ func (a *Adapter) ListAdminUsers(query string, limit, offset int) ([]*types.User
 }
 
 // CountAdminUsers returns the number of users matching the local admin query.
-func (a *Adapter) CountAdminUsers(query string) (int, error) {
+func (a *Adapter) CountAdminUsers(query string, accountType types.AccountType) (int, error) {
 	pattern := "%" + query + "%"
 	var count int
 	err := a.db.QueryRow(
 		`SELECT COUNT(*)
 		 FROM users
-		 WHERE ($1 = '' OR CAST(id AS TEXT) = $1 OR username ILIKE $2 OR COALESCE(email, '') ILIKE $2 OR display_name ILIKE $2)`,
-		query, pattern,
+		 WHERE ($3 = '' OR account_type = $3)
+		   AND ($1 = '' OR CAST(id AS TEXT) = $1 OR username ILIKE $2 OR COALESCE(email, '') ILIKE $2 OR display_name ILIKE $2)`,
+		query, pattern, string(accountType),
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count admin users: %w", err)
