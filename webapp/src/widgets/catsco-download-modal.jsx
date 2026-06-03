@@ -1,7 +1,7 @@
 import React from 'react';
 import { Apple, Download, Laptop, Monitor, X } from 'lucide-react';
 
-const RELEASE_VERSION = '1.1.5';
+const RELEASE_VERSION = '1.2.0';
 const TOS_BASE_URL = 'https://github-release.tos-cn-guangzhou.volces.com/update';
 
 const DOWNLOAD_OPTIONS = [
@@ -18,7 +18,7 @@ const DOWNLOAD_OPTIONS = [
     title: 'macOS Apple Silicon',
     description: '适用于 M 系列芯片 Mac',
     icon: Apple,
-    href: `${TOS_BASE_URL}/macos-arm64/CatsCo-${RELEASE_VERSION}-mac.dmg`,
+    href: `${TOS_BASE_URL}/macos-arm64/CatsCo-${RELEASE_VERSION}-mac-arm64.dmg`,
     meta: 'arm64',
   },
   {
@@ -26,7 +26,7 @@ const DOWNLOAD_OPTIONS = [
     title: 'macOS Intel',
     description: '适用于 Intel 芯片 Mac',
     icon: Apple,
-    href: `${TOS_BASE_URL}/macos-x64/CatsCo-${RELEASE_VERSION}-mac.dmg`,
+    href: `${TOS_BASE_URL}/macos-x64/CatsCo-${RELEASE_VERSION}-mac-x64.dmg`,
     meta: 'x64',
   },
   {
