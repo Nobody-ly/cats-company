@@ -214,7 +214,7 @@ func (h *AgentHandler) agentFromBotMap(viewerUID int64, bot map[string]interface
 		Relation:         relation,
 		TopicID:          p2pTopicID(viewerUID, uid),
 		IsBot:            true,
-		IsOnline:         h.hub != nil && h.hub.IsOnline(uid),
+		IsOnline:         h.agentRuntimeOnline(uid),
 		Visibility:       mapString(bot["visibility"]),
 		DeploymentStatus: mapString(bot["deployment_status"]),
 	}
@@ -232,8 +232,15 @@ func (h *AgentHandler) agentFromUser(viewerUID int64, user *types.User, relation
 		Relation:    relation,
 		TopicID:     p2pTopicID(viewerUID, user.ID),
 		IsBot:       true,
-		IsOnline:    h.hub != nil && h.hub.IsOnline(user.ID),
+		IsOnline:    h.agentRuntimeOnline(user.ID),
 	}
+}
+
+func (h *AgentHandler) agentRuntimeOnline(uid int64) bool {
+	if h == nil || h.hub == nil {
+		return false
+	}
+	return h.hub.BotBodyStatus(uid).Active
 }
 
 func mapString(value interface{}) string {

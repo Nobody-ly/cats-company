@@ -93,7 +93,7 @@ describe('ChatListView sidebar sections', () => {
     jest.clearAllMocks();
   });
 
-  async function mount() {
+  async function mount(props = {}) {
     await act(async () => {
       root.render(
         <ChatListView
@@ -101,6 +101,7 @@ describe('ChatListView sidebar sections', () => {
           onSelectTopic={onSelectTopic}
           user={user}
           onlineUsers={{}}
+          {...props}
         />
       );
       await Promise.resolve();
@@ -129,7 +130,7 @@ describe('ChatListView sidebar sections', () => {
     expect(onSelectTopic).not.toHaveBeenCalled();
   });
 
-  it('classifies server-confirmed bot groups into the AI conversations section', async () => {
+  it('keeps server-confirmed bot groups in the groups section', async () => {
     api.getConversations.mockResolvedValue({
       conversations: [
         {
@@ -151,8 +152,8 @@ describe('ChatListView sidebar sections', () => {
 
     const text = container.textContent;
     expect(text).toContain('Bot Room');
-    expect(text.indexOf('AI 对话')).toBeLessThan(text.indexOf('Bot Room'));
-    expect(text.indexOf('Bot Room')).toBeLessThan(text.indexOf('好友'));
+    expect(text.indexOf('群聊')).toBeLessThan(text.indexOf('Bot Room'));
+    expect(text.indexOf('Bot Room')).toBeLessThan(text.indexOf('AI 助手'));
   });
 
   it('shows matches from collapsed sections while searching', async () => {
@@ -185,5 +186,70 @@ describe('ChatListView sidebar sections', () => {
 
     expect(container.textContent).toContain('Alice');
     expect(container.textContent).not.toContain('没有匹配结果');
+  });
+
+  it('keeps group conversations in the groups section by default', async () => {
+    api.getConversations.mockResolvedValue({
+      conversations: [
+        {
+          id: 'grp_9',
+          group_id: 9,
+          name: '查云端log',
+          is_group: true,
+          latest_seq: 88,
+        },
+        {
+          id: 'p2p_7_42',
+          friend_id: 42,
+          name: 'Dev Agent',
+          is_group: false,
+          is_bot: true,
+        },
+      ],
+    });
+    api.getGroups.mockResolvedValue({
+      groups: [
+        {
+          id: 9,
+          name: '查云端log',
+          owner_id: 11,
+        },
+      ],
+    });
+
+    await mount();
+
+    const sections = Array.from(container.querySelectorAll('.v3-chat-section')).map((node) => node.textContent);
+    expect(sections.join(' | ')).toContain('群聊');
+    expect(sections.findIndex((text) => text.includes('群聊'))).toBeLessThan(
+      sections.findIndex((text) => text.includes('AI 助手'))
+    );
+
+    const groupItem = Array.from(container.querySelectorAll('.v3-chat-item'))
+      .find((node) => node.textContent.includes('查云端log'));
+    expect(groupItem).toBeTruthy();
+
+    await act(async () => {
+      Simulate.click(groupItem);
+      await Promise.resolve();
+    });
+
+    expect(onSelectTopic).toHaveBeenCalledWith({
+      topicId: 'grp_9',
+      name: '查云端log',
+      isGroup: true,
+      groupId: 9,
+      avatar_url: undefined,
+    });
+  });
+
+  it('lets live offline status override stale agent API online state', async () => {
+    await mount({ onlineUsers: { 42: false } });
+
+    const agentItem = Array.from(container.querySelectorAll('.v3-chat-item'))
+      .find((node) => node.textContent.includes('Dev Agent'));
+    expect(agentItem).toBeTruthy();
+    expect(agentItem.querySelector('[aria-label="Offline"]')).toBeTruthy();
+    expect(agentItem.querySelector('[aria-label="Online"]')).toBeFalsy();
   });
 });

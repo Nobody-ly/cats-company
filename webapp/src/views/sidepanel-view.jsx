@@ -226,15 +226,15 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const lowerSearch = trimmedSearch.toLowerCase();
   const isSearching = trimmedSearch.length > 0;
   const filteredChats = chats.filter(c => c.name.toLowerCase().includes(lowerSearch));
+  const directChats = filteredChats.filter(c => !c.isGroup);
+  const mergedGroups = mergeGroupsWithConversations(groups, chats.filter(c => c.isGroup));
   const filteredFriends = friends.filter(f => (f.display_name || f.username).toLowerCase().includes(lowerSearch));
-  const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(lowerSearch));
+  const filteredGroups = mergedGroups.filter(g => g.name.toLowerCase().includes(lowerSearch));
   const filteredAgents = agents.filter(a => (a.display_name || a.username).toLowerCase().includes(lowerSearch));
 
-  const botGroupIds = readStoredBotGroupIds();
-  const isAIGroupChat = (chat) => chat.isGroup && (chat.hasBot || chat.isAgentGroup || botGroupIds.has(chat.id));
-  const aiChats = filteredChats.filter(c => (c.isBot && !c.isGroup) || isAIGroupChat(c));
-  const friendChats = filteredChats.filter(c => !c.isGroup && !c.isBot);
-  const groupChats = filteredChats.filter(c => c.isGroup && !isAIGroupChat(c));
+  const aiChats = directChats.filter(c => c.isBot);
+  const friendChats = directChats.filter(c => !c.isBot);
+  const groupChats = filteredGroups;
   const hasSearchResults = aiChats.length > 0 || friendChats.length > 0 || groupChats.length > 0 || filteredAgents.length > 0;
 
   return (
@@ -271,7 +271,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
         ) : (
           aiChats.map((chat) => {
             const canDelete = chat.isGroup && groupOwnerById.get(String(chat.groupId)) === String(user.uid);
-            const isOnline = !chat.isGroup && ((onlineUsers && onlineUsers[chat.friendId]) || chat.isOnline);
+            const isOnline = onlineStatusFor(onlineUsers, chat.friendId, chat.isOnline);
             return (
               <div key={chat.id} className={`v3-chat-item ${activeTopic === chat.id ? 'active' : ''}`}
                 onClick={() => onSelectTopic({ topicId: chat.id, name: chat.name, isGroup: chat.isGroup, groupId: chat.groupId, avatar_url: chat.avatar_url, friendId: chat.friendId })}>
@@ -281,7 +281,14 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
                   {chat.preview && <div style={{fontSize: 12, color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{chat.preview}</div>}
                 </div>
                 {chat.time && <span style={{fontSize: 11, color: '#555', flexShrink: 0}}>{chat.time}</span>}
-                {!chat.isGroup && <span className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`} style={{marginLeft: 4}} />}
+                {!chat.isGroup && (
+                  <span
+                    className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`}
+                    style={{marginLeft: 4}}
+                    title={isOnline ? 'Online' : 'Offline'}
+                    aria-label={isOnline ? 'Online' : 'Offline'}
+                  />
+                )}
                 {canDelete && (
                   <button type="button" className="v3-chat-item-delete" disabled={deletingTopicId === chat.id}
                     onClick={(e) => { e.stopPropagation(); handleDeleteGroup({ groupId: chat.groupId, topicId: chat.id, name: chat.name }); }} title="删除">
@@ -302,11 +309,16 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
           <div style={{ padding: '12px 20px', color: '#666', fontSize: '13px' }}>暂无好友对话</div>
         ) : (
           friendChats.map((chat) => {
-            const isOnline = (onlineUsers && onlineUsers[chat.friendId]) || chat.isOnline;
+            const isOnline = onlineStatusFor(onlineUsers, chat.friendId, chat.isOnline);
             return (
               <div key={chat.id} className={`v3-chat-item ${activeTopic === chat.id ? 'active' : ''}`}
                 onClick={() => onSelectTopic({ topicId: chat.id, name: chat.name, isGroup: false, avatar_url: chat.avatar_url, friendId: chat.friendId })}>
-                <span className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`} style={{marginRight: 8}} />
+                <span
+                  className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`}
+                  style={{marginRight: 8}}
+                  title={isOnline ? 'Online' : 'Offline'}
+                  aria-label={isOnline ? 'Online' : 'Offline'}
+                />
                 <div style={{flex: 1, overflow: 'hidden'}}>
                   <span className="v3-chat-item-label">{chat.name}</span>
                   {chat.preview && <div style={{fontSize: 12, color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{chat.preview}</div>}
@@ -357,12 +369,17 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
         ) : (
           filteredAgents.map((agent) => {
             const agentId = agent.uid || agent.id;
-            const isOnline = Boolean((onlineUsers && onlineUsers[agentId]) || agent.is_online);
+            const isOnline = onlineStatusFor(onlineUsers, agentId, agent.is_online);
             return (
               <div key={agentId} className="v3-chat-item" style={{opacity: 0.7, cursor: 'default'}}>
                 <span className="prefix" style={{display: 'flex', alignItems: 'center'}}><Bot size={18} /></span>
                 <span className="v3-chat-item-label">{agent.display_name || agent.username}</span>
-                <span className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`} style={{marginLeft: 'auto'}} />
+                <span
+                  className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`}
+                  style={{marginLeft: 'auto'}}
+                  title={isOnline ? 'Online' : 'Offline'}
+                  aria-label={isOnline ? 'Online' : 'Offline'}
+                />
               </div>
             );
           })
@@ -427,6 +444,65 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
       {showAgentStore && <AgentStoreModal onClose={() => setShowAgentStore(false)} user={user} onBotsChanged={() => loadAll()} />}
     </>
   );
+}
+
+function onlineStatusFor(onlineUsers, uid, fallback = false) {
+  if (!uid) return Boolean(fallback);
+  if (onlineUsers && Object.prototype.hasOwnProperty.call(onlineUsers, uid)) {
+    return Boolean(onlineUsers[uid]);
+  }
+  return Boolean(fallback);
+}
+
+function mergeGroupsWithConversations(groups, groupConversations) {
+  const byTopic = new Map();
+  for (const group of groups || []) {
+    const normalized = normalizeGroupListItem(group);
+    if (normalized) byTopic.set(normalized.id, normalized);
+  }
+  for (const chat of groupConversations || []) {
+    const normalized = normalizeGroupListItem(chat);
+    if (!normalized) continue;
+    const existing = byTopic.get(normalized.id) || {};
+    byTopic.set(normalized.id, {
+      ...existing,
+      ...normalized,
+      owner_id: normalized.owner_id ?? existing.owner_id,
+      avatar_url: normalized.avatar_url ?? existing.avatar_url,
+    });
+  }
+  return Array.from(byTopic.values()).sort(groupConversationLess);
+}
+
+function normalizeGroupListItem(item) {
+  if (!item) return null;
+  const groupId = item.groupId || item.group_id || numericGroupIdFromTopic(item.id) || item.id;
+  const name = item.name;
+  if (!groupId || !name) return null;
+  const id = String(item.id || '').startsWith('grp_') ? item.id : `grp_${groupId}`;
+  return {
+    ...item,
+    id,
+    groupId,
+    owner_id: item.owner_id,
+    name,
+    avatar_url: item.avatar_url,
+    preview: item.preview || '',
+    time: item.time || (item.created_at ? formatTime(new Date(item.created_at)) : ''),
+    seq: item.seq || 0,
+  };
+}
+
+function numericGroupIdFromTopic(topicId) {
+  const match = String(topicId || '').match(/^grp_(\d+)$/);
+  return match ? Number(match[1]) : 0;
+}
+
+function groupConversationLess(left, right) {
+  const leftSeq = Number(left.seq || 0);
+  const rightSeq = Number(right.seq || 0);
+  if (leftSeq !== rightSeq) return rightSeq - leftSeq;
+  return String(left.name || '').localeCompare(String(right.name || ''));
 }
 
 function p2pTopicId(uid1, uid2) {
@@ -502,12 +578,4 @@ function summarizeMessage(message) {
   if (message.content?.type === 'file') return message.content?.payload?.name || '[文件]';
   if (message.content?.type === 'image') return '[图片]';
   return message.content?.text || '';
-}
-
-function readStoredBotGroupIds() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem('cc_bot_groups') || '[]'));
-  } catch (err) {
-    return new Set();
-  }
 }

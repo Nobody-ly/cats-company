@@ -86,7 +86,9 @@ func TestHandleListAgentsIncludesOwnedAndFriendBots(t *testing.T) {
 		},
 	}
 	hub := NewHub(nil, nil)
-	hub.addClient(&Client{uid: 43, send: make(chan []byte, 1)})
+	if _, err := hub.bodyLeases.acquire(43, "body-review", "conn-review"); err != nil {
+		t.Fatalf("acquire bot body lease: %v", err)
+	}
 	handler := NewAgentHandler(store, hub)
 	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
@@ -109,8 +111,87 @@ func TestHandleListAgentsIncludesOwnedAndFriendBots(t *testing.T) {
 	if body.Agents[0].UID != 42 || body.Agents[0].Relation != "owner" || body.Agents[0].TopicID != "p2p_7_42" {
 		t.Fatalf("unexpected owned agent: %+v", body.Agents[0])
 	}
+	if body.Agents[0].IsOnline {
+		t.Fatalf("owned agent without active body must be offline: %+v", body.Agents[0])
+	}
 	if body.Agents[1].UID != 43 || body.Agents[1].Relation != "friend" || !body.Agents[1].IsOnline {
 		t.Fatalf("unexpected friend agent: %+v", body.Agents[1])
+	}
+}
+
+func TestHandleListAgentsDoesNotTreatGenericBotUIDConnectionAsRuntimeOnline(t *testing.T) {
+	store := &agentTestStore{
+		ownerBots: []map[string]interface{}{
+			{
+				"id":           int64(42),
+				"username":     "dev-agent",
+				"display_name": "Dev Agent",
+			},
+		},
+	}
+	hub := NewHub(nil, nil)
+	hub.addClient(&Client{uid: 42, send: make(chan []byte, 1)})
+	handler := NewAgentHandler(store, hub)
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
+	rec := httptest.NewRecorder()
+
+	handler.HandleListAgents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Agents []AgentSummary `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Agents) != 1 {
+		t.Fatalf("agent count=%d, want 1: %+v", len(body.Agents), body.Agents)
+	}
+	if body.Agents[0].IsOnline {
+		t.Fatalf("agent without active body lease must be offline: %+v", body.Agents[0])
+	}
+}
+
+func TestBuildOnlineStatusListUsesBotBodyLeaseForBots(t *testing.T) {
+	store := &agentTestStore{
+		ownerBots: []map[string]interface{}{
+			{"id": int64(42), "username": "owner-agent"},
+		},
+		friends: []*types.User{
+			{ID: 43, Username: "friend-agent", AccountType: types.AccountBot},
+			{ID: 44, Username: "human-friend", AccountType: types.AccountHuman},
+		},
+	}
+	hub := NewHub(nil, nil)
+	hub.addClient(&Client{uid: 42, send: make(chan []byte, 1)})
+	hub.addClient(&Client{uid: 43, send: make(chan []byte, 1)})
+	hub.addClient(&Client{uid: 44, send: make(chan []byte, 1)})
+	if _, err := hub.bodyLeases.acquire(43, "body-friend", "conn-friend"); err != nil {
+		t.Fatalf("acquire friend bot body lease: %v", err)
+	}
+
+	list, err := BuildOnlineStatusList(store, hub, 7)
+	if err != nil {
+		t.Fatalf("BuildOnlineStatusList error: %v", err)
+	}
+	onlineByUID := make(map[int64]bool)
+	for _, item := range list {
+		uid, _ := item["uid"].(int64)
+		online, _ := item["online"].(bool)
+		onlineByUID[uid] = online
+	}
+
+	if onlineByUID[42] {
+		t.Fatalf("owned bot without body lease must be offline: %#v", onlineByUID)
+	}
+	if !onlineByUID[43] {
+		t.Fatalf("friend bot with body lease must be online: %#v", onlineByUID)
+	}
+	if !onlineByUID[44] {
+		t.Fatalf("human friend should still use generic online status: %#v", onlineByUID)
 	}
 }
 

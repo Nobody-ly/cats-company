@@ -92,14 +92,19 @@ func (h *ConversationHandler) HandleList(w http.ResponseWriter, r *http.Request)
 }
 
 func buildFriendConversationSummary(topicID string, friend *types.User, latest *types.Message, hub *Hub) *types.ConversationSummary {
+	isBot := friend.BotDisclose || friend.AccountType == types.AccountBot
+	isOnline := hub != nil && hub.IsOnline(friend.ID)
+	if isBot {
+		isOnline = hub != nil && hub.BotBodyStatus(friend.ID).Active
+	}
 	summary := &types.ConversationSummary{
 		ID:        topicID,
 		Name:      displayNameOrUsername(friend.DisplayName, friend.Username),
 		IsGroup:   false,
 		FriendID:  friend.ID,
 		AvatarURL: friend.AvatarURL,
-		IsBot:     friend.BotDisclose || friend.AccountType == types.AccountBot,
-		IsOnline:  hub != nil && hub.IsOnline(friend.ID),
+		IsBot:     isBot,
+		IsOnline:  isOnline,
 	}
 	applyLatestMessage(summary, latest)
 	return summary

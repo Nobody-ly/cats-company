@@ -213,6 +213,33 @@ func TestConversationLess_SameTimePrefersGroup(t *testing.T) {
 	}
 }
 
+func TestBuildFriendConversationSummaryUsesBotBodyLeaseForBotOnline(t *testing.T) {
+	hub := NewHub(nil, nil)
+	hub.addClient(&Client{uid: 42, send: make(chan []byte, 1)})
+	botWithoutBody := buildFriendConversationSummary("p2p_7_42", &types.User{
+		ID:          42,
+		DisplayName: "ck1",
+		Username:    "ck1",
+		AccountType: types.AccountBot,
+	}, nil, hub)
+	if botWithoutBody.IsOnline {
+		t.Fatalf("bot without active body lease must be offline: %+v", botWithoutBody)
+	}
+
+	if _, err := hub.bodyLeases.acquire(43, "body-xiaoba", "conn-xiaoba"); err != nil {
+		t.Fatalf("acquire bot body lease: %v", err)
+	}
+	activeBot := buildFriendConversationSummary("p2p_7_43", &types.User{
+		ID:          43,
+		DisplayName: "XiaoBa",
+		Username:    "xiaoba",
+		AccountType: types.AccountBot,
+	}, nil, hub)
+	if !activeBot.IsOnline {
+		t.Fatalf("bot with active body lease must be online: %+v", activeBot)
+	}
+}
+
 // TestConversationLess_MixedWithP2P 测试：
 // 验证无消息群组 vs 无消息 P2P 会话的排序，复用实际排序函数
 func TestConversationLess_MixedWithP2P(t *testing.T) {
