@@ -51,6 +51,7 @@ var allowedFileExts = map[string]bool{
 	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
 	".mp3": true, ".mp4": true, ".wav": true,
 	".csv": true, ".json": true, ".xml": true,
+	".html": true, ".htm": true,
 	".md": true, ".go": true, ".py": true, ".js": true,
 }
 
