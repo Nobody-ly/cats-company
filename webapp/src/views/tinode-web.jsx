@@ -140,17 +140,19 @@ export default function TinodeWeb() {
     }
     if (msg._type === 'ws_close') {
       setWsStatus('reconnecting');
+      setOnlineUsers({});
       return;
     }
 
     if (msg.meta && msg.meta.sub) {
-      const online = {};
-      for (const u of msg.meta.sub) {
-        if (u.uid && u.online) {
-          online[u.uid] = true;
+      setOnlineUsers((prev) => {
+        const next = { ...prev };
+        for (const u of msg.meta.sub) {
+          if (!u.uid) continue;
+          next[u.uid] = Boolean(u.online);
         }
-      }
-      setOnlineUsers((prev) => ({ ...prev, ...online }));
+        return next;
+      });
     }
 
     if (msg.pres) {
@@ -161,7 +163,7 @@ export default function TinodeWeb() {
           if (msg.pres.what === 'on') {
             next[uid] = true;
           } else if (msg.pres.what === 'off') {
-            delete next[uid];
+            next[uid] = false;
           }
           return next;
         });

@@ -146,22 +146,26 @@ func BuildOnlineStatusList(db store.Store, hub *Hub, uid int64) ([]map[string]in
 
 	seen := make(map[int64]struct{})
 	onlineList := make([]map[string]interface{}, 0, len(friends))
-	addUser := func(id int64) {
+	addUser := func(id int64, isBot bool) {
 		if id <= 0 {
 			return
 		}
 		if _, ok := seen[id]; ok {
 			return
 		}
+		online := hub != nil && hub.IsOnline(id)
+		if isBot {
+			online = hub != nil && hub.BotBodyStatus(id).Active
+		}
 		seen[id] = struct{}{}
 		onlineList = append(onlineList, map[string]interface{}{
 			"uid":    id,
-			"online": hub != nil && hub.IsOnline(id),
+			"online": online,
 		})
 	}
 
 	for _, friend := range friends {
-		addUser(friend.ID)
+		addUser(friend.ID, friend.AccountType == types.AccountBot || friend.BotDisclose)
 	}
 
 	bots, err := db.ListBotsByOwner(uid)
@@ -170,7 +174,7 @@ func BuildOnlineStatusList(db store.Store, hub *Hub, uid int64) ([]map[string]in
 		return onlineList, nil
 	}
 	for _, bot := range bots {
-		addUser(mapID(bot["id"]))
+		addUser(mapID(bot["id"]), true)
 	}
 
 	return onlineList, nil

@@ -190,9 +190,11 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   };
 
   const lowerSearch = search.toLowerCase();
-  const filteredChats = chats.filter(c => c.name.toLowerCase().includes(lowerSearch));
+  const directChats = chats.filter(c => !c.isGroup);
+  const groupChats = mergeGroupsWithConversations(groups, chats.filter(c => c.isGroup));
+  const filteredChats = directChats.filter(c => c.name.toLowerCase().includes(lowerSearch));
   const filteredFriends = friends.filter(f => (f.display_name || f.username).toLowerCase().includes(lowerSearch));
-  const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(lowerSearch));
+  const filteredGroups = groupChats.filter(g => g.name.toLowerCase().includes(lowerSearch));
   const filteredAgents = agents.filter(a => (a.display_name || a.username).toLowerCase().includes(lowerSearch));
 
   return (
@@ -233,7 +235,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
            <div style={{ padding: 40, textAlign: 'center', color: '#888', fontSize: '13px' }}>{t('chats_empty')}</div>
         ) : (
           filteredChats.map((chat) => {
-            const isOnline = !chat.isGroup && ((onlineUsers && onlineUsers[chat.friendId]) || chat.isOnline);
+            const isOnline = onlineStatusFor(onlineUsers, chat.friendId, chat.isOnline);
             const canDeleteGroup = chat.isGroup && groupOwnerById.get(String(chat.groupId)) === String(user.uid);
             return (
               <div
@@ -248,7 +250,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
                   friendId: chat.friendId,
                 })}
               >
-                <span className="prefix" style={{fontSize: '18px'}}>{chat.isGroup ? '#' : (isOnline ? '○' : '●')}</span>
+                <span className="prefix" style={{fontSize: '18px'}}>{isOnline ? '○' : '●'}</span>
                 <span className="v3-chat-item-label">{chat.name}</span>
                 {canDeleteGroup && (
                   <button
@@ -268,10 +270,47 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
                     <Trash2 size={14} />
                   </button>
                 )}
-                {!chat.isGroup && <span className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`} style={{marginLeft: 'auto'}} />}
+                <span className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`} style={{marginLeft: 'auto'}} />
               </div>
             );
           })
+        )}
+
+        {!search && (
+          <>
+            <div className="v3-chat-section" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16}}>
+              Groups
+              <span style={{cursor:'pointer', display:'flex', alignItems:'center', color:'#888'}} onClick={()=>setShowCreateGroup(true)} title="Create Group"><Users size={16} /></span>
+            </div>
+            {filteredGroups.length === 0 ? (
+              <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontSize: '13px' }}>No groups yet.</div>
+            ) : (
+              filteredGroups.map(group => (
+                <div key={group.id} className={`v3-chat-item ${activeTopic === group.id ? 'active' : ''}`} onClick={() => onSelectTopic({ topicId: group.id, name: group.name, isGroup: true, groupId: group.groupId, avatar_url: group.avatar_url })}>
+                  <span className="prefix" style={{fontSize: '18px'}}>#</span>
+                  <span className="v3-chat-item-label">{group.name}</span>
+                  {groupOwnerById.get(String(group.groupId)) === String(user.uid) && (
+                    <button
+                      type="button"
+                      className="v3-chat-item-delete"
+                      disabled={deletingTopicId === group.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDeleteGroup({
+                          groupId: group.groupId,
+                          topicId: group.id,
+                          name: group.name,
+                        });
+                      }}
+                      title="Delete group"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </>
         )}
 
         {(!search || filteredAgents.length > 0) && (
@@ -287,7 +326,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
               filteredAgents.map((agent) => {
                 const agentId = agent.uid || agent.id;
                 const topicId = agent.topic_id || p2pTopicId(user.uid, agentId);
-                const isOnline = Boolean((onlineUsers && onlineUsers[agentId]) || agent.is_online);
+                const isOnline = onlineStatusFor(onlineUsers, agentId, agent.is_online);
                 return (
                   <div
                     key={agentId}
@@ -313,19 +352,19 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
           <>
             <div className="v3-chat-section" style={{marginTop: 16}}>Directory Matches</div>
             {filteredGroups.map(group => (
-              <div key={`grp_${group.id}`} className="v3-chat-item" onClick={() => onSelectTopic({ topicId: `grp_${group.id}`, name: group.name, isGroup: true, groupId: group.id, avatar_url: group.avatar_url })}>
+              <div key={group.id} className="v3-chat-item" onClick={() => onSelectTopic({ topicId: group.id, name: group.name, isGroup: true, groupId: group.groupId, avatar_url: group.avatar_url })}>
                 <span className="prefix" style={{fontSize: '18px'}}>#</span>
                 <span className="v3-chat-item-label">{group.name}</span>
                 {String(group.owner_id) === String(user.uid) && (
                   <button
                     type="button"
                     className="v3-chat-item-delete"
-                    disabled={deletingTopicId === `grp_${group.id}`}
+                    disabled={deletingTopicId === group.id}
                     onClick={(event) => {
                       event.stopPropagation();
                       handleDeleteGroup({
-                        groupId: group.id,
-                        topicId: `grp_${group.id}`,
+                        groupId: group.groupId,
+                        topicId: group.id,
                         name: group.name,
                       });
                     }}
@@ -356,6 +395,65 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
       {showAgentStore && <AgentStoreModal onClose={() => setShowAgentStore(false)} user={user} onBotsChanged={() => loadAll()} />}
     </>
   );
+}
+
+function onlineStatusFor(onlineUsers, uid, fallback = false) {
+  if (!uid) return Boolean(fallback);
+  if (onlineUsers && Object.prototype.hasOwnProperty.call(onlineUsers, uid)) {
+    return Boolean(onlineUsers[uid]);
+  }
+  return Boolean(fallback);
+}
+
+function mergeGroupsWithConversations(groups, groupConversations) {
+  const byTopic = new Map();
+  for (const group of groups || []) {
+    const normalized = normalizeGroupListItem(group);
+    if (normalized) byTopic.set(normalized.id, normalized);
+  }
+  for (const chat of groupConversations || []) {
+    const normalized = normalizeGroupListItem(chat);
+    if (!normalized) continue;
+    const existing = byTopic.get(normalized.id) || {};
+    byTopic.set(normalized.id, {
+      ...existing,
+      ...normalized,
+      owner_id: normalized.owner_id ?? existing.owner_id,
+      avatar_url: normalized.avatar_url ?? existing.avatar_url,
+    });
+  }
+  return Array.from(byTopic.values()).sort(groupConversationLess);
+}
+
+function normalizeGroupListItem(item) {
+  if (!item) return null;
+  const groupId = item.groupId || item.group_id || numericGroupIdFromTopic(item.id) || item.id;
+  const name = item.name;
+  if (!groupId || !name) return null;
+  const id = String(item.id || '').startsWith('grp_') ? item.id : `grp_${groupId}`;
+  return {
+    ...item,
+    id,
+    groupId,
+    owner_id: item.owner_id,
+    name,
+    avatar_url: item.avatar_url,
+    preview: item.preview || '',
+    time: item.time || (item.created_at ? formatTime(new Date(item.created_at)) : ''),
+    seq: item.seq || 0,
+  };
+}
+
+function numericGroupIdFromTopic(topicId) {
+  const match = String(topicId || '').match(/^grp_(\d+)$/);
+  return match ? Number(match[1]) : 0;
+}
+
+function groupConversationLess(left, right) {
+  const leftSeq = Number(left.seq || 0);
+  const rightSeq = Number(right.seq || 0);
+  if (leftSeq !== rightSeq) return rightSeq - leftSeq;
+  return String(left.name || '').localeCompare(String(right.name || ''));
 }
 
 function p2pTopicId(uid1, uid2) {
