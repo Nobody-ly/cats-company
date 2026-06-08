@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openchat/openchat/server/store"
+	"github.com/openchat/openchat/server/store/types"
 )
 
 func TestBotBodyLeaseRejectsDifferentBodyAndAllowsSameBodyReconnect(t *testing.T) {
@@ -141,6 +142,13 @@ func TestHandleGetBotBodyStatus(t *testing.T) {
 	if _, err := hub.bodyLeases.acquire(42, "body-a", "conn-a"); err != nil {
 		t.Fatalf("acquire failed: %v", err)
 	}
+	hub.addRegisteredClient(&Client{
+		uid:          42,
+		accountType:  types.AccountBot,
+		bodyID:       "body-a",
+		connectionID: "conn-a",
+		send:         make(chan []byte, 1),
+	})
 
 	handler := NewBotHandler(&botBodyStatusStore{ownerUID: 7, bodyID: "body-a"}, nil)
 	handler.SetHub(hub)
@@ -162,6 +170,32 @@ func TestHandleGetBotBodyStatus(t *testing.T) {
 	}
 	if body.ConnectedAt == nil || !body.ConnectedAt.Equal(now) {
 		t.Fatalf("unexpected connected_at: %+v", body.ConnectedAt)
+	}
+}
+
+func TestHandleGetBotBodyStatusIgnoresStaleLeaseWithoutClient(t *testing.T) {
+	hub := NewHub(nil, nil)
+	if _, err := hub.bodyLeases.acquire(42, "body-a", "conn-a"); err != nil {
+		t.Fatalf("acquire failed: %v", err)
+	}
+
+	handler := NewBotHandler(&botBodyStatusStore{ownerUID: 7, bodyID: "body-a"}, nil)
+	handler.SetHub(hub)
+	req := httptest.NewRequest(http.MethodGet, "/api/bots/body-status?uid=42", nil)
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
+	rec := httptest.NewRecorder()
+
+	handler.HandleGetBotBodyStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body BotBodyStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Active || !body.Bound || body.BotUID != 42 || body.BodyID != "body-a" || body.ConnectedAt != nil {
+		t.Fatalf("stale lease without registered client should be offline: %+v", body)
 	}
 }
 

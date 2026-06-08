@@ -229,6 +229,13 @@ func TestBuildFriendConversationSummaryUsesBotBodyLeaseForBotOnline(t *testing.T
 	if _, err := hub.bodyLeases.acquire(43, "body-xiaoba", "conn-xiaoba"); err != nil {
 		t.Fatalf("acquire bot body lease: %v", err)
 	}
+	hub.addRegisteredClient(&Client{
+		uid:          43,
+		accountType:  types.AccountBot,
+		bodyID:       "body-xiaoba",
+		connectionID: "conn-xiaoba",
+		send:         make(chan []byte, 1),
+	})
 	activeBot := buildFriendConversationSummary("p2p_7_43", &types.User{
 		ID:          43,
 		DisplayName: "XiaoBa",

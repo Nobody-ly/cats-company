@@ -88,12 +88,37 @@ func (h *Hub) BotBodyStatus(botUID int64) BotBodyStatus {
 	if !ok {
 		return status
 	}
+
+	if !h.hasRegisteredBotBodyClient(lease) {
+		status.BodyID = lease.bodyID
+		status.Bound = lease.bodyID != ""
+		return status
+	}
+
 	connectedAt := lease.acquiredAt
 	status.Active = true
 	status.BodyID = lease.bodyID
 	status.Bound = lease.bodyID != ""
 	status.ConnectedAt = &connectedAt
 	return status
+}
+
+func (h *Hub) hasRegisteredBotBodyClient(lease botBodyLease) bool {
+	if h == nil || lease.botUID <= 0 || lease.bodyID == "" || lease.connectionID == "" {
+		return false
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for client := range h.clients[lease.botUID] {
+		if client.accountType == types.AccountBot &&
+			client.bodyID == lease.bodyID &&
+			client.connectionID == lease.connectionID {
+			return true
+		}
+	}
+	return false
 }
 
 // Run starts the hub's main loop.
@@ -110,7 +135,11 @@ func (h *Hub) Run() {
 			}
 			client.closeSend()
 			h.releaseBotBodyLease(client)
-			log.Printf("client disconnected: uid=%d addr=%s account=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, remaining, onlineUsers)
+			if client.accountType == types.AccountBot {
+				log.Printf("client disconnected: uid=%d addr=%s account=%s body=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, client.bodyID, remaining, onlineUsers)
+			} else {
+				log.Printf("client disconnected: uid=%d addr=%s account=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, remaining, onlineUsers)
+			}
 			if lastConn {
 				h.enqueuePresence(client.uid, "off")
 			}
@@ -233,7 +262,11 @@ func (h *Hub) registerClient(client *Client) bool {
 		}
 	}
 
-	log.Printf("client connected: uid=%d addr=%s account=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, deviceCount, onlineUsers)
+	if client.accountType == types.AccountBot {
+		log.Printf("client connected: uid=%d addr=%s account=%s body=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, client.bodyID, deviceCount, onlineUsers)
+	} else {
+		log.Printf("client connected: uid=%d addr=%s account=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, deviceCount, onlineUsers)
+	}
 	if firstConn {
 		h.enqueuePresence(client.uid, "on")
 	}

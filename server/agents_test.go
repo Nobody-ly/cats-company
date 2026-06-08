@@ -89,6 +89,13 @@ func TestHandleListAgentsIncludesOwnedAndFriendBots(t *testing.T) {
 	if _, err := hub.bodyLeases.acquire(43, "body-review", "conn-review"); err != nil {
 		t.Fatalf("acquire bot body lease: %v", err)
 	}
+	hub.addRegisteredClient(&Client{
+		uid:          43,
+		accountType:  types.AccountBot,
+		bodyID:       "body-review",
+		connectionID: "conn-review",
+		send:         make(chan []byte, 1),
+	})
 	handler := NewAgentHandler(store, hub)
 	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
@@ -172,6 +179,13 @@ func TestBuildOnlineStatusListUsesBotBodyLeaseForBots(t *testing.T) {
 	if _, err := hub.bodyLeases.acquire(43, "body-friend", "conn-friend"); err != nil {
 		t.Fatalf("acquire friend bot body lease: %v", err)
 	}
+	hub.addRegisteredClient(&Client{
+		uid:          43,
+		accountType:  types.AccountBot,
+		bodyID:       "body-friend",
+		connectionID: "conn-friend",
+		send:         make(chan []byte, 1),
+	})
 
 	list, err := BuildOnlineStatusList(store, hub, 7)
 	if err != nil {
