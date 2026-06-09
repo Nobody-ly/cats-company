@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	urlpath "path"
@@ -149,11 +150,12 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	url := fmt.Sprintf("%s/%s/%s", h.baseURL, subDir, fileKey)
 
 	writeUploadJSON(w, http.StatusOK, map[string]interface{}{
-		"file_key": fileKey,
-		"url":      url,
-		"name":     header.Filename,
-		"size":     written,
-		"type":     uploadType,
+		"file_key":  fileKey,
+		"url":       url,
+		"name":      header.Filename,
+		"size":      written,
+		"type":      uploadType,
+		"mime_type": normalizedUploadMimeType(ext, header.Header.Get("Content-Type")),
 	})
 }
 
@@ -213,6 +215,31 @@ func cacheControlForUpload(subDir string) string {
 		return "public, max-age=31536000, immutable"
 	}
 	return "private, max-age=86400"
+}
+
+func normalizedUploadMimeType(ext, headerType string) string {
+	switch strings.ToLower(ext) {
+	case ".md":
+		return "text/markdown"
+	case ".csv":
+		return "text/csv"
+	case ".json":
+		return "application/json"
+	case ".xml":
+		return "application/xml"
+	}
+
+	if extType := mime.TypeByExtension(strings.ToLower(ext)); extType != "" {
+		if mediaType, _, err := mime.ParseMediaType(extType); err == nil && mediaType != "" {
+			return mediaType
+		}
+	}
+
+	if mediaType, _, err := mime.ParseMediaType(headerType); err == nil && mediaType != "" {
+		return mediaType
+	}
+
+	return "application/octet-stream"
 }
 
 func generateFileKey(ext string) string {

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, MoreHorizontal, SendHorizontal, Square } from 'lucide-react';
 import { api, wsSendMessage, wsSendStreamCancel, wsSendTyping, wsSendRead, onWSMessage, updateTopicSeq } from '../api';
 import t from '../i18n';
-import ChatMessage from '../widgets/chat-message';
+import ChatMessage, { FilePreviewPanel } from '../widgets/chat-message';
 import GroupSettings from '../widgets/group-settings';
 import Avatar from '../widgets/avatar';
 
@@ -31,6 +31,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [replyTo, setReplyTo] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
@@ -126,6 +127,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setMentionFilter('');
     clearRuntimePlan();
     setReplyTo(null);
+    setPreviewFile(null);
     setMembers([]);
     setGroupInfo(null);
     setPeerProfile(null);
@@ -577,6 +579,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           url: data.url,
           name: data.name,
           size: data.size,
+          mime_type: data.mime_type || file.type || '',
         },
       };
       if (type === 'image') {
@@ -821,34 +824,36 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   return (
     <>
-      <div className="v3-header">
-        <div className="v3-header-left">
-          <div style={{display: 'flex', flexDirection: 'column'}}>
-            <span className="v3-header-title" style={{ fontSize: 17, letterSpacing: '-0.3px' }}>{displayName}</span>
-            {isGroup && members.length > 0 && <span className="v3-header-desc">{members.length} members</span>}
+      <div className={`v3-message-workspace${previewFile ? ' has-preview' : ''}`}>
+        <div className="v3-chat-column">
+          <div className="v3-header">
+            <div className="v3-header-left">
+              <div style={{display: 'flex', flexDirection: 'column'}}>
+                <span className="v3-header-title" style={{ fontSize: 17, letterSpacing: '-0.3px' }}>{displayName}</span>
+                {isGroup && members.length > 0 && <span className="v3-header-desc">{members.length} members</span>}
+              </div>
+            </div>
+            <div className="v3-header-actions">
+              {isGroup && (
+                <button className="v3-action-btn" onClick={() => setShowGroupSettings(true)} title={t('group_settings')}>
+                  <MoreHorizontal size={16} />
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="v3-header-actions">
-          {isGroup && (
-            <button className="v3-action-btn" onClick={() => setShowGroupSettings(true)} title={t('group_settings')}>
-              <MoreHorizontal size={16} />
-            </button>
-          )}
-        </div>
-      </div>
-      <div
-        className={`v3-timeline${isDragActive ? ' is-drag-active' : ''}`}
-        ref={timelineRef}
-        onScroll={handleTimelineScroll}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column' }}>
-          <div className="v3-date-divider">
-            <span>Chat History</span>
-          </div>
+          <div
+            className={`v3-timeline${isDragActive ? ' is-drag-active' : ''}`}
+            ref={timelineRef}
+            onScroll={handleTimelineScroll}
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <div className="v3-timeline-inner">
+              <div className="v3-date-divider">
+                <span>Chat History</span>
+              </div>
         
         {loadingOlder && (
           <div className="oc-history-load" style={{textAlign:'center', padding:'10px 0 24px 0'}}>
@@ -871,6 +876,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
                   senderIsBot={group.sender.isBot}
                   showThinking={showThinking}
                   isConsecutive={group.isConsecutive}
+                  onPreviewFile={setPreviewFile}
+                  activePreviewFile={previewFile}
                 />
               </div>
             );
@@ -888,6 +895,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
               onReply={() => setReplyTo(group.message)}
               showThinking={showThinking}
               isConsecutive={group.isConsecutive}
+              onPreviewFile={setPreviewFile}
+              activePreviewFile={previewFile}
             />
           );
         })}
@@ -1040,6 +1049,11 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
           <input ref={imageInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'image')} />
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'file')} />
         </div>
+      </div>
+        </div>
+        {previewFile && (
+          <FilePreviewPanel file={previewFile} onClose={() => setPreviewFile(null)} />
+        )}
       </div>
       {showGroupSettings && isGroup && groupId && (
         <GroupSettings

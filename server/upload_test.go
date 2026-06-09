@@ -23,10 +23,11 @@ func TestHandleUploadAllowsHTMLAsFileAttachment(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	var body struct {
-		FileKey string `json:"file_key"`
-		URL     string `json:"url"`
-		Name    string `json:"name"`
-		Type    string `json:"type"`
+		FileKey  string `json:"file_key"`
+		URL      string `json:"url"`
+		Name     string `json:"name"`
+		Type     string `json:"type"`
+		MimeType string `json:"mime_type"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -42,6 +43,9 @@ func TestHandleUploadAllowsHTMLAsFileAttachment(t *testing.T) {
 	}
 	if !strings.HasPrefix(body.URL, "/uploads/files/") {
 		t.Fatalf("url = %q, want /uploads/files prefix", body.URL)
+	}
+	if body.MimeType != "text/html" {
+		t.Fatalf("mime_type = %q, want text/html", body.MimeType)
 	}
 }
 
