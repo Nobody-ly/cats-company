@@ -1108,7 +1108,7 @@ body {
 }
 
 .v3-message-workspace.has-preview {
-  grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
+  grid-template-columns: minmax(420px, 3fr) minmax(360px, 2fr);
 }
 
 .v3-chat-column {
@@ -3820,7 +3820,7 @@ body {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 1024px) {
   .v3-message-workspace.has-preview {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(280px, 42vh);

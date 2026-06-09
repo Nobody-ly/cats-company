@@ -258,4 +258,39 @@ describe('ChatMessage rich file rendering', () => {
     expect(container.querySelectorAll('.v3-file-preview-panel')).toHaveLength(1);
     expect(container.querySelector('.v3-file-preview-title h3').textContent).toBe('summary.md');
   });
+
+  it('uses the side preview for legacy JSON file messages', async () => {
+    await act(async () => {
+      root.render(
+        <PreviewHarness
+          message={{
+            id: 6,
+            from_uid: 2,
+            content: {
+              type: 'file',
+              payload: {
+                name: 'legacy-report.html',
+                url: '/uploads/files/legacy-report.html',
+                size: 2048,
+                mime_type: 'text/html',
+              },
+            },
+            created_at: '2026-06-09T00:00:00Z',
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      Simulate.click(container.querySelector('.v3-attachment-card'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(window.open).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledWith('/uploads/files/legacy-report.html');
+    expect(container.querySelectorAll('.v3-file-preview-panel')).toHaveLength(1);
+    expect(container.querySelector('.v3-file-preview-title h3').textContent).toBe('legacy-report.html');
+  });
 });

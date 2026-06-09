@@ -636,7 +636,13 @@ function ChatMessageComponent({ message, workingMessages = null, isSelf, isGroup
 
         {(hasText || richBlocks.length > 0) && (
           <div style={{lineHeight: 1.46}}>
-            {hasText && (parsed ? <RichContent content={parsed} /> : <TextContent content={renderedTextContent} isGroup={isGroup} />)}
+            {hasText && (parsed ? (
+              <RichContent
+                content={parsed}
+                onPreviewFile={onPreviewFile}
+                activePreviewFile={activePreviewFile}
+              />
+            ) : <TextContent content={renderedTextContent} isGroup={isGroup} />)}
             {richBlocks.map((block, index) => (
               <RichContent
                 key={`${block.type}-${index}`}
