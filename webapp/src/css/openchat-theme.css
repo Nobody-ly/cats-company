@@ -3543,18 +3543,37 @@ body {
   align-items: center;
   border: 1px solid var(--v3-border);
   border-radius: var(--v3-radius);
-  padding: 10px 14px;
   margin-top: 8px;
   width: max-content;
   max-width: 100%;
   background: rgba(0, 0, 0, 0.2);
-  cursor: pointer;
+  overflow: hidden;
   transition: border-color 0.15s;
   color: inherit;
   text-align: left;
 }
 .v3-attachment-card:hover {
   border-color: #55585B;
+}
+.v3-artifact-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px 10px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.v3-artifact-main:hover .v3-attachment-name,
+.v3-artifact-main:focus-visible .v3-attachment-name {
+  color: var(--v3-text-main);
+}
+.v3-artifact-main:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.85);
+  outline-offset: -2px;
 }
 .v3-attachment-icon {
   width: 36px;
@@ -3596,7 +3615,7 @@ body {
 }
 .v3-artifact-card {
   min-width: min(260px, 100%);
-  max-width: min(520px, 100%);
+  max-width: min(620px, 100%);
   background: rgba(15, 23, 42, 0.36);
 }
 .v3-artifact-card.report {
@@ -3619,17 +3638,45 @@ body {
   font-weight: 700;
   line-height: 1.4;
 }
+.v3-artifact-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 8px 0;
+}
 .v3-artifact-action {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin-left: 14px;
+  gap: 4px;
+  min-width: 58px;
+  height: 30px;
+  padding: 0 8px;
   flex: 0 0 auto;
   border-radius: 6px;
   color: var(--v3-text-muted);
+  border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.v3-artifact-action:hover {
+  color: var(--v3-text-name);
+  border-color: #55585B;
+}
+.v3-artifact-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  color: var(--v3-text-muted);
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.025);
+}
+.v3-artifact-action:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.85);
+  outline-offset: 2px;
 }
 .v3-file-preview-panel {
   min-width: 0;

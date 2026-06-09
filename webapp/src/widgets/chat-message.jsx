@@ -773,6 +773,12 @@ function isPdfFile(payload, ext = fileExtension(payload)) {
   return ext === 'PDF' || fileMimeType(payload) === 'application/pdf';
 }
 
+function isDocxFile(payload, ext = fileExtension(payload)) {
+  const mime = fileMimeType(payload);
+  return ext === 'DOCX' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+}
+
 function isPreviewableFile(payload, ext = fileExtension(payload)) {
   const mime = fileMimeType(payload);
   if (PREVIEW_FILE_EXTENSIONS.has(ext) || isPdfFile(payload, ext)) return true;
@@ -792,6 +798,13 @@ function artifactMeta(payload, ext = fileExtension(payload)) {
       label: 'PDF 报告',
       className: 'report',
       subtitle: '报告文件',
+    };
+  }
+  if (isDocxFile(payload, ext)) {
+    return {
+      label: 'Word 文档',
+      className: 'document',
+      subtitle: '可下载的文档',
     };
   }
   if (isMarkdownFile(payload, ext)) {
@@ -875,30 +888,55 @@ function FileContent({ payload, onPreviewFile, activePreviewFile }) {
   const activeKey = activePreviewFile ? previewFileDescriptor(activePreviewFile)?.key : '';
   const isActive = canPreview && activeKey === key;
   const subtitle = [meta.subtitle, sizeStr, fileMimeType(payload) || ext].filter(Boolean).join(' · ');
+  const openFile = () => {
+    if (canPreview && onPreviewFile) onPreviewFile(payload);
+    else if (url) window.open(url, '_blank');
+  };
 
   return (
-    <button
+    <div
       className={`v3-attachment-card v3-artifact-card ${meta.className}${isActive ? ' active' : ''}`}
-      onClick={() => {
-        if (canPreview && onPreviewFile) onPreviewFile(payload);
-        else if (canPreview) window.open(url, '_blank');
-        else if (url) window.open(url, '_blank');
-      }}
-      title={canPreview ? '预览文件' : '打开或下载文件'}
-      type="button"
     >
-      <div className="v3-attachment-icon">
-        <FileText size={18} strokeWidth={1.5} />
+      <button
+        className="v3-artifact-main"
+        onClick={openFile}
+        title={canPreview ? '预览文件' : '打开或下载文件'}
+        type="button"
+      >
+        <div className="v3-attachment-icon">
+          <FileText size={18} strokeWidth={1.5} />
+        </div>
+        <div className="v3-attachment-info">
+          <span className="v3-artifact-kind">{meta.label}</span>
+          <span className="v3-attachment-name" title={payload.name || 'File'}>{payload.name || 'File'}</span>
+          <span className="v3-attachment-size">{subtitle}</span>
+        </div>
+      </button>
+      <div className="v3-artifact-actions">
+        <button
+          className="v3-artifact-action"
+          disabled={!canPreview}
+          onClick={openFile}
+          title={canPreview ? '预览' : '暂不支持预览'}
+          type="button"
+        >
+          <Eye size={15} />
+          <span>预览</span>
+        </button>
+        <a
+          className="v3-artifact-action"
+          href={url || undefined}
+          download
+          onClick={(event) => event.stopPropagation()}
+          rel="noopener noreferrer"
+          target="_blank"
+          title="下载"
+        >
+          <Download size={15} />
+          <span>下载</span>
+        </a>
       </div>
-      <div className="v3-attachment-info">
-        <span className="v3-artifact-kind">{meta.label}</span>
-        <span className="v3-attachment-name" title={payload.name || 'File'}>{payload.name || 'File'}</span>
-        <span className="v3-attachment-size">{subtitle}</span>
-      </div>
-      <div className="v3-artifact-action" aria-hidden="true">
-        {canPreview ? <Eye size={15} /> : <Download size={15} />}
-      </div>
-    </button>
+    </div>
   );
 }
 

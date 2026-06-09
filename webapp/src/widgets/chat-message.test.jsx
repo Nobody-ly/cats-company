@@ -97,7 +97,7 @@ describe('ChatMessage rich file rendering', () => {
     expect(container.textContent).toContain('HTML 报告');
 
     await act(async () => {
-      Simulate.click(container.querySelector('.v3-attachment-card'));
+      Simulate.click(container.querySelector('.v3-artifact-main'));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -162,7 +162,7 @@ describe('ChatMessage rich file rendering', () => {
     });
 
     await act(async () => {
-      Simulate.click(container.querySelector('.v3-attachment-card'));
+      Simulate.click(container.querySelector('.v3-artifact-main'));
       await Promise.resolve();
     });
 
@@ -196,7 +196,7 @@ describe('ChatMessage rich file rendering', () => {
     });
 
     await act(async () => {
-      Simulate.click(container.querySelector('.v3-attachment-card'));
+      Simulate.click(container.querySelector('.v3-artifact-main'));
       await Promise.resolve();
     });
 
@@ -243,14 +243,14 @@ describe('ChatMessage rich file rendering', () => {
 
     const cards = container.querySelectorAll('.v3-attachment-card');
     await act(async () => {
-      Simulate.click(cards[0]);
+      Simulate.click(cards[0].querySelector('.v3-artifact-main'));
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(container.querySelector('.v3-file-preview-title h3').textContent).toBe('report.html');
 
     await act(async () => {
-      Simulate.click(cards[1]);
+      Simulate.click(cards[1].querySelector('.v3-artifact-main'));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -283,7 +283,7 @@ describe('ChatMessage rich file rendering', () => {
     });
 
     await act(async () => {
-      Simulate.click(container.querySelector('.v3-attachment-card'));
+      Simulate.click(container.querySelector('.v3-artifact-main'));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -292,5 +292,67 @@ describe('ChatMessage rich file rendering', () => {
     expect(global.fetch).toHaveBeenCalledWith('/uploads/files/legacy-report.html');
     expect(container.querySelectorAll('.v3-file-preview-panel')).toHaveLength(1);
     expect(container.querySelector('.v3-file-preview-title h3').textContent).toBe('legacy-report.html');
+  });
+
+  it('shows separate preview and download actions on file cards', async () => {
+    await act(async () => {
+      root.render(
+        <PreviewHarness
+          message={{
+            id: 7,
+            from_uid: 2,
+            content: '[文件] report.pdf',
+            content_blocks: [{
+              type: 'file',
+              payload: {
+                name: 'report.pdf',
+                url: '/uploads/files/report.pdf',
+                size: 2048,
+                mime_type: 'application/pdf',
+              },
+            }],
+            created_at: '2026-06-09T00:00:00Z',
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const actions = container.querySelectorAll('.v3-artifact-action');
+    expect(actions).toHaveLength(2);
+    expect(actions[0].textContent).toContain('预览');
+    expect(actions[1].textContent).toContain('下载');
+    expect(actions[1].getAttribute('href')).toBe('/uploads/files/report.pdf');
+    expect(actions[1].hasAttribute('download')).toBe(true);
+  });
+
+  it('marks DOCX as downloadable without claiming browser preview support', async () => {
+    await act(async () => {
+      root.render(
+        <PreviewHarness
+          message={{
+            id: 8,
+            from_uid: 2,
+            content: '[文件] handout.docx',
+            content_blocks: [{
+              type: 'file',
+              payload: {
+                name: 'handout.docx',
+                url: '/uploads/files/handout.docx',
+                size: 2048,
+                mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              },
+            }],
+            created_at: '2026-06-09T00:00:00Z',
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('Word 文档');
+    const previewButton = container.querySelector('button.v3-artifact-action');
+    expect(previewButton.disabled).toBe(true);
+    expect(container.querySelector('a.v3-artifact-action').getAttribute('href')).toBe('/uploads/files/handout.docx');
   });
 });
