@@ -3626,18 +3626,6 @@ body {
   border-color: rgba(59, 130, 246, 0.32);
   background: rgba(59, 130, 246, 0.08);
 }
-.v3-artifact-kind {
-  width: fit-content;
-  max-width: 100%;
-  margin-bottom: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--v3-text-main);
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1.4;
-}
 .v3-artifact-actions {
   flex: 0 0 auto;
   display: flex;

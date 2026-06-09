@@ -788,21 +788,21 @@ function isPreviewableFile(payload, ext = fileExtension(payload)) {
 function artifactMeta(payload, ext = fileExtension(payload)) {
   if (isHtmlFile(payload, ext)) {
     return {
-      label: 'HTML 报告',
+      label: 'HTML',
       className: 'report',
       subtitle: '可预览的工作流产物',
     };
   }
   if (isPdfFile(payload, ext)) {
     return {
-      label: 'PDF 报告',
+      label: 'PDF',
       className: 'report',
       subtitle: '报告文件',
     };
   }
   if (isDocxFile(payload, ext)) {
     return {
-      label: 'Word 文档',
+      label: 'Word',
       className: 'document',
       subtitle: '可下载的文档',
     };
@@ -816,7 +816,7 @@ function artifactMeta(payload, ext = fileExtension(payload)) {
   }
   if (ext === 'CSV' || fileMimeType(payload) === 'text/csv') {
     return {
-      label: 'CSV 数据',
+      label: 'CSV',
       className: 'dataset',
       subtitle: '表格数据',
     };
@@ -887,7 +887,7 @@ function FileContent({ payload, onPreviewFile, activePreviewFile }) {
   const { url, ext, canPreview, meta, sizeStr, key } = descriptor;
   const activeKey = activePreviewFile ? previewFileDescriptor(activePreviewFile)?.key : '';
   const isActive = canPreview && activeKey === key;
-  const subtitle = [meta.subtitle, sizeStr, fileMimeType(payload) || ext].filter(Boolean).join(' · ');
+  const subtitle = [meta.label, meta.subtitle, sizeStr, fileMimeType(payload) || ext].filter(Boolean).join(' · ');
   const openFile = () => {
     if (canPreview && onPreviewFile) onPreviewFile(payload);
     else if (url) window.open(url, '_blank');
@@ -907,7 +907,6 @@ function FileContent({ payload, onPreviewFile, activePreviewFile }) {
           <FileText size={18} strokeWidth={1.5} />
         </div>
         <div className="v3-attachment-info">
-          <span className="v3-artifact-kind">{meta.label}</span>
           <span className="v3-attachment-name" title={payload.name || 'File'}>{payload.name || 'File'}</span>
           <span className="v3-attachment-size">{subtitle}</span>
         </div>

@@ -94,7 +94,8 @@ describe('ChatMessage rich file rendering', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('HTML 报告');
+    expect(container.querySelector('.v3-attachment-name').textContent).toBe('report.html');
+    expect(container.querySelector('.v3-attachment-size').textContent).toContain('HTML');
 
     await act(async () => {
       Simulate.click(container.querySelector('.v3-artifact-main'));
@@ -350,7 +351,8 @@ describe('ChatMessage rich file rendering', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('Word 文档');
+    expect(container.querySelector('.v3-attachment-name').textContent).toBe('handout.docx');
+    expect(container.querySelector('.v3-attachment-size').textContent).toContain('Word');
     const previewButton = container.querySelector('button.v3-artifact-action');
     expect(previewButton.disabled).toBe(true);
     expect(container.querySelector('a.v3-artifact-action').getAttribute('href')).toBe('/uploads/files/handout.docx');
