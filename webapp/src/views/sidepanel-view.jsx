@@ -447,7 +447,8 @@ function onlineStatusFor(onlineUsers, uid, fallback = false) {
 }
 
 function conversationSummaryToChat(item) {
-  const lastTimeMs = toTimeMs(item.last_time);
+  const createdAtMs = toTimeMs(item.created_at);
+  const lastTimeMs = toTimeMs(item.last_time) || createdAtMs;
   return {
     id: item.id,
     friendId: item.friend_id,
@@ -456,6 +457,7 @@ function conversationSummaryToChat(item) {
     preview: item.preview || '',
     time: lastTimeMs ? formatTime(new Date(lastTimeMs)) : '',
     lastTimeMs,
+    createdAtMs,
     isGroup: item.is_group,
     avatar_url: item.avatar_url,
     isBot: item.is_bot,

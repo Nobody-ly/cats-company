@@ -318,6 +318,38 @@ describe('ChatListView sidebar sections', () => {
     expect(text.indexOf('New Empty Group')).toBeLessThan(text.indexOf('Old Group'));
   });
 
+  it('falls back to created_at when direct conversations have no last_time', async () => {
+    api.getConversations.mockResolvedValue({
+      conversations: [
+        {
+          id: 'p2p_7_42',
+          friend_id: 42,
+          name: 'Older Agent',
+          is_group: false,
+          is_bot: true,
+          created_at: '2026-06-04T08:00:00Z',
+          latest_seq: 999,
+        },
+        {
+          id: 'p2p_7_43',
+          friend_id: 43,
+          name: 'Newer Agent',
+          is_group: false,
+          is_bot: true,
+          created_at: '2026-06-06T08:00:00Z',
+          latest_seq: 1,
+        },
+      ],
+    });
+    api.getGroups.mockResolvedValue({ groups: [] });
+    api.getAgents.mockResolvedValue({ agents: [] });
+
+    await mount();
+
+    const text = container.textContent;
+    expect(text.indexOf('Newer Agent')).toBeLessThan(text.indexOf('Older Agent'));
+  });
+
   it('lets live offline status override stale agent API online state', async () => {
     await mount({ onlineUsers: { 42: false } });
 
