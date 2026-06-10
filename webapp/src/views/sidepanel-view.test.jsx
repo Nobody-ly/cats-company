@@ -350,6 +350,75 @@ describe('ChatListView sidebar sections', () => {
     expect(text.indexOf('Newer Agent')).toBeLessThan(text.indexOf('Older Agent'));
   });
 
+  it('falls back to latest_seq when timestamps are equal', async () => {
+    api.getConversations.mockResolvedValue({
+      conversations: [
+        {
+          id: 'p2p_7_8',
+          friend_id: 8,
+          name: 'Higher Seq Friend',
+          is_group: false,
+          is_bot: false,
+          last_time: '2026-06-05T08:00:00Z',
+          latest_seq: 20,
+        },
+        {
+          id: 'p2p_7_9',
+          friend_id: 9,
+          name: 'Lower Seq Friend',
+          is_group: false,
+          is_bot: false,
+          last_time: '2026-06-05T08:00:00Z',
+          latest_seq: 10,
+        },
+      ],
+    });
+    api.getGroups.mockResolvedValue({ groups: [] });
+    api.getAgents.mockResolvedValue({ agents: [] });
+
+    await mount();
+
+    const text = container.textContent;
+    expect(text.indexOf('Higher Seq Friend')).toBeLessThan(text.indexOf('Lower Seq Friend'));
+  });
+
+  it('preserves group metadata time when conversation payload has no usable timestamp', async () => {
+    api.getConversations.mockResolvedValue({
+      conversations: [
+        {
+          id: 'grp_20',
+          group_id: 20,
+          name: 'Older Group',
+          is_group: true,
+          latest_seq: 999,
+          last_time: 'not-a-date',
+        },
+      ],
+    });
+    api.getGroups.mockResolvedValue({
+      groups: [
+        {
+          id: 20,
+          name: 'Older Group',
+          owner_id: 7,
+          created_at: '2026-06-02T08:00:00Z',
+        },
+        {
+          id: 21,
+          name: 'Newer Empty Group',
+          owner_id: 7,
+          created_at: '2026-06-07T08:00:00Z',
+        },
+      ],
+    });
+    api.getAgents.mockResolvedValue({ agents: [] });
+
+    await mount();
+
+    const text = container.textContent;
+    expect(text.indexOf('Newer Empty Group')).toBeLessThan(text.indexOf('Older Group'));
+  });
+
   it('lets live offline status override stale agent API online state', async () => {
     await mount({ onlineUsers: { 42: false } });
 
