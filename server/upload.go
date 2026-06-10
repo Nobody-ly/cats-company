@@ -44,6 +44,17 @@ var allowedImageTypes = map[string]bool{
 	"image/webp": true,
 }
 
+func isAllowedImageContentType(contentType string) bool {
+	if strings.TrimSpace(contentType) == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return allowedImageTypes[strings.ToLower(mediaType)]
+}
+
 // Allowed file extensions (whitelist)
 var allowedFileExts = map[string]bool{
 	".txt": true, ".pdf": true, ".doc": true, ".docx": true,
@@ -112,7 +123,7 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// For images, also validate MIME type
 	if isImageUpload {
 		contentType := header.Header.Get("Content-Type")
-		if !allowedImageTypes[contentType] {
+		if !isAllowedImageContentType(contentType) {
 			writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image type"})
 			return
 		}

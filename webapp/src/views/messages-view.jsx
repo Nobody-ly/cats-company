@@ -15,7 +15,9 @@ const MAX_ATTACHMENT_SIZE = MAX_ATTACHMENT_SIZE_MB * 1024 * 1024;
 const MAX_DROPPED_FILES = 200;
 const HISTORY_AUTO_LOAD_THRESHOLD = 120;
 const STICK_TO_BOTTOM_THRESHOLD = 96;
-const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']);
+const SUPPORTED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const IMAGE_UPLOAD_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,image/jpeg,image/png,image/gif,image/webp';
 
 export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
   const [input, setInput] = useState('');
@@ -36,6 +38,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [isStopRequested, setIsStopRequested] = useState(false);
+  const [attachmentStatus, setAttachmentStatus] = useState(null);
   const [showThinking, setShowThinking] = useState(() => {
     const saved = localStorage.getItem('cc_show_thinking');
     return saved === null ? true : saved === 'true';
@@ -138,6 +141,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setHasMoreHistory(false);
     setLoadingOlder(false);
     setIsStopRequested(false);
+    setAttachmentStatus(null);
     loadHistory();
     if (isGroup && groupId) {
       loadGroupMembers();
@@ -434,6 +438,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
     const sendTopic = topic;
     clearRuntimePlan();
+    setAttachmentStatus(null);
     const attachmentsToSend = pendingAttachments;
     setInput('');
     const currentReplyTo = replyTo;
@@ -544,13 +549,15 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const uploadAttachmentFile = async (file, requestedType) => {
     const uploadTopic = activeTopicRef.current;
     const type = inferAttachmentType(file, requestedType);
-    if (file.size > MAX_ATTACHMENT_SIZE) {
-      window.alert(`文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB。当前最多支持 ${MAX_ATTACHMENT_SIZE_MB}MB。`);
-      return false;
+    const validationError = validateAttachmentBeforeUpload(file, type);
+    if (validationError) {
+      setAttachmentStatus({ tone: 'error', message: validationError });
+      return null;
     }
 
     try {
       setIsUploadingAttachment(true);
+      setAttachmentStatus({ tone: 'info', message: `正在上传 ${file.name || '附件'}...` });
       const formData = new FormData();
       formData.append('file', file);
       const res = await fetch(`${process.env.REACT_APP_API_BASE || ''}/api/upload?type=${type}`, {
@@ -594,15 +601,11 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       };
       if (activeTopicRef.current !== uploadTopic) return attachment;
       setPendingAttachments((prev) => [...prev, attachment]);
+      setAttachmentStatus({ tone: 'info', message: `已添加${type === 'image' ? '图片' : '文件'}：${data.name}` });
       setTimeout(() => textareaRef.current?.focus(), 0);
       return attachment;
     } catch (err) {
-      // Fallback: If the server returns a raw Nginx HTML 413 instead of JSON, 
-      // res.json() will throw a generic SyntaxError. We explicitly alert the user.
-      const errorMsg = err.message.includes('Unexpected token') || err.message.includes('JSON')
-        ? 'Upload failed: Server rejected the file (likely Payload Too Large / 413).'
-        : `Upload failed: ${err.message}`;
-      window.alert(errorMsg);
+      setAttachmentStatus({ tone: 'error', message: formatUploadError(err) });
       return null;
     } finally {
       setIsUploadingAttachment(false);
@@ -612,9 +615,14 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const uploadAttachmentFiles = async (files, requestedType) => {
     const fileList = Array.from(files || []).filter(Boolean);
     if (fileList.length === 0) return;
+    let uploadedCount = 0;
     for (const file of fileList.slice(0, MAX_DROPPED_FILES)) {
       const uploaded = await uploadAttachmentFile(file, requestedType);
       if (!uploaded) break;
+      uploadedCount += 1;
+    }
+    if (uploadedCount > 1) {
+      setAttachmentStatus({ tone: 'info', message: `已添加 ${uploadedCount} 个附件，发送后对方可见。` });
     }
   };
 
@@ -627,6 +635,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   const openAttachmentPicker = (inputRef) => {
     if (isUploadingAttachment) return;
+    setAttachmentStatus(null);
     if (inputRef.current) {
       inputRef.current.value = '';
       inputRef.current.click();
@@ -667,12 +676,12 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     setIsDragActive(false);
 
     if (isUploadingAttachment) {
-      window.alert('Upload in progress. Please wait before dropping another file.');
+      setAttachmentStatus({ tone: 'info', message: '附件仍在上传中，请稍后再拖入新的文件。' });
       return;
     }
     const files = await collectDroppedFiles(e.dataTransfer);
     if (files.length === 0) {
-      window.alert('No uploadable files were found in this drop.');
+      setAttachmentStatus({ tone: 'error', message: '这次拖入没有识别到可上传的文件。' });
       return;
     }
 
@@ -687,7 +696,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     e.stopPropagation();
 
     if (isUploadingAttachment) {
-      window.alert('Upload in progress. Please wait before pasting another file.');
+      setAttachmentStatus({ tone: 'info', message: '附件仍在上传中，请稍后再粘贴新的文件。' });
       return;
     }
     await uploadAttachmentFiles(files);
@@ -988,6 +997,12 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             </div>
           )}
 
+          {attachmentStatus?.message && (
+            <div className={`v3-live-input-status v3-live-input-status-${attachmentStatus.tone || 'info'}`} role="status">
+              {attachmentStatus.message}
+            </div>
+          )}
+
           <textarea
             ref={textareaRef}
             className="v3-composer-input"
@@ -1020,7 +1035,10 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
                 <button
                   className="v3-action-btn"
                   aria-label="Remove attachments"
-                  onClick={() => setPendingAttachments([])}
+                  onClick={() => {
+                    setPendingAttachments([]);
+                    setAttachmentStatus(null);
+                  }}
                   type="button"
                 >
                   x
@@ -1046,7 +1064,7 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
             </button>
           </div>
           
-          <input ref={imageInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'image')} />
+          <input ref={imageInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'image')} />
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'file')} />
         </div>
       </div>
@@ -1077,7 +1095,40 @@ function inferAttachmentType(file, requestedType) {
   if (file?.type?.toLowerCase().startsWith('image/')) return 'image';
   const name = file?.name?.toLowerCase() || '';
   const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
-  return IMAGE_EXTENSIONS.has(extension) ? 'image' : 'file';
+  return SUPPORTED_IMAGE_EXTENSIONS.has(extension) ? 'image' : 'file';
+}
+
+function validateAttachmentBeforeUpload(file, type) {
+  if (!file) return '未找到可上传的文件。';
+  if (file.size > MAX_ATTACHMENT_SIZE) {
+    return `文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB。当前最多支持 ${MAX_ATTACHMENT_SIZE_MB}MB。`;
+  }
+  if (type !== 'image') return '';
+
+  const mimeType = file.type?.toLowerCase() || '';
+  const name = file.name?.toLowerCase() || '';
+  const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+  const mimeAllowed = !mimeType || SUPPORTED_IMAGE_MIME_TYPES.has(mimeType);
+  const extensionAllowed = !extension || SUPPORTED_IMAGE_EXTENSIONS.has(extension);
+  if (mimeAllowed && extensionAllowed) return '';
+  return '当前仅支持 JPG、PNG、GIF、WebP 图片。';
+}
+
+function formatUploadError(err) {
+  const message = String(err?.message || '上传失败');
+  if (message.includes('413') || message.includes('Payload Too Large')) {
+    return `上传失败：文件超过 ${MAX_ATTACHMENT_SIZE_MB}MB 限制。`;
+  }
+  if (message.includes('invalid image type')) {
+    return '上传失败：当前仅支持 JPG、PNG、GIF、WebP 图片。';
+  }
+  if (message.includes('file type not allowed')) {
+    return '上传失败：该文件类型暂不支持。';
+  }
+  if (message.includes('Unexpected token') || message.includes('invalid server response') || message.includes('JSON')) {
+    return '上传失败：服务器返回了无法识别的响应。';
+  }
+  return `上传失败：${message}`;
 }
 
 function buildAtomicContentBlocks(text, attachments) {

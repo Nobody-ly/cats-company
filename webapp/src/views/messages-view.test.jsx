@@ -2,9 +2,15 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Simulate } from 'react-dom/test-utils';
 
-jest.mock('../widgets/chat-message', () => function MockChatMessage() {
-  return null;
-});
+jest.mock('../widgets/chat-message', () => ({
+  __esModule: true,
+  default: function MockChatMessage() {
+    return null;
+  },
+  FilePreviewPanel: function MockFilePreviewPanel() {
+    return null;
+  },
+}));
 
 jest.mock('../widgets/group-settings', () => function MockGroupSettings() {
   return null;
@@ -31,6 +37,8 @@ jest.mock('../api', () => ({
 
 const MessagesView = require('./messages-view').default;
 const { api, onWSMessage } = require('../api');
+
+const originalFetch = global.fetch;
 
 const user = {
   uid: 1,
@@ -82,6 +90,7 @@ describe('MessagesView composer draft isolation', () => {
     api.getFriends.mockResolvedValue({ friends: [] });
     api.getGroupInfo.mockResolvedValue({ members: [], group: null });
     api.sendMessage.mockResolvedValue({ seq_id: 100 });
+    global.fetch = jest.fn();
     wsHandler = null;
     onWSMessage.mockImplementation((handler) => {
       wsHandler = handler;
@@ -99,6 +108,7 @@ describe('MessagesView composer draft isolation', () => {
       root.unmount();
     });
     container.remove();
+    global.fetch = originalFetch;
     jest.clearAllMocks();
   });
 
@@ -170,6 +180,57 @@ describe('MessagesView composer draft isolation', () => {
 
     expect(textarea.style.height).toBe('220px');
     expect(textarea.style.overflowY).toBe('auto');
+  });
+
+  it('shows an inline error when an unsupported image is selected', async () => {
+    await mountTopic(root, 'p2p_1_2');
+
+    const input = container.querySelector('input[accept*="image/jpeg"]');
+    const invalidImage = new File(['<svg></svg>'], 'vector.svg', { type: 'image/svg+xml' });
+
+    await act(async () => {
+      Simulate.change(input, {
+        target: {
+          files: [invalidImage],
+          value: 'C:\\fakepath\\vector.svg',
+        },
+      });
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('当前仅支持 JPG、PNG、GIF、WebP 图片。');
+  });
+
+  it('shows upload success inline after adding an image attachment', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({
+        file_key: '20260610_abc.jpg',
+        url: '/uploads/images/20260610_abc.jpg',
+        name: 'cat.jpg',
+        size: 12,
+        mime_type: 'image/jpeg',
+      }),
+    });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    const input = container.querySelector('input[accept*="image/jpeg"]');
+    const image = new File(['hello'], 'cat.jpg', { type: 'image/jpeg' });
+
+    await act(async () => {
+      Simulate.change(input, {
+        target: {
+          files: [image],
+          value: 'C:\\fakepath\\cat.jpg',
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('已添加图片：cat.jpg');
+    expect(container.textContent).toContain('cat.jpg');
   });
 
   it('clears peer typing immediately when a peer final reply arrives', async () => {
