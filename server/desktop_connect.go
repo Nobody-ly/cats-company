@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -244,13 +243,4 @@ func configuredDesktopConnectBaseURLs() (string, string) {
 		return "", ""
 	}
 	return httpBaseURL, wsURL
-}
-
-func firstEnv(names ...string) string {
-	for _, name := range names {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return value
-		}
-	}
-	return ""
 }
