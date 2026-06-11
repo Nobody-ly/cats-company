@@ -26,6 +26,7 @@ jest.mock('../api', () => ({
     getFriends: jest.fn(),
     getGroupInfo: jest.fn(),
     sendMessage: jest.fn(),
+    uploadFile: jest.fn(),
   },
   wsSendMessage: jest.fn(),
   wsSendStreamCancel: jest.fn(),
@@ -37,8 +38,6 @@ jest.mock('../api', () => ({
 
 const MessagesView = require('./messages-view').default;
 const { api, onWSMessage } = require('../api');
-
-const originalFetch = global.fetch;
 
 const user = {
   uid: 1,
@@ -90,7 +89,13 @@ describe('MessagesView composer draft isolation', () => {
     api.getFriends.mockResolvedValue({ friends: [] });
     api.getGroupInfo.mockResolvedValue({ members: [], group: null });
     api.sendMessage.mockResolvedValue({ seq_id: 100 });
-    global.fetch = jest.fn();
+    api.uploadFile.mockResolvedValue({
+      file_key: '20260610_default.jpg',
+      url: '/uploads/images/20260610_default.jpg',
+      name: 'default.jpg',
+      size: 12,
+      mime_type: 'image/jpeg',
+    });
     wsHandler = null;
     onWSMessage.mockImplementation((handler) => {
       wsHandler = handler;
@@ -108,7 +113,6 @@ describe('MessagesView composer draft isolation', () => {
       root.unmount();
     });
     container.remove();
-    global.fetch = originalFetch;
     jest.clearAllMocks();
   });
 
@@ -197,20 +201,17 @@ describe('MessagesView composer draft isolation', () => {
       });
     });
 
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(api.uploadFile).not.toHaveBeenCalled();
     expect(container.textContent).toContain('当前仅支持 JPG、PNG、GIF、WebP 图片。');
   });
 
   it('shows upload success inline after adding an image attachment', async () => {
-    global.fetch.mockResolvedValue({
-      ok: true,
-      text: async () => JSON.stringify({
-        file_key: '20260610_abc.jpg',
-        url: '/uploads/images/20260610_abc.jpg',
-        name: 'cat.jpg',
-        size: 12,
-        mime_type: 'image/jpeg',
-      }),
+    api.uploadFile.mockResolvedValueOnce({
+      file_key: '20260610_abc.jpg',
+      url: '/uploads/images/20260610_abc.jpg',
+      name: 'cat.jpg',
+      size: 12,
+      mime_type: 'image/jpeg',
     });
 
     await mountTopic(root, 'p2p_1_2');
@@ -228,7 +229,8 @@ describe('MessagesView composer draft isolation', () => {
       await Promise.resolve();
     });
 
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(api.uploadFile).toHaveBeenCalledTimes(1);
+    expect(api.uploadFile).toHaveBeenCalledWith(image, 'image');
     expect(container.textContent).toContain('已添加图片：cat.jpg');
     expect(container.textContent).toContain('cat.jpg');
   });

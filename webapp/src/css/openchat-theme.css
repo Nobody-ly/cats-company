@@ -1429,6 +1429,24 @@ body {
   line-height: 1.45;
 }
 
+.v3-live-input-status-info {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: rgba(59, 130, 246, 0.1);
+  color: #BFDBFE;
+}
+
+.v3-live-input-status-success {
+  border-color: rgba(52, 211, 153, 0.32);
+  background: rgba(16, 185, 129, 0.1);
+  color: #BFFFE4;
+}
+
+.v3-live-input-status-error {
+  border-color: rgba(248, 113, 113, 0.36);
+  background: rgba(239, 68, 68, 0.1);
+  color: #FECACA;
+}
+
 .v3-composer-footer {
   padding: 6px 12px;
   display: flex;

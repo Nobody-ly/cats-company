@@ -5,19 +5,15 @@ import t from '../i18n';
 import ChatMessage, { FilePreviewPanel } from '../widgets/chat-message';
 import GroupSettings from '../widgets/group-settings';
 import Avatar from '../widgets/avatar';
+import { IMAGE_UPLOAD_ACCEPT, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_MB, inferAttachmentType, validateImageUpload } from '../utils/upload-rules';
 
 const PAGE_SIZE = 50;
 const TYPING_TIMEOUT_MS = 10000;
 const WORKING_MESSAGE_TYPES = new Set(['thinking', 'tool_use', 'tool_result']);
 const WORKING_TEXT_PREFIX = 'AI文本:';
-const MAX_ATTACHMENT_SIZE_MB = 300;
-const MAX_ATTACHMENT_SIZE = MAX_ATTACHMENT_SIZE_MB * 1024 * 1024;
 const MAX_DROPPED_FILES = 200;
 const HISTORY_AUTO_LOAD_THRESHOLD = 120;
 const STICK_TO_BOTTOM_THRESHOLD = 96;
-const SUPPORTED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
-const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const IMAGE_UPLOAD_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,image/jpeg,image/png,image/gif,image/webp';
 
 export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
   const [input, setInput] = useState('');
@@ -558,26 +554,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     try {
       setIsUploadingAttachment(true);
       setAttachmentStatus({ tone: 'info', message: `正在上传 ${file.name || '附件'}...` });
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch(`${process.env.REACT_APP_API_BASE || ''}/api/upload?type=${type}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('oc_token')}` },
-        body: formData,
-      });
-      const raw = await res.text();
-      let data = {};
-      if (raw) {
-        try {
-          data = JSON.parse(raw);
-        } catch (parseErr) {
-          if (!res.ok) {
-            throw new Error(`Upload failed with HTTP ${res.status}`);
-          }
-          throw new Error('Upload failed: invalid server response');
-        }
-      }
-      if (!res.ok) throw new Error(data.error || `Upload failed with HTTP ${res.status}`);
+      const data = await api.uploadFile(file, type);
 
       const content = {
         type,
@@ -601,7 +578,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       };
       if (activeTopicRef.current !== uploadTopic) return attachment;
       setPendingAttachments((prev) => [...prev, attachment]);
-      setAttachmentStatus({ tone: 'info', message: `已添加${type === 'image' ? '图片' : '文件'}：${data.name}` });
+      setAttachmentStatus({ tone: 'success', message: `已添加${type === 'image' ? '图片' : '文件'}：${data.name}` });
       setTimeout(() => textareaRef.current?.focus(), 0);
       return attachment;
     } catch (err) {
@@ -622,7 +599,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
       uploadedCount += 1;
     }
     if (uploadedCount > 1) {
-      setAttachmentStatus({ tone: 'info', message: `已添加 ${uploadedCount} 个附件，发送后对方可见。` });
+      setAttachmentStatus({ tone: 'success', message: `已添加 ${uploadedCount} 个附件，发送后对方可见。` });
     }
   };
 
@@ -1090,13 +1067,6 @@ function hasFileDrag(dataTransfer) {
   return Array.from(dataTransfer.types).includes('Files');
 }
 
-function inferAttachmentType(file, requestedType) {
-  if (requestedType) return requestedType;
-  if (file?.type?.toLowerCase().startsWith('image/')) return 'image';
-  const name = file?.name?.toLowerCase() || '';
-  const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
-  return SUPPORTED_IMAGE_EXTENSIONS.has(extension) ? 'image' : 'file';
-}
 
 function validateAttachmentBeforeUpload(file, type) {
   if (!file) return '未找到可上传的文件。';
@@ -1105,13 +1075,7 @@ function validateAttachmentBeforeUpload(file, type) {
   }
   if (type !== 'image') return '';
 
-  const mimeType = file.type?.toLowerCase() || '';
-  const name = file.name?.toLowerCase() || '';
-  const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
-  const mimeAllowed = !mimeType || SUPPORTED_IMAGE_MIME_TYPES.has(mimeType);
-  const extensionAllowed = !extension || SUPPORTED_IMAGE_EXTENSIONS.has(extension);
-  if (mimeAllowed && extensionAllowed) return '';
-  return '当前仅支持 JPG、PNG、GIF、WebP 图片。';
+  return validateImageUpload(file);
 }
 
 function formatUploadError(err) {

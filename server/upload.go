@@ -216,7 +216,7 @@ func (h *UploadHandler) HandleServeFile(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", cacheControlForUpload(subDir))
 	if subDir == "files" {
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+		w.Header().Set("Content-Disposition", contentDispositionForUploadFile(fileName, ext))
 	}
 	http.ServeFile(w, r, fullPath)
 }
@@ -226,6 +226,14 @@ func cacheControlForUpload(subDir string) string {
 		return "public, max-age=31536000, immutable"
 	}
 	return "private, max-age=86400"
+}
+
+func contentDispositionForUploadFile(fileName, ext string) string {
+	disposition := "attachment"
+	if strings.EqualFold(ext, ".pdf") {
+		disposition = "inline"
+	}
+	return fmt.Sprintf("%s; filename=%q", disposition, fileName)
 }
 
 func normalizedUploadMimeType(ext, headerType string) string {
