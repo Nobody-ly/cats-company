@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/openchat/openchat/server/store/types"
 )
 
 const (
@@ -36,6 +38,9 @@ func (h *Hub) SendToUserExcept(uid int64, msg *ServerMessage, exclude *Client) {
 
 	for _, client := range clients {
 		if client == exclude {
+			continue
+		}
+		if client.deviceConnector != nil {
 			continue
 		}
 		h.sendRawToClient(client, data)
@@ -79,6 +84,7 @@ func (h *Hub) disconnectClient(client *Client, reason string) {
 	}
 
 	h.releaseBotBodyLease(client)
+	h.unbindDeviceClient(client)
 	if reason == "" {
 		log.Printf("client disconnected: uid=%d (devices: %d, online users: %d)", client.uid, remaining, onlineUsers)
 	} else {
@@ -109,7 +115,7 @@ func (h *Hub) getClients(uid int64) []*Client {
 func (h *Hub) IsOnline(uid int64) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return len(h.clients[uid]) > 0
+	return hasMessagingClient(h.clients[uid])
 }
 
 func (c *Client) trySend(message []byte) bool {
@@ -150,6 +156,7 @@ func (c *Client) ReadPump(handler func(client *Client, msg *ClientMessage)) {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		c.touchRuntimeRoute()
 		return nil
 	})
 
@@ -166,7 +173,41 @@ func (c *Client) ReadPump(handler func(client *Client, msg *ClientMessage)) {
 			continue
 		}
 
+		c.touchRuntimeRoute()
 		handler(c, &msg)
+	}
+}
+
+func (c *Client) touchRuntimeRoute() {
+	if c != nil && c.hub != nil {
+		c.hub.bindClientRuntimeRoute(c)
+	}
+	c.touchBotBodyLease()
+	c.touchBoundDevice()
+}
+
+func (c *Client) touchBotBodyLease() {
+	if c == nil || c.hub == nil || c.accountType != types.AccountBot {
+		return
+	}
+	c.hub.renewBotBodyLease(c)
+}
+
+func (c *Client) touchBoundDevice() {
+	if c == nil || c.hub == nil || c.hub.userDevices == nil || c.deviceOwnerUID <= 0 || c.deviceID == "" {
+		return
+	}
+	c.hub.userDevices.touch(c.deviceOwnerUID, c.deviceID)
+	if c.hub.sharedRuntime != nil {
+		route := c.hub.clientRoute(c)
+		now := nowForRoute(c.hub)
+		route.ExpiresAt = now.Add(defaultUserDeviceTTL)
+		c.hub.sharedRuntime.bindRuntimeRoute(route, now)
+		c.hub.sharedRuntime.bindUserDeviceRoute(c.deviceOwnerUID, UserDevice{
+			DeviceID:       c.deviceID,
+			BodyID:         c.deviceBodyID,
+			InstallationID: c.deviceInstallationID,
+		}, route, now)
 	}
 }
 

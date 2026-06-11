@@ -210,6 +210,7 @@ func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, pa
 
 	h.SendToUserExcept(uid, dataMsg, exclude)
 	h.SendToUser(peerUID, h.messageForRecipient(uid, peerUID, topicID, replyTo, payload, msgID))
+	h.forwardChannelBotReply(uid, peerUID, topicID, payload, msgID)
 
 	if senderClient := h.getClient(uid); senderClient != nil && senderClient.accountType == types.AccountBot {
 		h.botStats.RecordSent(uid, topicID)
@@ -223,7 +224,7 @@ func (h *Hub) messageForRecipient(uid int64, recipientUID int64, topicID string,
 	if payload == nil {
 		return nil
 	}
-	metadata := withCatscoIdentityMetadata(payload.Metadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID))
+	metadata := withCatscoIdentityMetadata(payload.Metadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent)))
 	return &ServerMessage{
 		Data: &MsgServerData{
 			Topic:         topicID,
@@ -241,6 +242,57 @@ func (h *Hub) messageForRecipient(uid int64, recipientUID int64, topicID string,
 	}
 }
 
+func (h *Hub) historyMessageDataForRecipient(recipientUID int64, message *types.Message) *MsgServerData {
+	if message == nil {
+		return nil
+	}
+	displayContent := decodeStoredContent(message.Content)
+	return &MsgServerData{
+		Topic:         message.TopicID,
+		From:          formatUID(message.FromUID),
+		SeqID:         int(message.ID),
+		Content:       displayContent,
+		Type:          inferDisplayTypeFromStoredMessage(message.MsgType, message.Content, message.ContentBlocks),
+		MsgType:       message.MsgType,
+		Metadata:      withCatscoIdentityMetadata(nil, h.buildCatscoIdentityMetadata(message.FromUID, recipientUID, message.TopicID, message.ID, normalizeContentText(displayContent), catscoIdentityMetadataOptions{OmitDeviceAccess: true, Replay: true})),
+		ContentBlocks: message.ContentBlocks,
+		Mode:          message.Mode,
+		Role:          message.Role,
+	}
+}
+
+func (h *Hub) historyAPIMessageForRecipient(recipientUID int64, message *types.Message) map[string]interface{} {
+	if message == nil {
+		return nil
+	}
+	data := h.historyMessageDataForRecipient(recipientUID, message)
+	if data == nil {
+		return nil
+	}
+	out := map[string]interface{}{
+		"id":         message.ID,
+		"seq_id":     message.ID,
+		"topic_id":   message.TopicID,
+		"from_uid":   message.FromUID,
+		"from":       data.From,
+		"content":    data.Content,
+		"type":       data.Type,
+		"msg_type":   data.MsgType,
+		"metadata":   data.Metadata,
+		"created_at": message.CreatedAt,
+	}
+	if len(data.ContentBlocks) > 0 {
+		out["content_blocks"] = data.ContentBlocks
+	}
+	if data.Mode != "" {
+		out["mode"] = data.Mode
+	}
+	if data.Role != "" {
+		out["role"] = data.Role
+	}
+	return out
+}
+
 func withCatscoIdentityMetadata(metadata map[string]interface{}, identity map[string]interface{}) map[string]interface{} {
 	if metadata == nil && identity == nil {
 		return nil
@@ -255,7 +307,17 @@ func withCatscoIdentityMetadata(metadata map[string]interface{}, identity map[st
 	return next
 }
 
-func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, topicID string, msgID int64) map[string]interface{} {
+type catscoIdentityMetadataOptions struct {
+	OmitDeviceAccess bool
+	Replay           bool
+}
+
+func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, topicID string, msgID int64, messageText string, options ...catscoIdentityMetadataOptions) map[string]interface{} {
+	opts := catscoIdentityMetadataOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	topicType := topicTypeForID(topicID)
 	identity := map[string]interface{}{
 		"schema_version": 1,
 		"actor": map[string]interface{}{
@@ -263,11 +325,16 @@ func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, to
 		},
 		"topic": map[string]interface{}{
 			"topic_id": topicID,
-			"type":     topicTypeForID(topicID),
+			"type":     topicType,
 		},
 		"permissions": map[string]interface{}{
 			"source": "server_canonical_message",
 		},
+	}
+	if opts.Replay {
+		permissions := identity["permissions"].(map[string]interface{})
+		permissions["replay"] = true
+		permissions["device_access"] = "non_executable_history"
 	}
 	if msgID > 0 {
 		identity["topic"].(map[string]interface{})["channel_seq"] = msgID
@@ -306,9 +373,40 @@ func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, to
 		if client.displayName != "" {
 			agent["display_name"] = client.displayName
 		}
+		if !opts.OmitDeviceAccess && h != nil && h.userDevices != nil {
+			deviceOwnerUID, deviceOwnerSource := h.deviceAccessOwnerUID(actorUID, recipientUID)
+			if deviceOwnerUID > 0 {
+				permissions := identity["permissions"].(map[string]interface{})
+				permissions["device_owner_user_id"] = formatUID(deviceOwnerUID)
+				permissions["device_owner_source"] = deviceOwnerSource
+			}
+			routableDevices, unavailableDevices := h.userDeviceRouteCandidates(deviceOwnerUID)
+			deviceContext := h.userDevices.turnContextForOwnerDevices(actorUID, deviceOwnerUID, topicID, topicType, recipientUID, client.bodyID, messageText, routableDevices, unavailableDevices)
+			if len(deviceContext.Grants) > 0 {
+				identity["device_grants"] = deviceContext.Grants
+			}
+			if deviceContext.Selection != nil {
+				identity["device_selection"] = deviceContext.Selection
+			}
+		}
 	}
 	identity["agent"] = agent
 	return identity
+}
+
+func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64) (int64, string) {
+	if h == nil || actorUID <= 0 || agentUID <= 0 {
+		return actorUID, "actor"
+	}
+	if h.db != nil {
+		if bindings, ok := h.db.(store.ChannelAgentBindingStore); ok {
+			binding, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)
+			if err == nil && binding != nil && binding.CanonicalUID > 0 {
+				return binding.CanonicalUID, "channel_identity_link"
+			}
+		}
+	}
+	return actorUID, "actor"
 }
 
 func topicTypeForID(topicID string) string {
@@ -320,28 +418,55 @@ func topicTypeForID(topicID string) string {
 
 // HandleGetMessages handles GET /api/messages?topic_id=xxx&limit=50&offset=0
 func (h *MessageHandler) HandleGetMessages(w http.ResponseWriter, r *http.Request) {
-	_ = UIDFromContext(r.Context())
+	uid := UIDFromContext(r.Context())
 
 	topicID := r.URL.Query().Get("topic_id")
 	if topicID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "topic_id required"})
 		return
 	}
+	if h.hub != nil {
+		if code, text := h.hub.validateTopicReadAccess(uid, h.accountTypeForUID(uid), topicID); code != 0 {
+			writeJSON(w, code, map[string]string{"error": text})
+			return
+		}
+	}
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	latest := r.URL.Query().Get("latest") == "1" || r.URL.Query().Get("latest") == "true"
 
-	var msgs interface{}
+	var rawMsgs []*types.Message
 	var err error
 	if latest {
-		msgs, err = h.db.GetLatestMessages(topicID, limit, offset)
+		rawMsgs, err = h.db.GetLatestMessages(topicID, limit, offset)
 	} else {
-		msgs, err = h.db.GetMessages(topicID, limit, offset)
+		rawMsgs, err = h.db.GetMessages(topicID, limit, offset)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load messages"})
 		return
+	}
+	msgs := make([]map[string]interface{}, 0, len(rawMsgs))
+	if h.hub != nil {
+		for _, message := range rawMsgs {
+			if formatted := h.hub.historyAPIMessageForRecipient(uid, message); formatted != nil {
+				msgs = append(msgs, formatted)
+			}
+		}
+	} else {
+		for _, message := range rawMsgs {
+			msgs = append(msgs, map[string]interface{}{
+				"id":         message.ID,
+				"seq_id":     message.ID,
+				"topic_id":   message.TopicID,
+				"from_uid":   message.FromUID,
+				"content":    decodeStoredContent(message.Content),
+				"type":       inferDisplayTypeFromStoredMessage(message.MsgType, message.Content, message.ContentBlocks),
+				"msg_type":   message.MsgType,
+				"created_at": message.CreatedAt,
+			})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"messages": msgs})

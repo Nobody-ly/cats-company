@@ -82,6 +82,32 @@ func TestBotBodyLeaseDoesNotExpireActiveConnectionByWallClock(t *testing.T) {
 	}
 }
 
+func TestSharedRuntimeBotBodyLeaseRejectsDifferentBodyAcrossHubs(t *testing.T) {
+	shared := newSharedMemoryRuntimeState()
+	now := time.Unix(300, 0)
+	hubA := NewHubWithRuntime(nil, nil, shared, "node-a")
+	hubB := NewHubWithRuntime(nil, nil, shared, "node-b")
+	hubA.bodyLeases.now = func() time.Time { return now }
+	hubB.bodyLeases.now = func() time.Time { return now }
+
+	if _, err := hubA.bodyLeases.acquire(42, "body-a", "conn-a"); err != nil {
+		t.Fatalf("node-a acquire failed: %v", err)
+	}
+	if _, err := hubB.bodyLeases.acquire(42, "body-b", "conn-b"); !errors.Is(err, errBotBodyLeaseConflict) {
+		t.Fatalf("node-b different body acquire error = %v, want conflict", err)
+	}
+
+	if _, err := hubB.bodyLeases.acquire(42, "body-a", "conn-b2"); err != nil {
+		t.Fatalf("same body reconnect from node-b failed: %v", err)
+	}
+	if hubA.bodyLeases.release(42, "body-a", "conn-a") {
+		t.Fatal("stale node-a connection must not release node-b replacement lease")
+	}
+	if !hubB.bodyLeases.isCurrent(42, "body-a", "conn-b2") {
+		t.Fatal("node-b replacement lease should be current")
+	}
+}
+
 func TestBotBodyLeaseStatus(t *testing.T) {
 	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
 	leases := newBotBodyLeaseManager(time.Minute)
@@ -165,11 +191,14 @@ func TestHandleGetBotBodyStatus(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !body.Active || !body.Bound || body.BotUID != 42 || body.BodyID != "body-a" {
+	if body.State != "online" || !body.Active || !body.Bound || body.BotUID != 42 || body.BodyID != "body-a" {
 		t.Fatalf("unexpected body status: %+v", body)
 	}
 	if body.ConnectedAt == nil || !body.ConnectedAt.Equal(now) {
 		t.Fatalf("unexpected connected_at: %+v", body.ConnectedAt)
+	}
+	if body.LeaseExpiresAt == nil || !body.LeaseExpiresAt.Equal(now.Add(defaultBotBodyLeaseTTL)) || body.LeaseTTLMS != int64(defaultBotBodyLeaseTTL/time.Millisecond) {
+		t.Fatalf("unexpected lease fields: %+v", body)
 	}
 }
 
@@ -215,7 +244,7 @@ func TestHandleGetBotBodyStatusReturnsOfflineBinding(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Active || !body.Bound || body.BotUID != 42 || body.BodyID != "body-a" || body.ConnectedAt != nil {
+	if body.State != "offline" || body.Active || !body.Bound || body.BotUID != 42 || body.BodyID != "body-a" || body.ConnectedAt != nil {
 		t.Fatalf("unexpected offline body status: %+v", body)
 	}
 }

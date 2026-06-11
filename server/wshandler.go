@@ -25,16 +25,25 @@ var upgrader = websocket.Upgrader{
 
 // Hub maintains the set of active clients and broadcasts messages.
 type Hub struct {
-	mu          sync.RWMutex
-	clients     map[int64]map[*Client]struct{}
-	register    chan *Client
-	unregister  chan *Client
-	presence    chan presenceEvent
-	db          store.Store
-	rateLimiter *RateLimiter
-	botStats    *BotStats
-	botConvo    botConvoTracker
-	bodyLeases  *botBodyLeaseManager
+	mu            sync.RWMutex
+	clients       map[int64]map[*Client]struct{}
+	clientsByConn map[string]*Client
+	register      chan *Client
+	unregister    chan *Client
+	presence      chan presenceEvent
+	db            store.Store
+	rateLimiter   *RateLimiter
+	botStats      *BotStats
+	botConvo      botConvoTracker
+	nodeID        string
+	sharedRuntime sharedRuntimeState
+	bodyLeases    *botBodyLeaseManager
+	userDevices   *userDeviceRegistry
+	deviceAudit   *deviceAuditLog
+	deviceRevokes *deviceConnectorRevocationList
+	deviceClients map[int64]map[string]*Client
+	deviceRPC     *deviceRPCRouter
+	channelOut    *ChannelOutboundDispatcher
 }
 
 type presenceEvent struct {
@@ -44,33 +53,58 @@ type presenceEvent struct {
 
 // Client represents a single WebSocket connection.
 type Client struct {
-	hub          *Hub
-	conn         *websocket.Conn
-	uid          int64
-	remoteAddr   string
-	displayName  string
-	accountType  types.AccountType
-	bodyID       string
-	connectionID string
-	send         chan []byte
-	sendMu       sync.RWMutex
-	sendClosed   bool
+	hub                  *Hub
+	conn                 *websocket.Conn
+	uid                  int64
+	remoteAddr           string
+	displayName          string
+	accountType          types.AccountType
+	bodyID               string
+	installationID       string
+	connectionID         string
+	deviceOwnerUID       int64
+	deviceID             string
+	deviceBodyID         string
+	deviceInstallationID string
+	deviceConnector      *DeviceConnectorClaims
+	send                 chan []byte
+	sendMu               sync.RWMutex
+	sendClosed           bool
 }
 
 // NewHub creates a new Hub.
 func NewHub(db store.Store, rl *RateLimiter) *Hub {
+	return NewHubWithRuntime(db, rl, nil, "")
+}
+
+func NewHubWithRuntime(db store.Store, rl *RateLimiter, shared sharedRuntimeState, nodeID string) *Hub {
+	if strings.TrimSpace(nodeID) == "" {
+		nodeID = newRuntimeNodeID()
+	}
 	hub := &Hub{
-		clients:     make(map[int64]map[*Client]struct{}),
-		register:    make(chan *Client, 256),
-		unregister:  make(chan *Client, 256),
-		presence:    make(chan presenceEvent, 256),
-		db:          db,
-		rateLimiter: rl,
-		botStats:    NewBotStats(),
-		botConvo:    botConvoTracker{counters: make(map[string]*botConvoCount)},
-		bodyLeases:  newBotBodyLeaseManager(defaultBotBodyLeaseTTL),
+		clients:       make(map[int64]map[*Client]struct{}),
+		clientsByConn: make(map[string]*Client),
+		register:      make(chan *Client, 256),
+		unregister:    make(chan *Client, 256),
+		presence:      make(chan presenceEvent, 256),
+		db:            db,
+		rateLimiter:   rl,
+		botStats:      NewBotStats(),
+		botConvo:      botConvoTracker{counters: make(map[string]*botConvoCount)},
+		nodeID:        nodeID,
+		sharedRuntime: shared,
+		bodyLeases:    newBotBodyLeaseManager(defaultBotBodyLeaseTTL).withSharedRuntime(shared, nodeID),
+		userDevices:   newUserDeviceRegistry(defaultUserDeviceTTL).withSharedRuntime(shared),
+		deviceAudit:   newDeviceAuditLog(),
+		deviceRevokes: newDeviceConnectorRevocationList(),
+		deviceClients: make(map[int64]map[string]*Client),
+		deviceRPC:     newDeviceRPCRouter(defaultDeviceRPCTTL).withSharedRuntime(shared),
+	}
+	if shared != nil {
+		shared.registerRuntimeNode(nodeID, hub)
 	}
 	go hub.runPresence()
+	go hub.runDeviceRPCTimeouts()
 	return hub
 }
 
@@ -80,10 +114,12 @@ func (h *Hub) BotStats() *BotStats {
 }
 
 func (h *Hub) BotBodyStatus(botUID int64) BotBodyStatus {
-	status := BotBodyStatus{BotUID: botUID, Active: false}
+	status := BotBodyStatus{BotUID: botUID, State: "offline", Active: false}
 	if h == nil || h.bodyLeases == nil || botUID <= 0 {
 		return status
 	}
+	status.RuntimeMode = h.RuntimeMode()
+	status.RouteState = h.RuntimeRouteState()
 	lease, ok := h.bodyLeases.status(botUID)
 	if !ok {
 		return status
@@ -96,10 +132,24 @@ func (h *Hub) BotBodyStatus(botUID int64) BotBodyStatus {
 	}
 
 	connectedAt := lease.acquiredAt
+	expiresAt := lease.expiresAt
+	ttl := time.Until(expiresAt).Milliseconds()
+	if ttl < 0 {
+		ttl = 0
+	}
+	if h.bodyLeases != nil && h.bodyLeases.now != nil {
+		ttl = expiresAt.Sub(h.bodyLeases.now()).Milliseconds()
+		if ttl < 0 {
+			ttl = 0
+		}
+	}
+	status.State = "online"
 	status.Active = true
 	status.BodyID = lease.bodyID
 	status.Bound = lease.bodyID != ""
 	status.ConnectedAt = &connectedAt
+	status.LeaseExpiresAt = &expiresAt
+	status.LeaseTTLMS = ttl
 	return status
 }
 
@@ -121,6 +171,23 @@ func (h *Hub) hasRegisteredBotBodyClient(lease botBodyLease) bool {
 	return false
 }
 
+func (h *Hub) RuntimeMode() string {
+	if h != nil && h.bodyLeases != nil {
+		return h.bodyLeases.runtimeMode()
+	}
+	return "process"
+}
+
+func (h *Hub) RuntimeRouteState() string {
+	if h == nil {
+		return "unavailable"
+	}
+	if h.sharedRuntime != nil {
+		return h.sharedRuntime.runtimeRouteState()
+	}
+	return "process_local"
+}
+
 // Run starts the hub's main loop.
 func (h *Hub) Run() {
 	for {
@@ -135,6 +202,8 @@ func (h *Hub) Run() {
 			}
 			client.closeSend()
 			h.releaseBotBodyLease(client)
+			h.clearClientRuntimeRoute(client)
+			h.unbindDeviceClient(client)
 			if client.accountType == types.AccountBot {
 				log.Printf("client disconnected: uid=%d addr=%s account=%s body=%s (devices: %d, online users: %d)", client.uid, client.remoteAddr, client.accountType, client.bodyID, remaining, onlineUsers)
 			} else {
@@ -228,16 +297,20 @@ func mapID(value interface{}) int64 {
 }
 
 func (h *Hub) addClient(client *Client) (firstConn bool, deviceCount int, onlineUsers int) {
+	h.ensureClientRuntimeRoute(client)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	clients := h.clients[client.uid]
-	firstConn = len(clients) == 0
+	firstConn = client.deviceConnector == nil && !hasMessagingClient(clients)
 	if clients == nil {
 		clients = make(map[*Client]struct{})
 		h.clients[client.uid] = clients
 	}
 	clients[client] = struct{}{}
+	if client.connectionID != "" {
+		h.clientsByConn[client.connectionID] = client
+	}
 
 	return firstConn, len(clients), len(h.clients)
 }
@@ -256,6 +329,8 @@ func (h *Hub) registerClient(client *Client) bool {
 
 	firstConn, deviceCount, onlineUsers, replaced := h.addRegisteredClient(client)
 	for _, stale := range replaced {
+		h.clearClientRuntimeRoute(stale)
+		h.unbindDeviceClient(stale)
 		stale.closeSend()
 		if stale.conn != nil {
 			_ = stale.conn.Close()
@@ -270,15 +345,17 @@ func (h *Hub) registerClient(client *Client) bool {
 	if firstConn {
 		h.enqueuePresence(client.uid, "on")
 	}
+	h.bindClientRuntimeRoute(client)
 	return true
 }
 
 func (h *Hub) addRegisteredClient(client *Client) (firstConn bool, deviceCount int, onlineUsers int, replaced []*Client) {
+	h.ensureClientRuntimeRoute(client)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	clients := h.clients[client.uid]
-	firstConn = len(clients) == 0
+	firstConn = client.deviceConnector == nil && !hasMessagingClient(clients)
 	if clients == nil {
 		clients = make(map[*Client]struct{})
 		h.clients[client.uid] = clients
@@ -297,8 +374,142 @@ func (h *Hub) addRegisteredClient(client *Client) (firstConn bool, deviceCount i
 		}
 	}
 	clients[client] = struct{}{}
+	if client.connectionID != "" {
+		h.clientsByConn[client.connectionID] = client
+	}
 
 	return firstConn, len(clients), len(h.clients), replaced
+}
+
+func (h *Hub) ensureClientRuntimeRoute(client *Client) {
+	if h == nil || client == nil {
+		return
+	}
+	if client.hub == nil {
+		client.hub = h
+	}
+	if client.connectionID == "" {
+		client.connectionID = newBotBodyConnectionID()
+	}
+}
+
+func (h *Hub) clientRoute(client *Client) runtimeRoute {
+	if h == nil || client == nil || client.connectionID == "" {
+		return runtimeRoute{}
+	}
+	return runtimeRoute{
+		NodeID:       h.nodeID,
+		ConnectionID: client.connectionID,
+		ExpiresAt:    nowForRoute(h).Add(defaultUserDeviceTTL),
+	}
+}
+
+func (h *Hub) bindClientRuntimeRoute(client *Client) {
+	if h == nil || client == nil || h.sharedRuntime == nil {
+		return
+	}
+	route := h.clientRoute(client)
+	now := nowForRoute(h)
+	route.ExpiresAt = now.Add(defaultUserDeviceTTL)
+	h.sharedRuntime.bindRuntimeRoute(route, now)
+}
+
+func (h *Hub) clearClientRuntimeRoute(client *Client) {
+	if h == nil || client == nil || h.sharedRuntime == nil {
+		return
+	}
+	h.sharedRuntime.clearRuntimeRoute(h.clientRoute(client))
+}
+
+func (h *Hub) bindDeviceClient(ownerUID int64, device UserDevice, client *Client) {
+	if h == nil || client == nil || ownerUID <= 0 || device.DeviceID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.deviceClients == nil {
+		h.deviceClients = make(map[int64]map[string]*Client)
+	}
+	if client.deviceOwnerUID > 0 && client.deviceID != "" && (client.deviceOwnerUID != ownerUID || client.deviceID != device.DeviceID) {
+		if previousOwnerDevices := h.deviceClients[client.deviceOwnerUID]; previousOwnerDevices != nil && previousOwnerDevices[client.deviceID] == client {
+			delete(previousOwnerDevices, client.deviceID)
+			if len(previousOwnerDevices) == 0 {
+				delete(h.deviceClients, client.deviceOwnerUID)
+			}
+		}
+	}
+	ownerDevices := h.deviceClients[ownerUID]
+	if ownerDevices == nil {
+		ownerDevices = make(map[string]*Client)
+		h.deviceClients[ownerUID] = ownerDevices
+	}
+	if existing := ownerDevices[device.DeviceID]; existing != nil && existing != client {
+		existing.deviceOwnerUID = 0
+		existing.deviceID = ""
+		existing.deviceBodyID = ""
+		existing.deviceInstallationID = ""
+	}
+	ownerDevices[device.DeviceID] = client
+	client.deviceOwnerUID = ownerUID
+	client.deviceID = device.DeviceID
+	client.deviceBodyID = device.BodyID
+	client.deviceInstallationID = device.InstallationID
+	if h.sharedRuntime != nil {
+		route := h.clientRoute(client)
+		now := nowForRoute(h)
+		route.ExpiresAt = now.Add(defaultUserDeviceTTL)
+		h.sharedRuntime.bindRuntimeRoute(route, now)
+		h.sharedRuntime.bindUserDeviceRoute(ownerUID, device, route, now)
+	}
+}
+
+func (h *Hub) disconnectDeviceConnector(ownerUID int64, deviceID string, reason string) {
+	if h == nil || ownerUID <= 0 || strings.TrimSpace(deviceID) == "" {
+		return
+	}
+	var client *Client
+	h.mu.RLock()
+	if ownerDevices := h.deviceClients[ownerUID]; ownerDevices != nil {
+		client = ownerDevices[deviceID]
+	}
+	h.mu.RUnlock()
+	if client == nil || client.deviceConnector == nil {
+		return
+	}
+	h.disconnectClient(client, reason)
+}
+
+func (h *Hub) unbindDeviceClient(client *Client) {
+	if h == nil || client == nil || client.deviceOwnerUID <= 0 || client.deviceID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ownerDevices := h.deviceClients[client.deviceOwnerUID]
+	if ownerDevices != nil && ownerDevices[client.deviceID] == client {
+		delete(ownerDevices, client.deviceID)
+		if len(ownerDevices) == 0 {
+			delete(h.deviceClients, client.deviceOwnerUID)
+		}
+	}
+	if h.sharedRuntime != nil {
+		h.sharedRuntime.clearUserDeviceRoute(client.deviceOwnerUID, client.deviceID, h.clientRoute(client))
+	}
+	client.deviceOwnerUID = 0
+	client.deviceID = ""
+	client.deviceBodyID = ""
+	client.deviceInstallationID = ""
+}
+
+func (h *Hub) getDeviceClient(ownerUID int64, deviceID string) *Client {
+	if h == nil || ownerUID <= 0 || deviceID == "" {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.deviceClients[ownerUID][deviceID]
 }
 
 func (h *Hub) removeClient(client *Client) (removed bool, lastConn bool, remaining int, onlineUsers int) {
@@ -314,14 +525,28 @@ func (h *Hub) removeClient(client *Client) (removed bool, lastConn bool, remaini
 	}
 
 	delete(clients, client)
+	if client.connectionID != "" && h.clientsByConn[client.connectionID] == client {
+		delete(h.clientsByConn, client.connectionID)
+	}
 	removed = true
 	remaining = len(clients)
 	if remaining == 0 {
 		delete(h.clients, client.uid)
+		lastConn = client.deviceConnector == nil
+	} else if client.deviceConnector == nil && !hasMessagingClient(clients) {
 		lastConn = true
 	}
 
 	return removed, lastConn, remaining, len(h.clients)
+}
+
+func hasMessagingClient(clients map[*Client]struct{}) bool {
+	for client := range clients {
+		if client != nil && client.deviceConnector == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Hub) releaseBotBodyLease(client *Client) {
@@ -329,6 +554,34 @@ func (h *Hub) releaseBotBodyLease(client *Client) {
 		return
 	}
 	h.bodyLeases.release(client.uid, client.bodyID, client.connectionID)
+}
+
+func (h *Hub) renewBotBodyLease(client *Client) {
+	if h == nil || client == nil || client.accountType != types.AccountBot {
+		return
+	}
+	h.bodyLeases.renew(client.uid, client.bodyID, client.connectionID)
+}
+
+func (h *Hub) getClientByConnectionID(connectionID string) *Client {
+	if h == nil || connectionID == "" {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.clientsByConn[connectionID]
+}
+
+func (h *Hub) sendDeviceRPCToLocalRoute(route runtimeRoute, msg *MsgDeviceRPC) bool {
+	if h == nil || route.ConnectionID == "" {
+		return false
+	}
+	client := h.getClientByConnectionID(route.ConnectionID)
+	if client == nil {
+		return false
+	}
+	h.SendToClient(client, &ServerMessage{DeviceRPC: msg})
+	return true
 }
 
 // broadcastPresence notifies friends and, for bots, their owner of online/offline status.
@@ -380,17 +633,53 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	acctType := types.AccountHuman
 	displayName := ""
 	isBotAPIKey := false
+	var connectorClaims *DeviceConnectorClaims
 	bodyID := ""
+	installationID := ""
 	connectionID := ""
 
 	// Try JWT token first
 	tokenStr := r.URL.Query().Get("token")
+	connectorTokenStr := extractDeviceConnectorToken(r)
 	apiKeyStr := r.Header.Get("X-API-Key")
 	if apiKeyStr == "" {
 		apiKeyStr = r.URL.Query().Get("api_key")
 	}
 
-	if tokenStr != "" {
+	if connectorTokenStr != "" {
+		claims, err := ParseDeviceConnectorToken(connectorTokenStr)
+		if err != nil {
+			http.Error(w, "invalid device connector token", http.StatusUnauthorized)
+			return
+		}
+		if !deviceConnectorHasScope(claims, "device:ws") {
+			http.Error(w, "device connector token cannot open websocket", http.StatusForbidden)
+			return
+		}
+		if hub.isDeviceConnectorRevoked(claims) {
+			http.Error(w, "device connector token has been revoked", http.StatusForbidden)
+			return
+		}
+		uid = claims.UID
+		displayName = firstNonEmpty(claims.DisplayName, claims.Username, claims.DeviceID)
+		usr, err := hub.db.GetUser(uid)
+		if err != nil || usr == nil {
+			http.Error(w, "invalid device connector token", http.StatusUnauthorized)
+			return
+		}
+		if usr.State != 0 {
+			http.Error(w, "user account is disabled", http.StatusForbidden)
+			return
+		}
+		if usr.AccountType != types.AccountHuman {
+			http.Error(w, "device connector requires a human owner", http.StatusForbidden)
+			return
+		}
+		acctType = types.AccountHuman
+		connectorClaims = claims
+		bodyID = claims.DeviceID
+		installationID = firstNonEmpty(claims.InstallationID, claims.DeviceID)
+	} else if tokenStr != "" {
 		claims, err := ParseToken(tokenStr)
 		if err != nil {
 			http.Error(w, "invalid token", http.StatusUnauthorized)
@@ -450,6 +739,7 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	if isBotAPIKey {
 		var err error
 		bodyID, err = normalizeBotBodyID(r.Header.Get(botBodyIDHeader))
+		installationID = normalizeDeviceText(r.Header.Get(botInstallationIDHeader))
 		if err != nil {
 			if strings.TrimSpace(r.Header.Get(botBodyIDHeader)) != "" || botBodyIDStrictMode() {
 				http.Error(w, "missing or invalid bot body id", http.StatusBadRequest)
@@ -508,15 +798,17 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:          hub,
-		conn:         conn,
-		uid:          uid,
-		remoteAddr:   requestRemoteAddr(r),
-		displayName:  displayName,
-		accountType:  acctType,
-		bodyID:       bodyID,
-		connectionID: connectionID,
-		send:         make(chan []byte, 256),
+		hub:             hub,
+		conn:            conn,
+		uid:             uid,
+		remoteAddr:      requestRemoteAddr(r),
+		displayName:     displayName,
+		accountType:     acctType,
+		bodyID:          bodyID,
+		installationID:  installationID,
+		connectionID:    connectionID,
+		deviceConnector: connectorClaims,
+		send:            make(chan []byte, 256),
 	}
 
 	if !hub.registerClient(client) {
@@ -564,6 +856,15 @@ func requestRemoteAddr(r *http.Request) string {
 
 // handleMessage dispatches incoming client messages.
 func (h *Hub) handleMessage(client *Client, msg *ClientMessage) {
+	if client != nil && client.deviceConnector != nil && !deviceConnectorMessageAllowed(msg) {
+		h.SendToClient(client, &ServerMessage{
+			Ctrl: &MsgServerCtrl{
+				Code: http.StatusForbidden,
+				Text: "device connector connections may only register a device and return device_rpc results",
+			},
+		})
+		return
+	}
 	switch {
 	case msg.Pub != nil:
 		h.handlePub(client, msg.Pub)
@@ -575,23 +876,63 @@ func (h *Hub) handleMessage(client *Client, msg *ClientMessage) {
 		h.handleHi(client, client.displayName, msg.Hi)
 	case msg.Get != nil:
 		h.handleGet(client, msg.Get)
+	case msg.DeviceRPC != nil:
+		h.handleDeviceRPC(client, msg.DeviceRPC)
 	}
+}
+
+func deviceConnectorMessageAllowed(msg *ClientMessage) bool {
+	if msg == nil {
+		return false
+	}
+	if msg.Acc != nil || msg.Login != nil || msg.Sub != nil || msg.Pub != nil || msg.Get != nil || msg.Set != nil || msg.Del != nil || msg.Note != nil || msg.Friend != nil {
+		return false
+	}
+	actions := 0
+	if msg.Hi != nil {
+		actions++
+	}
+	if msg.DeviceRPC != nil {
+		actions++
+		if strings.ToLower(strings.TrimSpace(msg.DeviceRPC.Type)) != deviceRPCTypeResult {
+			return false
+		}
+	}
+	return actions == 1
 }
 
 // handleHi responds to the handshake message.
 func (h *Hub) handleHi(client *Client, displayName string, msg *MsgClientHi) {
+	deviceParams, ok := h.bindClientDeviceFromHi(client, msg)
+	if !ok {
+		h.SendToClient(client, &ServerMessage{
+			Ctrl: &MsgServerCtrl{
+				ID:   msg.ID,
+				Code: 400,
+				Text: "invalid device",
+			},
+		})
+		return
+	}
+	params := map[string]interface{}{
+		"ver":      "0.1.0",
+		"build":    "catscompany",
+		"features": []string{"client_msg_id", "device_rpc"},
+		"uid":      formatUID(client.uid),
+		"name":     displayName,
+	}
+	if client.accountType == types.AccountBot && client.bodyID != "" {
+		params["body_lease"] = h.BotBodyStatus(client.uid)
+	}
+	if deviceParams != nil {
+		params["device"] = deviceParams
+	}
 	h.SendToClient(client, &ServerMessage{
 		Ctrl: &MsgServerCtrl{
-			ID:   msg.ID,
-			Code: 200,
-			Text: "ok",
-			Params: map[string]interface{}{
-				"ver":      "0.1.0",
-				"build":    "catscompany",
-				"features": []string{"client_msg_id"},
-				"uid":      formatUID(client.uid),
-				"name":     displayName,
-			},
+			ID:     msg.ID,
+			Code:   200,
+			Text:   "ok",
+			Params: params,
 		},
 	})
 }
@@ -631,6 +972,35 @@ func (h *Hub) validateMessagePublish(uid int64, accountType types.AccountType, t
 	}
 	if !h.checkBotToBot(uid, peerUID) {
 		return http.StatusTooManyRequests, "bot-to-bot conversation limit reached"
+	}
+	return 0, ""
+}
+
+func (h *Hub) validateTopicReadAccess(uid int64, accountType types.AccountType, topic string) (int, string) {
+	if h == nil {
+		return 0, ""
+	}
+	if h.db == nil {
+		return http.StatusInternalServerError, "topic access unavailable"
+	}
+	if isGroupTopic(topic) {
+		groupID := extractGroupID(topic)
+		if groupID == 0 {
+			return http.StatusBadRequest, "invalid group topic"
+		}
+		isMember, err := h.db.IsGroupMember(groupID, uid)
+		if err != nil || !isMember {
+			return http.StatusForbidden, "not a group member"
+		}
+		return 0, ""
+	}
+
+	peerUID := extractPeerUID(topic, uid)
+	if peerUID == 0 {
+		return http.StatusBadRequest, "invalid p2p topic"
+	}
+	if code, text := validateAgentP2PMessageAccess(h.db, uid, accountType, peerUID); code != 0 {
+		return code, text
 	}
 	return 0, ""
 }
@@ -1004,6 +1374,17 @@ func extractGroupID(topic string) int64 {
 
 // handleSub handles a subscribe request (join a topic).
 func (h *Hub) handleSub(client *Client, msg *MsgClientSub) {
+	if code, text := h.validateTopicReadAccess(client.uid, client.accountType, msg.Topic); code != 0 {
+		h.SendToClient(client, &ServerMessage{
+			Ctrl: &MsgServerCtrl{
+				ID:    msg.ID,
+				Topic: msg.Topic,
+				Code:  code,
+				Text:  text,
+			},
+		})
+		return
+	}
 	// For now, just acknowledge the subscription
 	h.SendToClient(client, &ServerMessage{
 		Ctrl: &MsgServerCtrl{
@@ -1034,6 +1415,17 @@ func (h *Hub) handleGet(client *Client, msg *MsgClientGet) {
 		})
 
 	case "history":
+		if code, text := h.validateTopicReadAccess(uid, client.accountType, msg.Topic); code != 0 {
+			h.SendToClient(client, &ServerMessage{
+				Ctrl: &MsgServerCtrl{
+					ID:    msg.ID,
+					Topic: msg.Topic,
+					Code:  code,
+					Text:  text,
+				},
+			})
+			return
+		}
 		// Fetch messages after a given seq ID for reconnection
 		sinceID := int64(msg.SeqID)
 		msgs, err := h.db.GetMessagesSince(msg.Topic, sinceID, 100)
@@ -1043,19 +1435,12 @@ func (h *Hub) handleGet(client *Client, msg *MsgClientGet) {
 		}
 		// Send each message as a data message
 		for _, m := range msgs {
+			data := h.historyMessageDataForRecipient(client.uid, m)
+			if data == nil {
+				continue
+			}
 			h.SendToClient(client, &ServerMessage{
-				Data: &MsgServerData{
-					Topic:         m.TopicID,
-					From:          formatUID(m.FromUID),
-					SeqID:         int(m.ID),
-					Content:       decodeStoredContent(m.Content),
-					Type:          inferDisplayTypeFromStoredMessage(m.MsgType, m.Content, m.ContentBlocks),
-					MsgType:       m.MsgType,
-					Metadata:      withCatscoIdentityMetadata(nil, h.buildCatscoIdentityMetadata(m.FromUID, client.uid, m.TopicID, m.ID)),
-					ContentBlocks: m.ContentBlocks,
-					Mode:          m.Mode,
-					Role:          m.Role,
-				},
+				Data: data,
 			})
 		}
 		// Send ctrl to indicate history is complete
@@ -1143,6 +1528,9 @@ func (h *Hub) getClient(uid int64) *Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for client := range h.clients[uid] {
+		if client.deviceConnector != nil {
+			continue
+		}
 		return client
 	}
 	return nil
@@ -1284,7 +1672,7 @@ func (h *Hub) broadcastToGroupWithMentions(groupID int64, msg *ServerMessage, ex
 				msg,
 				withCatscoIdentityMetadata(
 					msg.Data.Metadata,
-					h.buildCatscoIdentityMetadata(senderUID, m.UserID, msg.Data.Topic, int64(msg.Data.SeqID)),
+					h.buildCatscoIdentityMetadata(senderUID, m.UserID, msg.Data.Topic, int64(msg.Data.SeqID), normalizeContentText(msg.Data.Content)),
 				),
 			)
 		}
