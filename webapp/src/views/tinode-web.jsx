@@ -9,11 +9,12 @@ import ChannelDeviceLinkView from './channel-device-link-view';
 import ProfileEditor from '../widgets/profile-editor';
 import FeedbackModal from '../widgets/feedback-modal';
 import CatsCoDownloadModal from '../widgets/catsco-download-modal';
+import DesktopConnectModal from '../widgets/desktop-connect-modal';
 import RelayAccessModal from '../widgets/relay-access-modal';
 import PasswordResetForm from '../widgets/password-reset-form';
 import WorkflowRichMediaDemo from './workflow-rich-media-demo';
 import Avatar from '../widgets/avatar';
-import { Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff } from 'lucide-react';
+import { Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff, Laptop, CheckCircle2 } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
 import '../css/openchat-theme.css';
 
@@ -106,6 +107,22 @@ function writeStoredTopic(uid, topic) {
   localStorage.setItem('v3_last_topic', JSON.stringify(normalized));
 }
 
+function desktopPromptStorageKey(uid) {
+  return `catsco_desktop_connect_prompted:v1:${uid}`;
+}
+
+function todayKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function findConnectedLocalAgent(agents) {
+  return (agents || []).find((agent) => agent.relation === 'owner' && agent.is_online);
+}
+
 export default function TinodeWeb() {
   const demoParams = new URLSearchParams(window.location.search);
   const showWorkflowDemo = demoParams.get('workflow_demo') === '1';
@@ -139,6 +156,8 @@ function TinodeWebApp() {
   const [showProfilePopover, setShowProfilePopover] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [showDesktopConnectModal, setShowDesktopConnectModal] = useState(false);
+  const [localAgentStatus, setLocalAgentStatus] = useState('checking');
   const [showRelayModal, setShowRelayModal] = useState(false);
 
 
@@ -232,6 +251,44 @@ function TinodeWebApp() {
     };
   }, [user?.uid, persistUser]);
 
+  const refreshLocalAgentStatus = useCallback(async ({ allowDailyPrompt = false } = {}) => {
+    if (!user?.uid) return;
+    try {
+      setLocalAgentStatus((status) => (status === 'connected' ? status : 'checking'));
+      const res = await api.getAgents();
+      const connected = findConnectedLocalAgent(res.agents || []);
+      if (connected) {
+        setLocalAgentStatus('connected');
+        return;
+      }
+      setLocalAgentStatus('disconnected');
+      if (allowDailyPrompt) {
+        const promptKey = desktopPromptStorageKey(user.uid);
+        if (localStorage.getItem(promptKey) !== todayKey()) {
+          localStorage.setItem(promptKey, todayKey());
+          setShowDesktopConnectModal(true);
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to check desktop agent connection:', error);
+      setLocalAgentStatus('unknown');
+    }
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    let cancelled = false;
+    refreshLocalAgentStatus({ allowDailyPrompt: true }).catch(() => {
+      if (!cancelled) setLocalAgentStatus('unknown');
+    });
+    const onDataChanged = () => refreshLocalAgentStatus().catch(() => {});
+    window.addEventListener('cc:data-changed', onDataChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('cc:data-changed', onDataChanged);
+    };
+  }, [user?.uid, refreshLocalAgentStatus]);
+
   useEffect(() => {
     if (!user?.uid) return;
 
@@ -311,6 +368,25 @@ function TinodeWebApp() {
     });
   };
 
+  const handleDesktopConnected = async (agent) => {
+    try {
+      const res = await api.openAgent(agent.uid || agent.id);
+      const opened = res.agent || agent;
+      setActiveTopic({
+        topicId: opened.topic_id || res.topic || agent.topic_id,
+        name: opened.display_name || agent.display_name || agent.username,
+        isGroup: false,
+        avatar_url: opened.avatar_url || agent.avatar_url,
+        friendId: opened.uid || agent.uid || agent.id,
+      });
+      setLocalAgentStatus('connected');
+      setShowDesktopConnectModal(false);
+      window.dispatchEvent(new Event('cc:data-changed'));
+    } catch (error) {
+      console.warn('Failed to open connected desktop agent:', error);
+    }
+  };
+
   if (entrySceneKey) {
     return <AgentEntryBindView sceneKey={entrySceneKey} />;
   }
@@ -360,6 +436,9 @@ function TinodeWebApp() {
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowDownloadModal(true); }}>
               <Download size={16} style={{marginRight: 10}} /> 下载 CatsCo 桌面端
             </div>
+            <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowDesktopConnectModal(true); }}>
+              <Laptop size={16} style={{marginRight: 10}} /> 连接我的电脑助手
+            </div>
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowRelayModal(true); }}>
               <KeyRound size={16} style={{marginRight: 10}} /> CatsCo 中转站
             </div>
@@ -374,6 +453,10 @@ function TinodeWebApp() {
       </div>
       
       <div className="v3-main">
+        <LocalAssistantBar
+          status={localAgentStatus}
+          onConnect={() => setShowDesktopConnectModal(true)}
+        />
         {activeTopic ? (
           <MessagesView
             topic={activeTopic.topicId}
@@ -408,8 +491,35 @@ function TinodeWebApp() {
         <CatsCoDownloadModal onClose={() => setShowDownloadModal(false)} />
       )}
 
+      {showDesktopConnectModal && (
+        <DesktopConnectModal
+          onClose={() => setShowDesktopConnectModal(false)}
+          onConnected={handleDesktopConnected}
+          onStatusChange={(status) => setLocalAgentStatus(status)}
+        />
+      )}
+
       {showRelayModal && (
         <RelayAccessModal onClose={() => setShowRelayModal(false)} />
+      )}
+    </div>
+  );
+}
+
+function LocalAssistantBar({ status, onConnect }) {
+  const connected = status === 'connected';
+  const checking = status === 'checking';
+  const label = connected ? '已连接' : checking ? '检测中' : '未连接';
+  return (
+    <div className="v3-local-assistant-bar">
+      <div className={`v3-local-assistant-status ${connected ? 'connected' : ''}`}>
+        {connected ? <CheckCircle2 size={15} /> : <Laptop size={15} />}
+        <span>本地助手：{label}</span>
+      </div>
+      {!connected && (
+        <button type="button" className="v3-local-assistant-connect" onClick={onConnect}>
+          连接
+        </button>
       )}
     </div>
   );

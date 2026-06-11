@@ -160,6 +160,9 @@ export const api = {
   // Virtual employee roster
   getAgents: () => request('GET', '/api/agents'),
   openAgent: (agentUid) => request('POST', '/api/agents/open', { agent_uid: agentUid }),
+  createDesktopConnectSession: () => request('POST', '/api/desktop-connect/session', {}),
+  getDesktopConnectStatus: (code) =>
+    request('GET', `/api/desktop-connect/status?code=${encodeURIComponent(code)}`),
   getAgentEntries: (agentUid) => request('GET', `/api/agent-entries?agent_uid=${encodeURIComponent(agentUid)}`),
   createAgentEntry: (agentUid, channel, channelAppId = '') =>
     request('POST', '/api/agent-entries', {

@@ -1,0 +1,75 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/openchat/openchat/server/store"
+	"github.com/openchat/openchat/server/store/types"
+)
+
+type desktopConnectTestStore struct {
+	store.Store
+	user *types.User
+}
+
+func (s *desktopConnectTestStore) GetUser(id int64) (*types.User, error) {
+	if s.user != nil && s.user.ID == id {
+		return s.user, nil
+	}
+	return nil, nil
+}
+
+func TestDesktopConnectSessionExchangeIsSingleUse(t *testing.T) {
+	handler := NewDesktopConnectHandler(&desktopConnectTestStore{
+		user: &types.User{ID: 42, Username: "demo", Email: "demo@example.com", DisplayName: "Demo"},
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/desktop-connect/session", nil)
+	createReq = createReq.WithContext(context.WithValue(createReq.Context(), uidKey, int64(42)))
+	createRec := httptest.NewRecorder()
+	handler.HandleCreateSession(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Code        string `json:"code"`
+		DeepLinkURL string `json:"deeplink_url"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Code == "" || created.DeepLinkURL == "" {
+		t.Fatalf("missing code/deeplink in response: %+v", created)
+	}
+
+	body := []byte(`{"code":"` + created.Code + `"}`)
+	exchangeReq := httptest.NewRequest(http.MethodPost, "/api/desktop-connect/exchange", bytes.NewReader(body))
+	exchangeRec := httptest.NewRecorder()
+	handler.HandleExchange(exchangeRec, exchangeReq)
+	if exchangeRec.Code != http.StatusOK {
+		t.Fatalf("exchange status=%d body=%s", exchangeRec.Code, exchangeRec.Body.String())
+	}
+	var exchanged struct {
+		Token     string `json:"token"`
+		UID       int64  `json:"uid"`
+		ServerURL string `json:"server_url"`
+	}
+	if err := json.Unmarshal(exchangeRec.Body.Bytes(), &exchanged); err != nil {
+		t.Fatalf("decode exchange response: %v", err)
+	}
+	if exchanged.Token == "" || exchanged.UID != 42 || exchanged.ServerURL == "" {
+		t.Fatalf("unexpected exchange response: %+v", exchanged)
+	}
+
+	reuseReq := httptest.NewRequest(http.MethodPost, "/api/desktop-connect/exchange", bytes.NewReader(body))
+	reuseRec := httptest.NewRecorder()
+	handler.HandleExchange(reuseRec, reuseReq)
+	if reuseRec.Code != http.StatusConflict {
+		t.Fatalf("reuse status=%d body=%s", reuseRec.Code, reuseRec.Body.String())
+	}
+}
