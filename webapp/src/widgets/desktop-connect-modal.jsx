@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Download, Laptop, Loader2, X } from 'lucide-react';
 import { api } from '../api';
 import { DOWNLOAD_OPTIONS } from './catsco-download-modal';
@@ -25,10 +25,21 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
   const [error, setError] = useState('');
   const [showDownloads, setShowDownloads] = useState(false);
   const [showAdvancedDownloads, setShowAdvancedDownloads] = useState(false);
+  const [launchDetected, setLaunchDetected] = useState(false);
   const sessionRef = useRef(null);
   const connectedRef = useRef(false);
+  const launchDetectedRef = useRef(false);
+  const launchCleanupRef = useRef(null);
+  const installHintTimerRef = useRef(null);
+  const pollTimerRef = useRef(null);
   const recommendedDownload = useMemo(() => detectRecommendedOption(), []);
   const otherDownloads = DOWNLOAD_OPTIONS.filter((option) => option.key !== recommendedDownload?.key);
+
+  useEffect(() => () => {
+    launchCleanupRef.current?.();
+    if (installHintTimerRef.current) window.clearTimeout(installHintTimerRef.current);
+    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+  }, []);
 
   const markState = (next) => {
     setState(next);
@@ -43,6 +54,9 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
     if (!connected) return false;
     if (connectedRef.current) return true;
     connectedRef.current = true;
+    launchCleanupRef.current?.();
+    if (installHintTimerRef.current) window.clearTimeout(installHintTimerRef.current);
+    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     setShowDownloads(false);
     markState('connected');
     window.setTimeout(() => {
@@ -53,7 +67,8 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
 
   const pollForConnection = () => {
     let attempts = 0;
-    const timer = window.setInterval(async () => {
+    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+    pollTimerRef.current = window.setInterval(async () => {
       attempts += 1;
       try {
         const session = sessionRef.current;
@@ -65,14 +80,14 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
         }
         const connected = await finishIfConnected();
         if (connected) {
-          window.clearInterval(timer);
           return;
         }
       } catch (err) {
         console.warn('Desktop connect poll failed:', err);
       }
       if (attempts >= 8) {
-        window.clearInterval(timer);
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
         if (!connectedRef.current) {
           setShowDownloads(true);
           markState('download');
@@ -81,9 +96,39 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
     }, 2000);
   };
 
+  const watchForLaunchSignal = () => {
+    launchCleanupRef.current?.();
+    launchDetectedRef.current = false;
+    setLaunchDetected(false);
+    const markLaunched = () => {
+      if (launchDetectedRef.current) return;
+      launchDetectedRef.current = true;
+      setLaunchDetected(true);
+      setState((current) => (
+        current === 'opening' || current === 'waiting' || current === 'waiting_download'
+          ? 'waiting'
+          : current
+      ));
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') markLaunched();
+    };
+    window.addEventListener('blur', markLaunched);
+    window.addEventListener('pagehide', markLaunched);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    launchCleanupRef.current = () => {
+      window.removeEventListener('blur', markLaunched);
+      window.removeEventListener('pagehide', markLaunched);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      launchCleanupRef.current = null;
+    };
+  };
+
   const startConnect = async () => {
     setError('');
     setShowDownloads(false);
+    setLaunchDetected(false);
+    if (installHintTimerRef.current) window.clearTimeout(installHintTimerRef.current);
     markState('opening');
     try {
       const alreadyConnected = await finishIfConnected();
@@ -92,13 +137,15 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
       const session = await api.createDesktopConnectSession();
       sessionRef.current = session;
       markState('waiting');
+      watchForLaunchSignal();
       window.location.href = session.deeplink_url || `catsco://connect?code=${encodeURIComponent(session.code)}`;
       pollForConnection();
-      window.setTimeout(() => {
+      installHintTimerRef.current = window.setTimeout(() => {
         if (connectedRef.current) return;
+        if (launchDetectedRef.current) return;
         setShowDownloads(true);
         setState((current) => (current === 'waiting' || current === 'opening' ? 'waiting_download' : current));
-      }, 3000);
+      }, 1500);
     } catch (err) {
       setError(err.message || '连接失败，请稍后重试。');
       setShowDownloads(true);
@@ -151,6 +198,8 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
               <div style={{ fontSize: 13, color: 'var(--v3-text-muted)', marginTop: 4 }}>
                 {state === 'download' || state === 'waiting_download'
                   ? '没有检测到已连接的桌面端。若尚未安装，请下载推荐版本；安装后再点击打开。'
+                  : launchDetected
+                  ? '已检测到浏览器正在尝试打开 CatsCo，连接完成后这里会自动更新。'
                   : '点击后浏览器可能会询问是否允许打开 CatsCo，请选择允许。'}
               </div>
             </div>
