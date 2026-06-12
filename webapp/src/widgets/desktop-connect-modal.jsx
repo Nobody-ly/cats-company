@@ -16,8 +16,8 @@ function detectRecommendedOption() {
   return DOWNLOAD_OPTIONS.find((option) => option.key === 'windows');
 }
 
-function findConnectedLocalDevice(devices) {
-  return (devices || []).find((device) => device.routable || device.routeConnected);
+function findConnectedLocalAgent(agents) {
+  return (agents || []).find((agent) => agent.relation === 'owner' && agent.is_online);
 }
 
 export default function DesktopConnectModal({ onClose, onConnected, onStatusChange }) {
@@ -32,6 +32,7 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
   const launchCleanupRef = useRef(null);
   const installHintTimerRef = useRef(null);
   const pollTimerRef = useRef(null);
+  const startInFlightRef = useRef(false);
   const recommendedDownload = useMemo(() => detectRecommendedOption(), []);
   const otherDownloads = DOWNLOAD_OPTIONS.filter((option) => option.key !== recommendedDownload?.key);
 
@@ -49,8 +50,8 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
   };
 
   const finishIfConnected = async () => {
-    const res = await api.getDevices();
-    const connected = findConnectedLocalDevice(res.devices || []);
+    const res = await api.getAgents();
+    const connected = findConnectedLocalAgent(res.agents || []);
     if (!connected) return false;
     if (connectedRef.current) return true;
     connectedRef.current = true;
@@ -125,6 +126,8 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
   };
 
   const startConnect = async () => {
+    if (startInFlightRef.current || connectedRef.current) return;
+    startInFlightRef.current = true;
     setError('');
     setShowDownloads(false);
     setLaunchDetected(false);
@@ -150,6 +153,8 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
       setError(err.message || '连接失败，请稍后重试。');
       setShowDownloads(true);
       markState('failed');
+    } finally {
+      startInFlightRef.current = false;
     }
   };
 

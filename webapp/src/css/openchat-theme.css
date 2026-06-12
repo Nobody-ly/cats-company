@@ -1208,6 +1208,203 @@ body {
   color: #f59e0b;
 }
 
+.cc-tutorial-empty {
+  width: min(620px, calc(100% - 40px));
+  margin: 40px auto 28px;
+  padding: 22px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--v3-text-main);
+}
+
+.cc-tutorial-empty-kicker {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--v3-text-name);
+}
+
+.cc-tutorial-empty-desc {
+  margin-top: 6px;
+  color: var(--v3-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cc-tutorial-task-grid,
+.cc-tutorial-task-list,
+.cc-tutorial-detail {
+  display: grid;
+  gap: 12px;
+}
+
+.cc-tutorial-task-grid {
+  margin-top: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cc-tutorial-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--v3-text-main);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-tutorial-card:hover {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.cc-tutorial-card.compact {
+  padding: 16px;
+}
+
+.cc-tutorial-card-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--v3-primary);
+  flex: 0 0 auto;
+}
+
+.cc-tutorial-card-copy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 4px;
+}
+
+.cc-tutorial-card-title {
+  font-weight: 800;
+  color: var(--v3-text-name);
+  font-size: 14px;
+}
+
+.cc-tutorial-card-desc,
+.cc-tutorial-requirement {
+  color: var(--v3-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cc-tutorial-card-arrow {
+  color: var(--v3-text-muted);
+  flex: 0 0 auto;
+}
+
+.cc-tutorial-skip {
+  margin-top: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--v3-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cc-tutorial-skip:hover {
+  color: var(--v3-text-main);
+}
+
+.cc-tutorial-modal {
+  max-width: 680px;
+}
+
+.cc-tutorial-requirement {
+  padding: 10px 12px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cc-tutorial-prompt {
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cc-tutorial-prompt-title {
+  padding: 10px 12px;
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--v3-border);
+}
+
+.cc-tutorial-prompt-body {
+  padding: 12px;
+  color: var(--v3-text-main);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.cc-tutorial-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.cc-tutorial-menu-hint {
+  position: fixed;
+  left: 72px;
+  bottom: 82px;
+  max-width: 280px;
+  padding: 12px 36px 12px 14px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(28, 25, 33, 0.96);
+  color: var(--v3-text-main);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  z-index: 80;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cc-tutorial-menu-hint::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  bottom: 16px;
+  width: 12px;
+  height: 12px;
+  transform: rotate(45deg);
+  background: rgba(28, 25, 33, 0.96);
+  border-left: 1px solid var(--v3-border);
+  border-bottom: 1px solid var(--v3-border);
+}
+
+.cc-tutorial-menu-hint button {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--v3-text-muted);
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .cc-tutorial-task-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cc-tutorial-actions {
+    flex-direction: column-reverse;
+  }
+}
+
 .v3-message-workspace {
   flex: 1 1 auto;
   min-width: 0;

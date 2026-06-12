@@ -296,6 +296,23 @@ async function handleApi(req, res) {
       });
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/devices') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      return send(res, 200, {
+        devices: [],
+        checked_at: Date.now(),
+      });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/devices/audit') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      return send(res, 200, {
+        events: [],
+      });
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/agents/open') {
       const user = requireUser(req, res);
       if (!user) return;
