@@ -7,6 +7,46 @@ import FriendRequest from '../widgets/friend-request';
 import AgentStoreModal from '../widgets/agent-store-modal';
 import { Users, UserPlus, Zap, Bot, Trash2, Plus, MessageSquare } from 'lucide-react';
 
+const SIDEBAR_COLLAPSED_STORAGE_PREFIX = 'cc_sidebar_collapsed_v1';
+const DEFAULT_COLLAPSED_SECTIONS = { ai: false, friends: false, groups: false, agents: false };
+
+function sidebarCollapsedStorageKey(uid) {
+  return `${SIDEBAR_COLLAPSED_STORAGE_PREFIX}:${uid || 'guest'}`;
+}
+
+function normalizeCollapsedSections(value) {
+  return {
+    ai: typeof value?.ai === 'boolean' ? value.ai : DEFAULT_COLLAPSED_SECTIONS.ai,
+    friends: typeof value?.friends === 'boolean' ? value.friends : DEFAULT_COLLAPSED_SECTIONS.friends,
+    groups: typeof value?.groups === 'boolean' ? value.groups : DEFAULT_COLLAPSED_SECTIONS.groups,
+    agents: typeof value?.agents === 'boolean' ? value.agents : DEFAULT_COLLAPSED_SECTIONS.agents,
+  };
+}
+
+function loadCollapsedSections(uid) {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { ...DEFAULT_COLLAPSED_SECTIONS };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(sidebarCollapsedStorageKey(uid));
+    return raw ? normalizeCollapsedSections(JSON.parse(raw)) : { ...DEFAULT_COLLAPSED_SECTIONS };
+  } catch (error) {
+    console.warn('Failed to restore sidebar collapsed state:', error);
+    return { ...DEFAULT_COLLAPSED_SECTIONS };
+  }
+}
+
+function saveCollapsedSections(uid, next) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    window.localStorage.setItem(sidebarCollapsedStorageKey(uid), JSON.stringify(next));
+  } catch (error) {
+    console.warn('Failed to save sidebar collapsed state:', error);
+  }
+}
+
 export default function ChatListView({ activeTopic, onSelectTopic, user, onlineUsers }) {
   const [chats, setChats] = useState([]);
   const [friends, setFriends] = useState([]);
@@ -19,9 +59,21 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [showAgentStore, setShowAgentStore] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
-  const [collapsed, setCollapsed] = useState({ ai: false, friends: false, groups: false, agents: false });
+  const [collapsed, setCollapsed] = useState(() => loadCollapsedSections(user?.uid));
   const [namingAgent, setNamingAgent] = useState(null);
   const [newChatName, setNewChatName] = useState('');
+
+  useEffect(() => {
+    setCollapsed(loadCollapsedSections(user?.uid));
+  }, [user?.uid]);
+
+  const toggleCollapsed = (section) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [section]: !prev[section] };
+      saveCollapsedSections(user?.uid, next);
+      return next;
+    });
+  };
 
   const loadAll = async () => {
     try {
@@ -255,7 +307,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
         {/* AI 对话 */}
         <div className="v3-chat-section" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => setCollapsed(p => ({...p, ai: !p.ai}))}><span style={{fontSize: 12, color: '#666'}}>{collapsed.ai ? '▶' : '▼'}</span><Bot size={20} style={{color: 'var(--v3-primary)'}} /> AI 对话</span>
+          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => toggleCollapsed('ai')}><span style={{fontSize: 12, color: '#666'}}>{collapsed.ai ? '▶' : '▼'}</span><Bot size={20} style={{color: 'var(--v3-primary)'}} /> AI 对话</span>
           <span onClick={() => setShowNewChat(true)} style={{cursor: 'pointer', fontSize: 25, color: '#888', lineHeight: 1}} title="新对话">+</span>
         </div>
         {(isSearching || !collapsed.ai) && (aiChats.length === 0 && !isSearching ? (
@@ -294,7 +346,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
         {/* 好友 */}
         <div className="v3-chat-section" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12}}>
-          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => setCollapsed(p => ({...p, friends: !p.friends}))}><span style={{fontSize: 12, color: '#666'}}>{collapsed.friends ? '▶' : '▼'}</span><MessageSquare size={20} style={{color: '#888'}} /> 好友</span>
+          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => toggleCollapsed('friends')}><span style={{fontSize: 12, color: '#666'}}>{collapsed.friends ? '▶' : '▼'}</span><MessageSquare size={20} style={{color: '#888'}} /> 好友</span>
           <span onClick={() => setShowAddFriend(true)} style={{cursor: 'pointer', fontSize: 25, color: '#888', lineHeight: 1}} title="添加好友">+</span>
         </div>
         {(isSearching || !collapsed.friends) && (friendChats.length === 0 && !isSearching ? (
@@ -323,7 +375,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
         {/* 群聊 */}
         <div className="v3-chat-section" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12}}>
-          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => setCollapsed(p => ({...p, groups: !p.groups}))}><span style={{fontSize: 12, color: '#666'}}>{collapsed.groups ? '▶' : '▼'}</span><Users size={20} style={{color: '#888'}} /> 群聊</span>
+          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => toggleCollapsed('groups')}><span style={{fontSize: 12, color: '#666'}}>{collapsed.groups ? '▶' : '▼'}</span><Users size={20} style={{color: '#888'}} /> 群聊</span>
           <span onClick={() => setShowCreateGroup(true)} style={{cursor: 'pointer', fontSize: 25, color: '#888', lineHeight: 1}} title="创建群聊">+</span>
         </div>
         {(isSearching || !collapsed.groups) && (groupChats.length === 0 && !isSearching ? (
@@ -353,7 +405,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
         {/* AI 助手 */}
         <div className="v3-chat-section" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12}}>
-          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => setCollapsed(p => ({...p, agents: !p.agents}))}><span style={{fontSize: 12, color: '#666'}}>{collapsed.agents ? '▶' : '▼'}</span><Zap size={20} fill="currentColor" style={{color: 'var(--v3-primary)'}} /> AI 助手</span>
+          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => toggleCollapsed('agents')}><span style={{fontSize: 12, color: '#666'}}>{collapsed.agents ? '▶' : '▼'}</span><Zap size={20} fill="currentColor" style={{color: 'var(--v3-primary)'}} /> AI 助手</span>
           <span onClick={() => setShowAgentStore(true)} style={{cursor: 'pointer', fontSize: 25, color: '#888', lineHeight: 1}} title="管理 AI 助手">+</span>
         </div>
         {(isSearching || !collapsed.agents) && (filteredAgents.length === 0 ? (
