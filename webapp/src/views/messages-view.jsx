@@ -816,7 +816,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             <div className="v3-header-left">
               <div style={{display: 'flex', flexDirection: 'column'}}>
                 <span className="v3-header-title" style={{ fontSize: 17, letterSpacing: '-0.3px' }}>{displayName}</span>
-                {isGroup && members.length > 0 && <span className="v3-header-desc">{members.length} members</span>}
+                {isGroup && members.length > 0 && <span className="v3-header-desc">{members.length} 位成员</span>}
               </div>
             </div>
             <div className="v3-header-actions">
@@ -838,7 +838,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           >
             <div className="v3-timeline-inner">
               <div className="v3-date-divider">
-                <span>Chat History</span>
+                <span>聊天记录</span>
               </div>
         
         {loadingOlder && (
@@ -936,8 +936,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
         <div className="v3-composer-box">
           {isDragActive && (
             <div className="v3-drop-overlay" aria-hidden="true">
-              <div className="v3-drop-title">Drop files to upload</div>
-              <div className="v3-drop-subtitle">Images, files, and folders are supported. The attachment will wait here before sending.</div>
+              <div className="v3-drop-title">拖放文件以上传</div>
+              <div className="v3-drop-subtitle">支持图片、文件和文件夹，附件会先放在这里等待发送。</div>
             </div>
           )}
           
@@ -945,8 +945,8 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             <button
               className="v3-tool"
               onClick={() => openAttachmentPicker(imageInputRef)}
-              title="Upload Image"
-              aria-label="Upload Image"
+              title="上传图片"
+              aria-label="上传图片"
               disabled={isUploadingAttachment}
               type="button"
             >
@@ -955,15 +955,15 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             <button
               className="v3-tool"
               onClick={() => openAttachmentPicker(fileInputRef)}
-              title="Upload File"
-              aria-label="Upload File"
+              title="上传文件"
+              aria-label="上传文件"
               disabled={isUploadingAttachment}
               type="button"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
             </button>
             <div style={{flex:1}}></div>
-            <button className="v3-tool" style={{ fontWeight: 600 }} onClick={() => { if(isGroup && textareaRef.current) { const pos = textareaRef.current.selectionStart; setInput(input.slice(0,pos) + '@' + input.slice(pos)); textareaRef.current.focus(); } }} title="Mention" type="button">@</button>
+            <button className="v3-tool" style={{ fontWeight: 600 }} onClick={() => { if(isGroup && textareaRef.current) { const pos = textareaRef.current.selectionStart; setInput(input.slice(0,pos) + '@' + input.slice(pos)); textareaRef.current.focus(); } }} title="@成员" type="button">@</button>
           </div>
 
           {activeBotWorking && (
@@ -995,13 +995,13 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', marginTop: 10, borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--v3-border)', color: 'var(--v3-text-main)' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>
-                  {isUploadingAttachment ? 'Uploading attachment...' : `${pendingAttachments.length} attachment${pendingAttachments.length === 1 ? '' : 's'} ready to send`}
+                  {isUploadingAttachment ? '正在上传附件...' : `${pendingAttachments.length} 个附件待发送`}
                 </div>
                 {!isUploadingAttachment && pendingAttachments.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {pendingAttachments.map((attachment, index) => (
                       <div key={`${attachment.name}-${index}`} style={{ fontSize: 12, color: 'var(--v3-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {attachment.type === 'image' ? 'Image' : 'File'}: {attachment.name}
+                        {attachment.type === 'image' ? '图片' : '文件'}: {attachment.name}
                         {attachment.size ? ` • ${formatFileSize(attachment.size)}` : ''}
                       </div>
                     ))}
@@ -1011,7 +1011,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
               {pendingAttachments.length > 0 && !isUploadingAttachment && (
                 <button
                   className="v3-action-btn"
-                  aria-label="Remove attachments"
+                  aria-label="移除附件"
                   onClick={() => {
                     setPendingAttachments([]);
                     setAttachmentStatus(null);
@@ -1025,7 +1025,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           )}
           
           <div className="v3-composer-footer">
-            <span><strong>Return</strong> to send, <strong>Shift + Return</strong> to add a new line</span>
+            <span><strong>Enter</strong> 发送，<strong>Shift + Enter</strong> 换行</span>
             <button
 className={`v3-send${showStopButton ? ' stop' : ''}`}
               disabled={showStopButton ? isStopRequested : isUploadingAttachment || (!input.trim() && pendingAttachments.length === 0)}
