@@ -108,6 +108,14 @@ describe('ChatListView sidebar sections', () => {
     });
   }
 
+  async function remount(props = {}) {
+    await act(async () => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await mount(props);
+  }
+
   function clickSection(label) {
     const section = Array.from(container.querySelectorAll('.v3-chat-section span'))
       .find((node) => node.textContent.includes(label));
@@ -186,6 +194,35 @@ describe('ChatListView sidebar sections', () => {
 
     expect(container.textContent).toContain('Alice');
     expect(container.textContent).not.toContain('没有匹配结果');
+  });
+
+  it('restores collapsed sections after remounting the sidebar', async () => {
+    api.getConversations.mockResolvedValue({
+      conversations: [
+        {
+          id: 'p2p_7_8',
+          friend_id: 8,
+          name: 'Alice',
+          is_group: false,
+          is_bot: false,
+        },
+      ],
+    });
+    api.getAgents.mockResolvedValue({ agents: [] });
+
+    await mount();
+
+    expect(container.textContent).toContain('Alice');
+    await act(async () => {
+      clickSection('好友');
+    });
+    expect(container.textContent).not.toContain('Alice');
+    expect(localStorage.getItem('cc_sidebar_collapsed_v1:7')).toContain('"friends":true');
+
+    await remount();
+
+    expect(container.textContent).toContain('好友');
+    expect(container.textContent).not.toContain('Alice');
   });
 
   it('keeps group conversations in the groups section by default', async () => {
