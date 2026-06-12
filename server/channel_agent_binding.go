@@ -34,6 +34,7 @@ type channelAgentEntryRequest struct {
 	AgentUID     int64  `json:"agent_uid"`
 	Channel      string `json:"channel"`
 	ChannelAppID string `json:"channel_app_id,omitempty"`
+	AccessMode   string `json:"access_mode,omitempty"`
 }
 
 type channelAgentConfirmRequest struct {
@@ -214,19 +215,37 @@ func (h *ChannelAgentBindingHandler) HandleConfirmChannelAgentBinding(w http.Res
 		return
 	}
 
-	binding, err := bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:                 channel,
-		ChannelAppID:            channelAppID,
-		ChannelUserID:           req.ChannelUserID,
-		ChannelConversationID:   strings.TrimSpace(req.ChannelConversationID),
-		ChannelConversationType: normalizeConversationType(req.ChannelConversationType),
-		OwnerUID:                entry.OwnerUID,
-		AgentUID:                entry.AgentUID,
-		EntryID:                 entry.ID,
-		Status:                  "active",
-	})
+	actorUID, err := h.ensureChannelActor(channel, channelAppID, req.ChannelUserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create channel actor"})
+		return
+	}
+	binding, accessRequest, err := bindOrRequestChannelAgentAccess(
+		h.db,
+		bindings,
+		entry,
+		actorUID,
+		channel,
+		channelAppID,
+		req.ChannelUserID,
+		strings.TrimSpace(req.ChannelConversationID),
+		normalizeConversationType(req.ChannelConversationType),
+	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save binding"})
+		return
+	}
+	if accessRequest != nil && binding == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":         "pending_approval",
+			"access_request": accessRequest,
+			"agent": map[string]interface{}{
+				"uid":          agent.ID,
+				"username":     agent.Username,
+				"display_name": displayNameOrUsername(agent.DisplayName, agent.Username),
+				"is_online":    h.hub != nil && h.hub.IsOnline(agent.ID),
+			},
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -273,6 +292,14 @@ func (h *ChannelAgentBindingHandler) HandleResolveChannelAgentBinding(w http.Res
 		return
 	}
 	if binding == nil {
+		if access, accessErr := bindings.ResolveChannelAgentAccessRequest(query); accessErr == nil && access != nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"bound":          false,
+				"status":         access.Status,
+				"access_request": access,
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"bound": false})
 		return
 	}
@@ -412,6 +439,7 @@ func (h *ChannelAgentBindingHandler) handleCreateAgentEntry(w http.ResponseWrite
 		SceneKey:     mustGenerateSceneKey(),
 		Channel:      channel,
 		ChannelAppID: canonicalEntryChannelAppID(channel, req.ChannelAppID),
+		AccessMode:   normalizeChannelAgentAccessModeForCreate(req.AccessMode),
 		OwnerUID:     uid,
 		AgentUID:     req.AgentUID,
 		Status:       "active",
@@ -421,6 +449,36 @@ func (h *ChannelAgentBindingHandler) handleCreateAgentEntry(w http.ResponseWrite
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"entry": h.entryResponse(r, entry)})
+}
+
+func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelUserID string) (int64, error) {
+	username := channelActorUsername(channel, appID, channelUserID)
+	if user, err := h.db.GetUserByUsername(username); err == nil && user != nil {
+		return user.ID, nil
+	} else if err != nil {
+		return 0, err
+	}
+	displayName := "Channel User"
+	switch normalizeChannel(channel) {
+	case "feishu":
+		displayName = "Feishu User"
+	case "weixin":
+		displayName = "Weixin User"
+	}
+	uid, err := h.db.CreateUser(&types.User{
+		Username:    username,
+		DisplayName: displayName,
+		AccountType: types.AccountHuman,
+		PassHash:    []byte("external-channel-account"),
+		State:       0,
+	})
+	if err != nil {
+		if user, lookupErr := h.db.GetUserByUsername(username); lookupErr == nil && user != nil {
+			return user.ID, nil
+		}
+		return 0, err
+	}
+	return uid, nil
 }
 
 func (h *ChannelAgentBindingHandler) requireAgentOwner(ownerUID, agentUID int64) (*types.User, int, error) {
@@ -480,6 +538,84 @@ func canonicalEntryChannelAppID(channel, requested string) string {
 		}
 	}
 	return strings.TrimSpace(requested)
+}
+
+func normalizeChannelAgentAccessModeForCreate(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.ChannelAgentAccessApprovalRequired
+	}
+	return types.NormalizeChannelAgentAccessMode(value)
+}
+
+func bindOrRequestChannelAgentAccess(
+	db store.Store,
+	bindings store.ChannelAgentBindingStore,
+	entry *types.ChannelAgentEntry,
+	actorUID int64,
+	channel string,
+	channelAppID string,
+	channelUserID string,
+	conversationID string,
+	conversationType string,
+) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
+	if db == nil || bindings == nil || entry == nil || actorUID <= 0 || strings.TrimSpace(channelUserID) == "" {
+		return nil, nil, fmt.Errorf("invalid channel agent access")
+	}
+	channel = normalizeChannel(channel)
+	if channel == "" {
+		channel = entry.Channel
+	}
+	conversationID = strings.TrimSpace(conversationID)
+	conversationType = normalizeConversationType(conversationType)
+	if entry.AccessMode == types.ChannelAgentAccessApprovalRequired {
+		allowed, err := db.AreFriends(actorUID, entry.AgentUID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !allowed {
+			if _, err := db.CreateFriendRequest(actorUID, entry.AgentUID, channelAgentAccessFriendMessage(channel)); err != nil {
+				return nil, nil, err
+			}
+			request, err := bindings.RequestChannelAgentAccess(&types.ChannelAgentAccessRequest{
+				EntryID:                 entry.ID,
+				Channel:                 channel,
+				ChannelAppID:            strings.TrimSpace(channelAppID),
+				ChannelUserID:           strings.TrimSpace(channelUserID),
+				ChannelConversationID:   conversationID,
+				ChannelConversationType: conversationType,
+				ActorUID:                actorUID,
+				OwnerUID:                entry.OwnerUID,
+				AgentUID:                entry.AgentUID,
+				Status:                  "pending",
+			})
+			return nil, request, err
+		}
+	}
+	binding, err := bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 channel,
+		ChannelAppID:            strings.TrimSpace(channelAppID),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   conversationID,
+		ChannelConversationType: conversationType,
+		ActorUID:                actorUID,
+		OwnerUID:                entry.OwnerUID,
+		AgentUID:                entry.AgentUID,
+		EntryID:                 entry.ID,
+		Status:                  "active",
+	})
+	return binding, nil, err
+}
+
+func channelAgentAccessFriendMessage(channel string) string {
+	switch normalizeChannel(channel) {
+	case "feishu":
+		return "通过飞书扫码申请添加该虚拟员工"
+	case "weixin":
+		return "通过微信扫码申请添加该虚拟员工"
+	default:
+		return "通过入口码申请添加该虚拟员工"
+	}
 }
 
 func normalizeChannel(value string) string {

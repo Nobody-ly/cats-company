@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getWebSocketURL } from '../api';
 import t from '../i18n';
-import { Copy, QrCode, RefreshCw, Zap, Bot, Upload } from 'lucide-react';
+import { CheckCircle, Copy, QrCode, RefreshCw, XCircle, Zap, Bot, Upload } from 'lucide-react';
 import Avatar from './avatar';
 import QRCode from './qr-code';
 import { IMAGE_UPLOAD_ACCEPT, validateImageUpload } from '../utils/upload-rules';
@@ -478,10 +478,14 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const [channel, setChannel] = useState('weixin');
   const [channelAppIds, setChannelAppIds] = useState({ weixin: '', feishu: '' });
   const [entries, setEntries] = useState([]);
+  const [accessMode, setAccessMode] = useState('approval_required');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [qrImageError, setQrImageError] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [reviewingUID, setReviewingUID] = useState(null);
   const botId = bot?.id || bot?.uid;
 
   useEffect(() => {
@@ -503,6 +507,24 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
     };
   }, [botId]);
 
+  const loadPendingRequests = useCallback(async () => {
+    if (!botId) return;
+    try {
+      setPendingLoading(true);
+      const res = await api.getPendingRequests(botId);
+      setPendingRequests(res.requests || []);
+    } catch (err) {
+      console.warn('load agent pending requests:', err);
+      setPendingRequests([]);
+    } finally {
+      setPendingLoading(false);
+    }
+  }, [botId]);
+
+  useEffect(() => {
+    loadPendingRequests();
+  }, [loadPendingRequests]);
+
   const channelAppId = channelAppIds[channel] || '';
   const managedChannelAppID = channel === 'feishu' || channel === 'weixin';
   const normalizedChannelAppId = managedChannelAppID ? '' : channelAppId.trim();
@@ -522,17 +544,40 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
     setQrImageError(false);
   }, [displayQrUrl]);
 
+  useEffect(() => {
+    if (selected?.access_mode) {
+      setAccessMode(selected.access_mode);
+    } else {
+      setAccessMode('approval_required');
+    }
+  }, [selected?.id, selected?.access_mode]);
+
   const handleGenerate = async () => {
     try {
       setSaving(true);
       setError('');
-      const res = await api.createAgentEntry(botId, channel, normalizedChannelAppId);
+      const res = await api.createAgentEntry(botId, channel, normalizedChannelAppId, accessMode);
       const next = res.entry;
       setEntries((prev) => [next, ...prev.filter((entry) => (
         !entryScopeMatches(entry, next.channel, next.channel === 'feishu' || next.channel === 'weixin' ? '' : (next.channel_app_id || ''))
       ))]);
     } catch (err) {
       setError(err.message || 'Failed to generate entry code');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveAccessMode = async () => {
+    if (!selected || selected.access_mode === accessMode) return;
+    try {
+      setSaving(true);
+      setError('');
+      const res = await api.createAgentEntry(botId, channel, normalizedChannelAppId, accessMode);
+      const next = res.entry;
+      setEntries((prev) => [next, ...prev.filter((entry) => entry.id !== next.id)]);
+    } catch (err) {
+      setError(err.message || 'Failed to save access mode');
     } finally {
       setSaving(false);
     }
@@ -554,6 +599,25 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
       setError(err.message || 'Failed to regenerate entry code');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleReviewRequest = async (request, action) => {
+    const fromUID = request?.from_user_id;
+    if (!fromUID || !botId) return;
+    try {
+      setReviewingUID(fromUID);
+      setError('');
+      if (action === 'accept') {
+        await api.acceptAgentFriend(botId, fromUID);
+      } else {
+        await api.rejectAgentFriend(botId, fromUID);
+      }
+      await loadPendingRequests();
+    } catch (err) {
+      setError(err.message || 'Failed to review friend request');
+    } finally {
+      setReviewingUID(null);
     }
   };
 
@@ -600,6 +664,42 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
             </div>
           )}
 
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ color: 'var(--v3-text-muted)', fontSize: 12, marginBottom: 8 }}>访问方式</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {[
+                ['approval_required', '好友申请'],
+                ['public', '公开入口'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`oc-btn ${accessMode === value ? 'oc-btn-primary' : 'oc-btn-default'}`}
+                  style={{ padding: '9px 0', borderRadius: 8 }}
+                  onClick={() => setAccessMode(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ color: 'var(--v3-text-muted)', fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>
+              {accessMode === 'approval_required'
+                ? '扫码后先发送好友申请，通过后才能对话。'
+                : '扫码后可直接与该虚拟员工对话。'}
+            </div>
+            {selected && selected.access_mode !== accessMode && (
+              <button
+                type="button"
+                className="oc-btn oc-btn-default"
+                style={{ width: '100%', padding: '8px 0', borderRadius: 8, marginTop: 10 }}
+                onClick={handleSaveAccessMode}
+                disabled={saving}
+              >
+                {saving ? '正在保存...' : '保存访问方式'}
+              </button>
+            )}
+          </div>
+
           {error && (
             <div style={{ background: 'rgba(250,81,81,0.1)', color: '#FA5151', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
               {error}
@@ -629,46 +729,80 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
               </div>
             </div>
           ) : selected ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '196px 1fr', gap: 18, alignItems: 'center' }}>
-              {displayQrUrl && !qrImageError ? (
-                <img
-                  src={displayQrUrl}
-                  alt="微信入口码"
-                  width={196}
-                  height={196}
-                  onError={() => setQrImageError(true)}
-                  style={{ borderRadius: 8, background: '#fff', border: '1px solid var(--v3-border)', objectFit: 'contain' }}
-                />
-              ) : (
-                <QRCode value={entryUrl} size={196} />
-              )}
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 8 }}>
-                  {displayQrUrl ? '二维码图片跳转地址' : '入口链接'}
-                </div>
-                <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
-                  {displayUrl}
-                </div>
-                {channel === 'weixin' && qrImageError && (
-                  <div style={{ background: 'rgba(250,81,81,0.1)', color: '#FA5151', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
-                    微信二维码加载失败，请检查 AppID/AppSecret、公众号接口权限、服务器 IP 白名单和微信后台消息加解密模式。
-                  </div>
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '196px 1fr', gap: 18, alignItems: 'center' }}>
+                {displayQrUrl && !qrImageError ? (
+                  <img
+                    src={displayQrUrl}
+                    alt="微信入口码"
+                    width={196}
+                    height={196}
+                    onError={() => setQrImageError(true)}
+                    style={{ borderRadius: 8, background: '#fff', border: '1px solid var(--v3-border)', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <QRCode value={entryUrl} size={196} />
                 )}
-                {usesLocalEntryUrl && (
-                  <div style={{ background: 'rgba(245,158,11,0.12)', color: '#d97706', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
-                    当前入口链接不是公网 HTTPS 地址，手机扫码前需要配置公网访问地址。
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 8 }}>
+                    {displayQrUrl ? '二维码图片跳转地址' : '入口链接'}
                   </div>
-                )}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`entry_${selected.id}`, displayUrl)}>
-                    <Copy size={14} /> {copiedField === `entry_${selected.id}` ? 'Copied!' : '复制'}
-                  </button>
-                  <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={handleRegenerate} disabled={saving}>
-                    <RefreshCw size={14} /> 重新生成
-                  </button>
+                  <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
+                    {displayUrl}
+                  </div>
+                  {channel === 'weixin' && qrImageError && (
+                    <div style={{ background: 'rgba(250,81,81,0.1)', color: '#FA5151', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+                      微信二维码加载失败，请检查 AppID/AppSecret、公众号接口权限、服务器 IP 白名单和微信后台消息加解密模式。
+                    </div>
+                  )}
+                  {usesLocalEntryUrl && (
+                    <div style={{ background: 'rgba(245,158,11,0.12)', color: '#d97706', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+                      当前入口链接不是公网 HTTPS 地址，手机扫码前需要配置公网访问地址。
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`entry_${selected.id}`, displayUrl)}>
+                      <Copy size={14} /> {copiedField === `entry_${selected.id}` ? 'Copied!' : '复制'}
+                    </button>
+                    <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={handleRegenerate} disabled={saving}>
+                      <RefreshCw size={14} /> 重新生成
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+              {selected.access_mode === 'approval_required' && (
+                <div style={{ marginTop: 18, borderTop: '1px solid var(--v3-border)', paddingTop: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, fontSize: 13 }}>待通过好友申请</div>
+                    <button type="button" className="oc-btn oc-btn-default" style={{ padding: '5px 9px', borderRadius: 8, fontSize: 12 }} onClick={loadPendingRequests} disabled={pendingLoading}>
+                      {pendingLoading ? '刷新中' : '刷新'}
+                    </button>
+                  </div>
+                  {pendingRequests.length === 0 ? (
+                    <div style={{ color: 'var(--v3-text-muted)', fontSize: 12 }}>暂无新的扫码申请。</div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {pendingRequests.map((request) => (
+                        <div key={`${request.from_user_id}-${request.created_at || ''}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center', gap: 8, border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {request.display_name || request.from_username || `用户 ${request.from_user_id}`}
+                            </div>
+                            <div style={{ color: 'var(--v3-text-muted)', fontSize: 12 }}>申请添加该虚拟员工</div>
+                          </div>
+                          <button type="button" className="oc-btn oc-btn-default" style={{ padding: '7px 9px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 5 }} onClick={() => handleReviewRequest(request, 'reject')} disabled={reviewingUID === request.from_user_id}>
+                            <XCircle size={14} /> 拒绝
+                          </button>
+                          <button type="button" className="oc-btn oc-btn-primary" style={{ padding: '7px 9px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 5 }} onClick={() => handleReviewRequest(request, 'accept')} disabled={reviewingUID === request.from_user_id}>
+                            <CheckCircle size={14} /> 通过
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           ) : (
             <div style={{ padding: 36, textAlign: 'center', border: '1px dashed var(--v3-border)', borderRadius: 8 }}>
               <div style={{ color: 'var(--v3-text-name)', marginBottom: 12 }}>还没有该渠道的入口码</div>

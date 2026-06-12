@@ -14,18 +14,25 @@ func (a *Adapter) EnsureChannelAgentEntry(entry *types.ChannelAgentEntry) (*type
 	if entry == nil || entry.OwnerUID <= 0 || entry.AgentUID <= 0 || entry.Channel == "" || entry.SceneKey == "" {
 		return nil, fmt.Errorf("invalid channel agent entry")
 	}
+	accessMode := types.NormalizeChannelAgentAccessMode(entry.AccessMode)
 	existing, err := a.getActiveChannelAgentEntry(entry.OwnerUID, entry.AgentUID, entry.Channel, entry.ChannelAppID)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
+		if existing.AccessMode != accessMode {
+			if _, err := a.db.Exec(`UPDATE channel_agent_entries SET access_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, accessMode, existing.ID); err != nil {
+				return nil, fmt.Errorf("update channel agent entry access mode: %w", err)
+			}
+			return a.GetChannelAgentEntryByID(existing.ID)
+		}
 		return existing, nil
 	}
 
 	res, err := a.db.Exec(
-		`INSERT INTO channel_agent_entries (scene_key, channel, channel_app_id, owner_uid, agent_uid, status)
-		 VALUES (?, ?, ?, ?, ?, 'active')`,
-		entry.SceneKey, entry.Channel, entry.ChannelAppID, entry.OwnerUID, entry.AgentUID,
+		`INSERT INTO channel_agent_entries (scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status)
+		 VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+		entry.SceneKey, entry.Channel, entry.ChannelAppID, accessMode, entry.OwnerUID, entry.AgentUID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create channel agent entry: %w", err)
@@ -36,7 +43,7 @@ func (a *Adapter) EnsureChannelAgentEntry(entry *types.ChannelAgentEntry) (*type
 
 func (a *Adapter) ListChannelAgentEntries(ownerUID, agentUID int64) ([]*types.ChannelAgentEntry, error) {
 	rows, err := a.db.Query(
-		`SELECT id, scene_key, channel, channel_app_id, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
+		`SELECT id, scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
 		 FROM channel_agent_entries
 		 WHERE owner_uid = ? AND agent_uid = ? AND status = 'active'
 		 ORDER BY created_at DESC`,
@@ -68,12 +75,12 @@ func (a *Adapter) RegenerateChannelAgentEntry(id, ownerUID int64, sceneKey strin
 	}
 	defer tx.Rollback()
 
-	var channel, channelAppID string
+	var channel, channelAppID, accessMode string
 	var agentUID int64
 	if err := tx.QueryRow(
-		`SELECT channel, channel_app_id, agent_uid FROM channel_agent_entries WHERE id = ? AND owner_uid = ? AND status = 'active'`,
+		`SELECT channel, channel_app_id, access_mode, agent_uid FROM channel_agent_entries WHERE id = ? AND owner_uid = ? AND status = 'active'`,
 		id, ownerUID,
-	).Scan(&channel, &channelAppID, &agentUID); err != nil {
+	).Scan(&channel, &channelAppID, &accessMode, &agentUID); err != nil {
 		return nil, fmt.Errorf("get channel agent entry: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -83,9 +90,9 @@ func (a *Adapter) RegenerateChannelAgentEntry(id, ownerUID int64, sceneKey strin
 		return nil, fmt.Errorf("revoke channel agent entry: %w", err)
 	}
 	res, err := tx.Exec(
-		`INSERT INTO channel_agent_entries (scene_key, channel, channel_app_id, owner_uid, agent_uid, status)
-		 VALUES (?, ?, ?, ?, ?, 'active')`,
-		sceneKey, channel, channelAppID, ownerUID, agentUID,
+		`INSERT INTO channel_agent_entries (scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status)
+		 VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+		sceneKey, channel, channelAppID, types.NormalizeChannelAgentAccessMode(accessMode), ownerUID, agentUID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create regenerated channel agent entry: %w", err)
@@ -99,7 +106,7 @@ func (a *Adapter) RegenerateChannelAgentEntry(id, ownerUID int64, sceneKey strin
 
 func (a *Adapter) GetChannelAgentEntryByID(id int64) (*types.ChannelAgentEntry, error) {
 	row := a.db.QueryRow(
-		`SELECT id, scene_key, channel, channel_app_id, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
+		`SELECT id, scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
 		 FROM channel_agent_entries WHERE id = ?`,
 		id,
 	)
@@ -115,7 +122,7 @@ func (a *Adapter) GetChannelAgentEntryByID(id int64) (*types.ChannelAgentEntry, 
 
 func (a *Adapter) GetChannelAgentEntryBySceneKey(sceneKey string) (*types.ChannelAgentEntry, error) {
 	row := a.db.QueryRow(
-		`SELECT id, scene_key, channel, channel_app_id, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
+		`SELECT id, scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
 		 FROM channel_agent_entries WHERE scene_key = ?`,
 		sceneKey,
 	)
@@ -127,6 +134,185 @@ func (a *Adapter) GetChannelAgentEntryBySceneKey(sceneKey string) (*types.Channe
 		return nil, fmt.Errorf("get channel agent entry by scene: %w", err)
 	}
 	return entry, nil
+}
+
+func (a *Adapter) RequestChannelAgentAccess(request *types.ChannelAgentAccessRequest) (*types.ChannelAgentAccessRequest, error) {
+	if request == nil || request.EntryID <= 0 || request.Channel == "" || request.ChannelUserID == "" || request.ActorUID <= 0 || request.OwnerUID <= 0 || request.AgentUID <= 0 {
+		return nil, fmt.Errorf("invalid channel agent access request")
+	}
+	conversationType := request.ChannelConversationType
+	if conversationType == "" {
+		conversationType = "p2p"
+	}
+	res, err := a.db.Exec(
+		`INSERT INTO channel_agent_access_requests (
+		     entry_id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		     actor_uid, owner_uid, agent_uid, status, requested_at
+		 )
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+		 ON DUPLICATE KEY UPDATE
+		     channel_conversation_type = VALUES(channel_conversation_type),
+		     actor_uid = VALUES(actor_uid),
+		     owner_uid = VALUES(owner_uid),
+		     agent_uid = VALUES(agent_uid),
+		     status = IF(status = 'approved', 'approved', 'pending'),
+		     requested_at = IF(status = 'approved', requested_at, CURRENT_TIMESTAMP),
+		     reviewed_by_uid = IF(status = 'approved', reviewed_by_uid, NULL),
+		     reviewed_at = IF(status = 'approved', reviewed_at, NULL),
+		     updated_at = CURRENT_TIMESTAMP`,
+		request.EntryID,
+		request.Channel,
+		request.ChannelAppID,
+		request.ChannelUserID,
+		request.ChannelConversationID,
+		conversationType,
+		request.ActorUID,
+		request.OwnerUID,
+		request.AgentUID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("request channel agent access: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	if id > 0 {
+		return a.getChannelAgentAccessRequestByID(id)
+	}
+	return a.getChannelAgentAccessRequest(types.ChannelAgentBindingQuery{
+		Channel:                 request.Channel,
+		ChannelAppID:            request.ChannelAppID,
+		ChannelUserID:           request.ChannelUserID,
+		ChannelConversationID:   request.ChannelConversationID,
+		ChannelConversationType: conversationType,
+	}, request.ChannelConversationID)
+}
+
+func (a *Adapter) ResolveChannelAgentAccessRequest(query types.ChannelAgentBindingQuery) (*types.ChannelAgentAccessRequest, error) {
+	if query.Channel == "" || query.ChannelUserID == "" {
+		return nil, fmt.Errorf("invalid channel agent access query")
+	}
+	request, err := a.getChannelAgentAccessRequest(query, query.ChannelConversationID)
+	if err != nil || request != nil {
+		return request, err
+	}
+	if query.ChannelConversationID != "" {
+		request, err = a.getChannelAgentAccessRequest(query, "")
+		if err != nil || request != nil {
+			return request, err
+		}
+	}
+	return nil, nil
+}
+
+func (a *Adapter) ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) ([]*types.ChannelAgentBinding, error) {
+	if actorUID <= 0 || agentUID <= 0 || reviewerUID <= 0 {
+		return nil, fmt.Errorf("invalid channel agent access approval")
+	}
+	tx, err := a.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin channel agent access approval: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(
+		`SELECT id, entry_id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		        actor_uid, owner_uid, agent_uid, status, COALESCE(reviewed_by_uid, 0), requested_at, updated_at, reviewed_at
+		 FROM channel_agent_access_requests
+		 WHERE actor_uid = ? AND agent_uid = ? AND status = 'pending'
+		 ORDER BY requested_at ASC`,
+		actorUID, agentUID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending channel agent access: %w", err)
+	}
+	var requests []*types.ChannelAgentAccessRequest
+	for rows.Next() {
+		request, scanErr := scanChannelAgentAccessRequest(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		requests = append(requests, request)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var bindings []*types.ChannelAgentBinding
+	for _, request := range requests {
+		if _, err := tx.Exec(
+			`UPDATE channel_agent_access_requests
+			 SET status = 'approved', reviewed_by_uid = ?, reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+			 WHERE id = ? AND status = 'pending'`,
+			reviewerUID, request.ID,
+		); err != nil {
+			return nil, fmt.Errorf("approve channel agent access: %w", err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO channel_agent_bindings (
+			     channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+			     actor_uid, owner_uid, agent_uid, entry_id, status, bound_at, last_used_at
+			 )
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			 ON DUPLICATE KEY UPDATE
+			     actor_uid = VALUES(actor_uid),
+			     owner_uid = VALUES(owner_uid),
+			     agent_uid = VALUES(agent_uid),
+			     entry_id = COALESCE(VALUES(entry_id), entry_id),
+			     channel_conversation_type = VALUES(channel_conversation_type),
+			     status = 'active',
+			     bound_at = CURRENT_TIMESTAMP,
+			     last_used_at = CURRENT_TIMESTAMP,
+			     updated_at = CURRENT_TIMESTAMP`,
+			request.Channel,
+			request.ChannelAppID,
+			request.ChannelUserID,
+			request.ChannelConversationID,
+			request.ChannelConversationType,
+			request.ActorUID,
+			request.OwnerUID,
+			request.AgentUID,
+			nullableInt64(request.EntryID),
+		); err != nil {
+			return nil, fmt.Errorf("create approved channel agent binding: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	for _, request := range requests {
+		binding, err := a.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+			Channel:                 request.Channel,
+			ChannelAppID:            request.ChannelAppID,
+			ChannelUserID:           request.ChannelUserID,
+			ChannelConversationID:   request.ChannelConversationID,
+			ChannelConversationType: request.ChannelConversationType,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if binding != nil {
+			bindings = append(bindings, binding)
+		}
+	}
+	return bindings, nil
+}
+
+func (a *Adapter) RejectChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) error {
+	if actorUID <= 0 || agentUID <= 0 || reviewerUID <= 0 {
+		return fmt.Errorf("invalid channel agent access rejection")
+	}
+	if _, err := a.db.Exec(
+		`UPDATE channel_agent_access_requests
+		 SET status = 'rejected', reviewed_by_uid = ?, reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 WHERE actor_uid = ? AND agent_uid = ? AND status = 'pending'`,
+		reviewerUID, actorUID, agentUID,
+	); err != nil {
+		return fmt.Errorf("reject channel agent access: %w", err)
+	}
+	return nil
 }
 
 func (a *Adapter) UpsertChannelAgentBinding(binding *types.ChannelAgentBinding) (*types.ChannelAgentBinding, error) {
@@ -297,7 +483,7 @@ func (a *Adapter) LinkChannelAgentBindingCanonicalUser(bindingID, actorUID, agen
 
 func (a *Adapter) getActiveChannelAgentEntry(ownerUID, agentUID int64, channel, channelAppID string) (*types.ChannelAgentEntry, error) {
 	row := a.db.QueryRow(
-		`SELECT id, scene_key, channel, channel_app_id, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
+		`SELECT id, scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
 		 FROM channel_agent_entries
 		 WHERE owner_uid = ? AND agent_uid = ? AND channel = ? AND channel_app_id = ? AND status = 'active'
 		 ORDER BY created_at DESC LIMIT 1`,
@@ -311,6 +497,43 @@ func (a *Adapter) getActiveChannelAgentEntry(ownerUID, agentUID int64, channel, 
 		return nil, fmt.Errorf("get active channel agent entry: %w", err)
 	}
 	return entry, nil
+}
+
+func (a *Adapter) getChannelAgentAccessRequestByID(id int64) (*types.ChannelAgentAccessRequest, error) {
+	row := a.db.QueryRow(
+		`SELECT id, entry_id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		        actor_uid, owner_uid, agent_uid, status, COALESCE(reviewed_by_uid, 0), requested_at, updated_at, reviewed_at
+		 FROM channel_agent_access_requests WHERE id = ?`,
+		id,
+	)
+	request, err := scanChannelAgentAccessRequest(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get channel agent access request: %w", err)
+	}
+	return request, nil
+}
+
+func (a *Adapter) getChannelAgentAccessRequest(query types.ChannelAgentBindingQuery, conversationID string) (*types.ChannelAgentAccessRequest, error) {
+	row := a.db.QueryRow(
+		`SELECT id, entry_id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		        actor_uid, owner_uid, agent_uid, status, COALESCE(reviewed_by_uid, 0), requested_at, updated_at, reviewed_at
+		 FROM channel_agent_access_requests
+		 WHERE channel = ? AND channel_app_id = ? AND channel_user_id = ? AND channel_conversation_id = ?
+		   AND status IN ('pending', 'rejected')
+		 ORDER BY updated_at DESC LIMIT 1`,
+		query.Channel, query.ChannelAppID, query.ChannelUserID, conversationID,
+	)
+	request, err := scanChannelAgentAccessRequest(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve channel agent access request: %w", err)
+	}
+	return request, nil
 }
 
 func (a *Adapter) getChannelAgentBinding(query types.ChannelAgentBindingQuery, conversationID string) (*types.ChannelAgentBinding, error) {
@@ -347,6 +570,7 @@ func scanChannelAgentEntry(row channelAgentEntryScanner) (*types.ChannelAgentEnt
 		&entry.SceneKey,
 		&entry.Channel,
 		&entry.ChannelAppID,
+		&entry.AccessMode,
 		&entry.OwnerUID,
 		&entry.AgentUID,
 		&entry.Status,
@@ -359,7 +583,40 @@ func scanChannelAgentEntry(row channelAgentEntryScanner) (*types.ChannelAgentEnt
 	if lastUsedAt.Valid {
 		entry.LastUsedAt = &lastUsedAt.Time
 	}
+	entry.AccessMode = types.NormalizeChannelAgentAccessMode(entry.AccessMode)
 	return entry, nil
+}
+
+type channelAgentAccessRequestScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanChannelAgentAccessRequest(row channelAgentAccessRequestScanner) (*types.ChannelAgentAccessRequest, error) {
+	request := &types.ChannelAgentAccessRequest{}
+	var reviewedAt sql.NullTime
+	if err := row.Scan(
+		&request.ID,
+		&request.EntryID,
+		&request.Channel,
+		&request.ChannelAppID,
+		&request.ChannelUserID,
+		&request.ChannelConversationID,
+		&request.ChannelConversationType,
+		&request.ActorUID,
+		&request.OwnerUID,
+		&request.AgentUID,
+		&request.Status,
+		&request.ReviewedByUID,
+		&request.RequestedAt,
+		&request.UpdatedAt,
+		&reviewedAt,
+	); err != nil {
+		return nil, err
+	}
+	if reviewedAt.Valid {
+		request.ReviewedAt = &reviewedAt.Time
+	}
+	return request, nil
 }
 
 type channelAgentBindingScanner interface {

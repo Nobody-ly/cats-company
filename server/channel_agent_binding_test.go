@@ -23,7 +23,7 @@ func TestChannelAgentEntryAndBindingFlow(t *testing.T) {
 	db.bodyIDs[43] = "body-contract"
 	handler := NewChannelAgentBindingHandler(db, nil)
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(`{"agent_uid":43,"channel":"weixin"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(`{"agent_uid":43,"channel":"weixin","access_mode":"public"}`))
 	createReq = createReq.WithContext(context.WithValue(createReq.Context(), uidKey, int64(7)))
 	createRec := httptest.NewRecorder()
 	handler.HandleAgentEntries(createRec, createReq)
@@ -72,6 +72,108 @@ func TestChannelAgentEntryAndBindingFlow(t *testing.T) {
 	}
 	if !resolved.Bound || resolved.AgentUID != 43 || resolved.AgentID != "usr43" || resolved.AgentBodyID != "body-contract" {
 		t.Fatalf("unexpected resolution: %+v", resolved)
+	}
+}
+
+func TestChannelAgentEntryApprovalRequiredCreatesPendingAccess(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(`{"agent_uid":43,"channel":"weixin"}`))
+	createReq = createReq.WithContext(context.WithValue(createReq.Context(), uidKey, int64(7)))
+	createRec := httptest.NewRecorder()
+	handler.HandleAgentEntries(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Entry channelAgentEntryResponse `json:"entry"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Entry.AccessMode != types.ChannelAgentAccessApprovalRequired {
+		t.Fatalf("new entry should default to approval_required: %+v", created.Entry)
+	}
+
+	confirmBody := `{"scene_key":"` + created.Entry.SceneKey + `","channel_user_id":"openid-visitor","channel_conversation_type":"p2p"}`
+	confirmReq := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/confirm", bytes.NewBufferString(confirmBody))
+	confirmRec := httptest.NewRecorder()
+	handler.HandleConfirmChannelAgentBinding(confirmRec, confirmReq)
+	if confirmRec.Code != http.StatusOK {
+		t.Fatalf("confirm status=%d body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+	var pending struct {
+		Status        string                          `json:"status"`
+		AccessRequest types.ChannelAgentAccessRequest `json:"access_request"`
+	}
+	if err := json.Unmarshal(confirmRec.Body.Bytes(), &pending); err != nil {
+		t.Fatalf("decode pending response: %v", err)
+	}
+	if pending.Status != "pending_approval" || pending.AccessRequest.ActorUID <= 0 || pending.AccessRequest.AgentUID != 43 {
+		t.Fatalf("unexpected pending response: %+v", pending)
+	}
+
+	resolveReq := httptest.NewRequest(http.MethodGet, "/api/channel-agent-bindings/resolve?channel=weixin&channel_user_id=openid-visitor", nil)
+	resolveRec := httptest.NewRecorder()
+	handler.HandleResolveChannelAgentBinding(resolveRec, resolveReq)
+	if resolveRec.Code != http.StatusOK {
+		t.Fatalf("resolve status=%d body=%s", resolveRec.Code, resolveRec.Body.String())
+	}
+	var unresolved struct {
+		Bound  bool   `json:"bound"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(resolveRec.Body.Bytes(), &unresolved); err != nil {
+		t.Fatalf("decode unresolved response: %v", err)
+	}
+	if unresolved.Bound || unresolved.Status != "pending" || len(db.bindings) != 0 {
+		t.Fatalf("pending access should not create an active binding: %+v bindings=%+v", unresolved, db.bindings)
+	}
+
+	friendHandler := NewFriendHandler(db)
+	pendingReq := httptest.NewRequest(http.MethodGet, "/api/friends/pending?agent_uid=43", nil)
+	pendingReq = pendingReq.WithContext(context.WithValue(pendingReq.Context(), uidKey, int64(7)))
+	pendingRec := httptest.NewRecorder()
+	friendHandler.HandleGetPendingRequests(pendingRec, pendingReq)
+	if pendingRec.Code != http.StatusOK {
+		t.Fatalf("pending status=%d body=%s", pendingRec.Code, pendingRec.Body.String())
+	}
+	var pendingFriends struct {
+		Requests []*types.FriendRequest `json:"requests"`
+	}
+	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingFriends); err != nil {
+		t.Fatalf("decode pending friends: %v", err)
+	}
+	if len(pendingFriends.Requests) != 1 || pendingFriends.Requests[0].FromUserID != pending.AccessRequest.ActorUID {
+		t.Fatalf("owner should see bot pending friend request: %+v", pendingFriends.Requests)
+	}
+
+	acceptReq := httptest.NewRequest(http.MethodPost, "/api/friends/accept", bytes.NewBufferString(`{"agent_uid":43,"user_id":`+strconv.FormatInt(pending.AccessRequest.ActorUID, 10)+`}`))
+	acceptReq = acceptReq.WithContext(context.WithValue(acceptReq.Context(), uidKey, int64(7)))
+	acceptRec := httptest.NewRecorder()
+	friendHandler.HandleAcceptRequest(acceptRec, acceptReq)
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status=%d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+
+	resolveAfterRec := httptest.NewRecorder()
+	handler.HandleResolveChannelAgentBinding(resolveAfterRec, resolveReq)
+	if resolveAfterRec.Code != http.StatusOK {
+		t.Fatalf("resolve after accept status=%d body=%s", resolveAfterRec.Code, resolveAfterRec.Body.String())
+	}
+	var resolved struct {
+		Bound    bool  `json:"bound"`
+		AgentUID int64 `json:"agent_uid"`
+	}
+	if err := json.Unmarshal(resolveAfterRec.Body.Bytes(), &resolved); err != nil {
+		t.Fatalf("decode resolved response: %v", err)
+	}
+	if !resolved.Bound || resolved.AgentUID != 43 {
+		t.Fatalf("expected approved access to resolve binding: %+v", resolved)
 	}
 }
 
@@ -370,7 +472,7 @@ func TestChannelAgentBindingUsesEntryChannelAppID(t *testing.T) {
 	db.owners[43] = 7
 	handler := NewChannelAgentBindingHandler(db, nil)
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(`{"agent_uid":43,"channel":"feishu","channel_app_id":"cli_app"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(`{"agent_uid":43,"channel":"feishu","channel_app_id":"cli_app","access_mode":"public"}`))
 	createReq = createReq.WithContext(context.WithValue(createReq.Context(), uidKey, int64(7)))
 	createRec := httptest.NewRecorder()
 	handler.HandleAgentEntries(createRec, createReq)
@@ -591,17 +693,19 @@ func TestChannelAgentEntryRegenerateRequiresActiveEntry(t *testing.T) {
 
 type channelAgentTestStore struct {
 	store.Store
-	users     map[int64]*types.User
-	owners    map[int64]int64
-	bodyIDs   map[int64]string
-	entries   map[int64]*types.ChannelAgentEntry
-	bindings  map[string]*types.ChannelAgentBinding
-	messages  []*types.Message
-	clientIDs map[string]int64
-	topics    []string
-	linkCalls []channelAgentLinkCall
-	linkErr   error
-	nextID    int64
+	users          map[int64]*types.User
+	owners         map[int64]int64
+	bodyIDs        map[int64]string
+	entries        map[int64]*types.ChannelAgentEntry
+	accessRequests map[string]*types.ChannelAgentAccessRequest
+	bindings       map[string]*types.ChannelAgentBinding
+	friends        map[string]types.FriendStatus
+	messages       []*types.Message
+	clientIDs      map[string]int64
+	topics         []string
+	linkCalls      []channelAgentLinkCall
+	linkErr        error
+	nextID         int64
 }
 
 type channelAgentLinkCall struct {
@@ -613,16 +717,18 @@ type channelAgentLinkCall struct {
 
 func newChannelAgentTestStore() *channelAgentTestStore {
 	return &channelAgentTestStore{
-		users:     map[int64]*types.User{},
-		owners:    map[int64]int64{},
-		bodyIDs:   map[int64]string{},
-		entries:   map[int64]*types.ChannelAgentEntry{},
-		bindings:  map[string]*types.ChannelAgentBinding{},
-		messages:  []*types.Message{},
-		clientIDs: map[string]int64{},
-		topics:    []string{},
-		linkCalls: []channelAgentLinkCall{},
-		nextID:    1,
+		users:          map[int64]*types.User{},
+		owners:         map[int64]int64{},
+		bodyIDs:        map[int64]string{},
+		entries:        map[int64]*types.ChannelAgentEntry{},
+		accessRequests: map[string]*types.ChannelAgentAccessRequest{},
+		bindings:       map[string]*types.ChannelAgentBinding{},
+		friends:        map[string]types.FriendStatus{},
+		messages:       []*types.Message{},
+		clientIDs:      map[string]int64{},
+		topics:         []string{},
+		linkCalls:      []channelAgentLinkCall{},
+		nextID:         1,
 	}
 }
 
@@ -659,6 +765,73 @@ func (s *channelAgentTestStore) GetBotOwner(botUID int64) (int64, error) {
 
 func (s *channelAgentTestStore) GetBotBodyID(botUID int64) (string, error) {
 	return s.bodyIDs[botUID], nil
+}
+
+func (s *channelAgentTestStore) CreateFriendRequest(fromUID, toUID int64, message string) (int64, error) {
+	s.friends[friendKey(fromUID, toUID)] = types.FriendPending
+	return s.nextID, nil
+}
+
+func (s *channelAgentTestStore) AcceptFriendRequest(fromUID, toUID int64) error {
+	s.friends[friendKey(fromUID, toUID)] = types.FriendAccepted
+	s.friends[friendKey(toUID, fromUID)] = types.FriendAccepted
+	return nil
+}
+
+func (s *channelAgentTestStore) RejectFriendRequest(fromUID, toUID int64) error {
+	s.friends[friendKey(fromUID, toUID)] = types.FriendRejected
+	return nil
+}
+
+func (s *channelAgentTestStore) GetFriends(uid int64) ([]*types.User, error) {
+	var out []*types.User
+	for key, status := range s.friends {
+		if status != types.FriendAccepted {
+			continue
+		}
+		fromUID, toUID := parseFriendKey(key)
+		if fromUID == uid {
+			if user := s.users[toUID]; user != nil {
+				out = append(out, user)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) GetPendingRequests(uid int64) ([]*types.FriendRequest, error) {
+	var out []*types.FriendRequest
+	for key, status := range s.friends {
+		if status != types.FriendPending {
+			continue
+		}
+		fromUID, toUID := parseFriendKey(key)
+		if toUID != uid {
+			continue
+		}
+		req := &types.FriendRequest{
+			ID:         fromUID,
+			FromUserID: fromUID,
+			ToUserID:   toUID,
+			Status:     status,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		}
+		if user := s.users[fromUID]; user != nil {
+			req.FromUsername = user.Username
+			req.DisplayName = user.DisplayName
+		}
+		out = append(out, req)
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) AreFriends(uid1, uid2 int64) (bool, error) {
+	return s.friends[friendKey(uid1, uid2)] == types.FriendAccepted, nil
+}
+
+func (s *channelAgentTestStore) IsBlocked(uid, blockedUID int64) (bool, error) {
+	return s.friends[friendKey(uid, blockedUID)] == types.FriendBlocked, nil
 }
 
 func (s *channelAgentTestStore) CreateTopic(id, topicType string, ownerID int64) error {
@@ -708,6 +881,11 @@ func (s *channelAgentTestStore) SaveMessageIdempotent(topicID string, fromUID in
 func (s *channelAgentTestStore) EnsureChannelAgentEntry(entry *types.ChannelAgentEntry) (*types.ChannelAgentEntry, error) {
 	for _, existing := range s.entries {
 		if existing.OwnerUID == entry.OwnerUID && existing.AgentUID == entry.AgentUID && existing.Channel == entry.Channel && existing.ChannelAppID == entry.ChannelAppID && existing.Status == "active" {
+			accessMode := types.NormalizeChannelAgentAccessMode(entry.AccessMode)
+			if existing.AccessMode != accessMode {
+				existing.AccessMode = accessMode
+				existing.UpdatedAt = time.Now()
+			}
 			return cloneEntry(existing), nil
 		}
 	}
@@ -715,6 +893,7 @@ func (s *channelAgentTestStore) EnsureChannelAgentEntry(entry *types.ChannelAgen
 	next := cloneEntry(entry)
 	next.ID = s.nextID
 	s.nextID++
+	next.AccessMode = types.NormalizeChannelAgentAccessMode(next.AccessMode)
 	next.Status = "active"
 	next.CreatedAt = now
 	next.UpdatedAt = now
@@ -742,9 +921,100 @@ func (s *channelAgentTestStore) RegenerateChannelAgentEntry(id, ownerUID int64, 
 		SceneKey:     sceneKey,
 		Channel:      entry.Channel,
 		ChannelAppID: entry.ChannelAppID,
+		AccessMode:   entry.AccessMode,
 		OwnerUID:     ownerUID,
 		AgentUID:     entry.AgentUID,
 	})
+}
+
+func (s *channelAgentTestStore) RequestChannelAgentAccess(request *types.ChannelAgentAccessRequest) (*types.ChannelAgentAccessRequest, error) {
+	now := time.Now()
+	next := *request
+	key := accessRequestKey(next.EntryID, next.Channel, next.ChannelAppID, next.ChannelUserID, next.ChannelConversationID)
+	if existing := s.accessRequests[key]; existing != nil {
+		next.ID = existing.ID
+		next.RequestedAt = existing.RequestedAt
+		if existing.Status == "approved" {
+			next.Status = "approved"
+			next.ReviewedAt = existing.ReviewedAt
+			next.ReviewedByUID = existing.ReviewedByUID
+		}
+	} else {
+		next.ID = s.nextID
+		s.nextID++
+		next.RequestedAt = now
+	}
+	if next.Status == "" {
+		next.Status = "pending"
+	}
+	next.UpdatedAt = now
+	s.accessRequests[key] = &next
+	return cloneAccessRequest(&next), nil
+}
+
+func (s *channelAgentTestStore) ResolveChannelAgentAccessRequest(query types.ChannelAgentBindingQuery) (*types.ChannelAgentAccessRequest, error) {
+	if request := s.accessRequestsByConversation(query, query.ChannelConversationID); request != nil {
+		return cloneAccessRequest(request), nil
+	}
+	if query.ChannelConversationID != "" {
+		if request := s.accessRequestsByConversation(query, ""); request != nil {
+			return cloneAccessRequest(request), nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *channelAgentTestStore) accessRequestsByConversation(query types.ChannelAgentBindingQuery, conversationID string) *types.ChannelAgentAccessRequest {
+	for _, request := range s.accessRequests {
+		if request.Channel == query.Channel && request.ChannelAppID == query.ChannelAppID && request.ChannelUserID == query.ChannelUserID && request.ChannelConversationID == conversationID && (request.Status == "pending" || request.Status == "rejected") {
+			return request
+		}
+	}
+	return nil
+}
+
+func (s *channelAgentTestStore) ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) ([]*types.ChannelAgentBinding, error) {
+	var out []*types.ChannelAgentBinding
+	for _, request := range s.accessRequests {
+		if request.ActorUID != actorUID || request.AgentUID != agentUID || request.Status != "pending" {
+			continue
+		}
+		now := time.Now()
+		request.Status = "approved"
+		request.ReviewedByUID = reviewerUID
+		request.ReviewedAt = &now
+		request.UpdatedAt = now
+		binding, err := s.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+			Channel:                 request.Channel,
+			ChannelAppID:            request.ChannelAppID,
+			ChannelUserID:           request.ChannelUserID,
+			ChannelConversationID:   request.ChannelConversationID,
+			ChannelConversationType: request.ChannelConversationType,
+			ActorUID:                request.ActorUID,
+			OwnerUID:                request.OwnerUID,
+			AgentUID:                request.AgentUID,
+			EntryID:                 request.EntryID,
+			Status:                  "active",
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, binding)
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) RejectChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) error {
+	for _, request := range s.accessRequests {
+		if request.ActorUID == actorUID && request.AgentUID == agentUID && request.Status == "pending" {
+			now := time.Now()
+			request.Status = "rejected"
+			request.ReviewedByUID = reviewerUID
+			request.ReviewedAt = &now
+			request.UpdatedAt = now
+		}
+	}
+	return nil
 }
 
 func (s *channelAgentTestStore) GetChannelAgentEntryBySceneKey(sceneKey string) (*types.ChannelAgentEntry, error) {
@@ -852,6 +1122,32 @@ func cloneBinding(binding *types.ChannelAgentBinding) *types.ChannelAgentBinding
 	return &next
 }
 
+func cloneAccessRequest(request *types.ChannelAgentAccessRequest) *types.ChannelAgentAccessRequest {
+	if request == nil {
+		return nil
+	}
+	next := *request
+	return &next
+}
+
 func bindingKey(channel, appID, userID, conversationID string) string {
 	return channel + "\x00" + appID + "\x00" + userID + "\x00" + conversationID
+}
+
+func accessRequestKey(entryID int64, channel, appID, userID, conversationID string) string {
+	return strconv.FormatInt(entryID, 10) + "\x00" + bindingKey(channel, appID, userID, conversationID)
+}
+
+func friendKey(fromUID, toUID int64) string {
+	return strconv.FormatInt(fromUID, 10) + "\x00" + strconv.FormatInt(toUID, 10)
+}
+
+func parseFriendKey(key string) (int64, int64) {
+	parts := strings.Split(key, "\x00")
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	fromUID, _ := strconv.ParseInt(parts[0], 10, 64)
+	toUID, _ := strconv.ParseInt(parts[1], 10, 64)
+	return fromUID, toUID
 }

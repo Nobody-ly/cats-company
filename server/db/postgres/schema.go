@@ -17,6 +17,7 @@ func (a *Adapter) CreateSchema() error {
 		createFeedbackReportsTable,
 		createAuthServicesTable,
 		createChannelAgentEntriesTable,
+		createChannelAgentAccessRequestsTable,
 		createChannelAgentBindingsTable,
 		migrateUsersAddBotDisclose,
 		migrateMessagesAddReplyTo,
@@ -26,6 +27,7 @@ func (a *Adapter) CreateSchema() error {
 		migrateBotConfigAddTenantName,
 		migrateBotConfigAddBodyID,
 		migrateChannelAgentEntriesAddAppID,
+		migrateChannelAgentEntriesAddAccessMode,
 		migrateChannelAgentBindingsAddActorUID,
 		migrateChannelAgentBindingsAddCanonicalUID,
 		migrateMessagesAddCodeMode,
@@ -208,12 +210,34 @@ CREATE TABLE IF NOT EXISTS channel_agent_entries (
     scene_key VARCHAR(64) NOT NULL UNIQUE,
     channel VARCHAR(32) NOT NULL,
     channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    access_mode VARCHAR(32) NOT NULL DEFAULT 'public',
     owner_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     agent_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     last_used_at TIMESTAMPTZ DEFAULT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`
+
+const createChannelAgentAccessRequestsTable = `
+CREATE TABLE IF NOT EXISTS channel_agent_access_requests (
+    id BIGSERIAL PRIMARY KEY,
+    entry_id BIGINT NOT NULL REFERENCES channel_agent_entries(id) ON DELETE CASCADE,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_user_id VARCHAR(128) NOT NULL,
+    channel_conversation_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_conversation_type VARCHAR(32) NOT NULL DEFAULT 'p2p',
+    actor_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    owner_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    reviewed_by_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMPTZ DEFAULT NULL,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_channel_agent_access_identity UNIQUE (entry_id, channel, channel_app_id, channel_user_id, channel_conversation_id)
 );
 `
 
@@ -246,6 +270,7 @@ const migrateBotConfigAddVisibility = `ALTER TABLE bot_config ADD COLUMN IF NOT 
 const migrateBotConfigAddTenantName = `ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS tenant_name VARCHAR(128) DEFAULT NULL;`
 const migrateBotConfigAddBodyID = `ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS body_id VARCHAR(128) DEFAULT NULL;`
 const migrateChannelAgentEntriesAddAppID = `ALTER TABLE channel_agent_entries ADD COLUMN IF NOT EXISTS channel_app_id VARCHAR(128) NOT NULL DEFAULT '';`
+const migrateChannelAgentEntriesAddAccessMode = `ALTER TABLE channel_agent_entries ADD COLUMN IF NOT EXISTS access_mode VARCHAR(32) NOT NULL DEFAULT 'public';`
 const migrateChannelAgentBindingsAddActorUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS actor_uid BIGINT DEFAULT NULL;`
 const migrateChannelAgentBindingsAddCanonicalUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS canonical_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL;`
 const migrateMessagesAddCodeMode = `
@@ -314,6 +339,9 @@ CREATE INDEX IF NOT EXISTS idx_channel_agent_bindings_lookup ON channel_agent_bi
 CREATE INDEX IF NOT EXISTS idx_channel_agent_bindings_agent ON channel_agent_bindings (owner_uid, agent_uid, status);
 CREATE INDEX IF NOT EXISTS idx_channel_agent_bindings_actor_agent ON channel_agent_bindings (channel, channel_app_id, actor_uid, agent_uid, status);
 CREATE INDEX IF NOT EXISTS idx_channel_agent_bindings_actor_any ON channel_agent_bindings (actor_uid, agent_uid, status);
+CREATE INDEX IF NOT EXISTS idx_channel_agent_access_owner_agent ON channel_agent_access_requests (owner_uid, agent_uid, status);
+CREATE INDEX IF NOT EXISTS idx_channel_agent_access_actor_agent ON channel_agent_access_requests (actor_uid, agent_uid, status);
+CREATE INDEX IF NOT EXISTS idx_channel_agent_access_lookup ON channel_agent_access_requests (channel, channel_app_id, channel_user_id, status);
 `
 
 const createUpdatedAtTriggers = `
@@ -330,5 +358,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_agent_entries_updated_at BEFORE UPDATE ON channel_agent_entries
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_agent_bindings_updated_at BEFORE UPDATE ON channel_agent_bindings
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE TRIGGER trg_channel_agent_access_requests_updated_at BEFORE UPDATE ON channel_agent_access_requests
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 `

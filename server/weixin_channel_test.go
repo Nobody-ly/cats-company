@@ -132,6 +132,58 @@ func TestWeixinScanEventBindsActor(t *testing.T) {
 	}
 }
 
+func TestWeixinApprovalRequiredScanCreatesPendingAccess(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	_, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-private-weixin",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	handler := NewWeixinChannelHandler(db, nil, WeixinChannelConfig{
+		AppID:      "wx_app",
+		EventToken: "token-1",
+	}, &fakeWeixinAPI{appID: "wx_app"})
+	body := `<xml><ToUserName><![CDATA[gh_app]]></ToUserName><FromUserName><![CDATA[openid-private]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[subscribe]]></Event><EventKey><![CDATA[qrscene_scene-private-weixin]]></EventKey></xml>`
+	req := httptest.NewRequest(http.MethodPost, "/api/channels/weixin/events?timestamp=1&nonce=2&signature="+weixinTestSignature("token-1", "1", "2"), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-private",
+	}); err != nil || binding != nil {
+		t.Fatalf("private scan should not create binding yet, binding=%+v err=%v", binding, err)
+	}
+	access, err := db.ResolveChannelAgentAccessRequest(types.ChannelAgentBindingQuery{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-private",
+	})
+	if err != nil || access == nil || access.Status != "pending" || access.AgentUID != 43 {
+		t.Fatalf("expected pending access request, access=%+v err=%v", access, err)
+	}
+	if len(db.topics) != 0 {
+		t.Fatalf("private scan should not create chat topic before approval: %+v", db.topics)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "好友申请") || strings.Contains(body, "/channel-device-link") {
+		t.Fatalf("private scan reply should request approval without device link, body=%s", body)
+	}
+}
+
 func TestWeixinScanEventForExistingSubscriberBindsActor(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
