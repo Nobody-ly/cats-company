@@ -5,7 +5,7 @@ import { api, getApiBaseURL, getWebSocketURL } from '../api';
 const RELEASE_VERSION = '1.2.0';
 const TOS_BASE_URL = 'https://github-release.tos-cn-guangzhou.volces.com/update';
 
-const DOWNLOAD_OPTIONS = [
+export const DOWNLOAD_OPTIONS = [
   {
     key: 'windows',
     title: 'Windows',

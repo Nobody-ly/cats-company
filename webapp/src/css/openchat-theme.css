@@ -1099,6 +1099,47 @@ body {
   min-width: 0;
 }
 
+.v3-local-assistant-bar {
+  min-height: 40px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  border-bottom: 1px solid var(--v3-border);
+  background: var(--v3-bg-header);
+  color: var(--v3-text-muted);
+  flex-shrink: 0;
+  z-index: 11;
+}
+
+.v3-local-assistant-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.v3-local-assistant-status.connected {
+  color: #3fb950;
+}
+
+.v3-local-assistant-connect {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(35, 134, 54, 0.45);
+  border-radius: 6px;
+  background: rgba(35, 134, 54, 0.16);
+  color: #3fb950;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.v3-local-assistant-connect:hover {
+  background: rgba(35, 134, 54, 0.26);
+}
+
 .v3-message-workspace {
   flex: 1 1 auto;
   min-width: 0;
