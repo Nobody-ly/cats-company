@@ -222,7 +222,7 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 		name = displayNameOrUsername(agent.DisplayName, agent.Username)
 	}
 	if accessRequest != nil && binding == nil {
-		writeHTML(w, http.StatusOK, oauthResultHTML("申请已提交", fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以回到飞书聊天框提问。", name)))
+		writeHTML(w, http.StatusOK, oauthResultHTML("申请已提交", fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以回到飞书聊天框提问；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。", name)))
 		return
 	}
 	if err := h.db.CreateTopic(p2pTopicID(actorUID, entry.AgentUID), "p2p", actorUID); err != nil {
@@ -312,7 +312,7 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 	if binding == nil {
 		if access, lookupErr := h.resolveFeishuAccessRequest(appID, channelUserID, event.Message.ChatID, chatType); lookupErr == nil && access != nil {
 			if access.Status == "pending" {
-				return h.replyToFeishu(ctx, "open_id", channelUserID, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务。")
+				return h.replyToFeishu(ctx, "open_id", channelUserID, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。")
 			}
 			if access.Status == "rejected" {
 				return h.replyToFeishu(ctx, "open_id", channelUserID, "你的好友申请暂未通过，请联系虚拟员工管理员。")
@@ -335,6 +335,9 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 		if err != nil {
 			return err
 		}
+	}
+	if binding.CanonicalUID <= 0 && isChannelDeviceLinkRequest(text) {
+		return h.replyToFeishu(ctx, "open_id", channelUserID, channelBindingDeviceLinkGuidance(nil, binding))
 	}
 	return h.deliverInboundTextToAgent(actorUID, binding.AgentUID, text, "feishu:"+event.Message.MessageID, map[string]interface{}{
 		"source_channel":                 "feishu",

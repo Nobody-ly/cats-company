@@ -248,7 +248,7 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		name = displayNameOrUsername(agent.DisplayName, agent.Username)
 	}
 	if accessRequest != nil && binding == nil {
-		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以在这里直接提问。", name))
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以在这里直接提问；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。", name))
 		return
 	}
 	if err := h.db.CreateTopic(p2pTopicID(actorUID, entry.AgentUID), "p2p", actorUID); err != nil {
@@ -282,7 +282,7 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 	if binding == nil {
 		if access, lookupErr := h.resolveWeixinAccessRequest(appID, openID, "", "p2p"); lookupErr == nil && access != nil {
 			if access.Status == "pending" {
-				writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务。")
+				writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。")
 				return
 			}
 			if access.Status == "rejected" {
@@ -306,6 +306,10 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "更新微信用户身份失败，请稍后重试。")
 			return
 		}
+	}
+	if binding.CanonicalUID <= 0 && isChannelDeviceLinkRequest(text) {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, channelBindingDeviceLinkGuidance(nil, binding))
+		return
 	}
 	clientMsgID := weixinClientMsgID(msg)
 	if err := deliverInboundChannelTextToAgent(h.db, h.hub, actorUID, binding.AgentUID, text, clientMsgID, "weixin", map[string]interface{}{

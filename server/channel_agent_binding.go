@@ -685,6 +685,46 @@ func channelBindingDeviceLinkURL(r *http.Request, binding *types.ChannelAgentBin
 	return publicBaseURL(r) + "/channel-device-link?binding_id=" + strconv.FormatInt(binding.ID, 10) + "&link_token=" + token
 }
 
+func channelBindingDeviceLinkGuidance(r *http.Request, binding *types.ChannelAgentBinding) string {
+	if binding == nil || binding.CanonicalUID > 0 {
+		return ""
+	}
+	link := channelBindingDeviceLinkURL(r, binding)
+	if link == "" {
+		return "你还没有绑定 CatsCo 账号和本机设备。请联系管理员检查设备授权链接配置。"
+	}
+	return "如需让我使用你的电脑文件或操作你的本机设备，请登录 CatsCo 完成设备授权：\n" + link
+}
+
+func isChannelDeviceLinkRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	keywords := []string{
+		"设备授权",
+		"授权设备",
+		"绑定设备",
+		"连接设备",
+		"连接电脑",
+		"绑定电脑",
+		"操作电脑",
+		"操作我的电脑",
+		"本地电脑",
+		"电脑文件",
+		"本地文件",
+		"device link",
+		"device auth",
+		"link device",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(normalized, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 func signChannelBindingLinkToken(payload channelAgentLinkTokenPayload) (string, error) {
 	secret := channelBindingLinkSecret()
 	if secret == "" || payload.BindingID <= 0 || payload.ActorUID <= 0 || payload.AgentUID <= 0 || payload.ExpiresAt <= 0 {
