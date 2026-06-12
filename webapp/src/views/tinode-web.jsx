@@ -14,13 +14,14 @@ import RelayAccessModal from '../widgets/relay-access-modal';
 import PasswordResetForm from '../widgets/password-reset-form';
 import WorkflowRichMediaDemo from './workflow-rich-media-demo';
 import Avatar from '../widgets/avatar';
-import { Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff, Laptop, CheckCircle2 } from 'lucide-react';
+import { Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff, Laptop, CheckCircle2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
 import '../css/openchat-theme.css';
 
 const TABS = {
   CHATS: 'chats'
 };
+const APP_SIDEBAR_COLLAPSED_STORAGE_KEY = 'cc_app_sidebar_collapsed_v1';
 
 function normalizeUserProfile(raw) {
   if (!raw) return null;
@@ -47,6 +48,16 @@ function getInitialUser() {
     localStorage.removeItem('oc_user');
     return null;
   }
+}
+
+function loadAppSidebarCollapsed() {
+  if (typeof window === 'undefined' || !window.localStorage) return false;
+  return window.localStorage.getItem(APP_SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+}
+
+function saveAppSidebarCollapsed(collapsed) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  window.localStorage.setItem(APP_SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false');
 }
 
 function lastTopicStorageKey(uid) {
@@ -159,12 +170,22 @@ function TinodeWebApp() {
   const [showDesktopConnectModal, setShowDesktopConnectModal] = useState(false);
   const [localAgentStatus, setLocalAgentStatus] = useState('checking');
   const [showRelayModal, setShowRelayModal] = useState(false);
+  const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(() => loadAppSidebarCollapsed());
 
 
 
   const persistUser = useCallback((nextUser) => {
     localStorage.setItem('oc_user', JSON.stringify(nextUser));
     setUser(nextUser);
+  }, []);
+
+  const toggleAppSidebar = useCallback(() => {
+    setAppSidebarCollapsed((prev) => {
+      const next = !prev;
+      saveAppSidebarCollapsed(next);
+      if (next) setShowProfilePopover(false);
+      return next;
+    });
   }, []);
 
   // WebSocket message handler
@@ -408,27 +429,40 @@ function TinodeWebApp() {
 
   return (
     <div className="v3-app">
-      <div className="v3-sidebar">
+      <div className={`v3-sidebar${appSidebarCollapsed ? ' collapsed' : ''}`}>
         <div className="v3-sidebar-header">
           <div className="v3-brand-title" style={{fontSize: 20, fontWeight: 700}}>CatsCo</div>
+          <button
+            className="v3-sidebar-collapse-btn"
+            type="button"
+            onClick={toggleAppSidebar}
+            aria-label={appSidebarCollapsed ? '展开左侧栏' : '收起左侧栏'}
+            title={appSidebarCollapsed ? '展开左侧栏' : '收起左侧栏'}
+          >
+            {appSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
         </div>
         
-        <SidebarContent
-          activeTopic={activeTopic ? activeTopic.topicId : null}
-          onSelectTopic={(topic) => {
-            setActiveTopic(topic);
-          }}
-          user={user}
-          onlineUsers={onlineUsers}
-        />
+        {!appSidebarCollapsed && (
+          <SidebarContent
+            activeTopic={activeTopic ? activeTopic.topicId : null}
+            onSelectTopic={(topic) => {
+              setActiveTopic(topic);
+            }}
+            user={user}
+            onlineUsers={onlineUsers}
+          />
+        )}
         
-        <ProfileFooter 
-          user={user} 
-          wsStatus={wsStatus} 
-          onTogglePopover={() => setShowProfilePopover(!showProfilePopover)}
-        />
+        {!appSidebarCollapsed && (
+          <ProfileFooter
+            user={user}
+            wsStatus={wsStatus}
+            onTogglePopover={() => setShowProfilePopover(!showProfilePopover)}
+          />
+        )}
 
-        {showProfilePopover && (
+        {showProfilePopover && !appSidebarCollapsed && (
           <div className="v3-profile-popover">
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowFeedbackModal(true); }}>
               <Bug size={16} style={{marginRight: 10}} /> 问题反馈与建议
