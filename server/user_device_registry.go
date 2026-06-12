@@ -455,7 +455,7 @@ func (r *userDeviceRegistry) grantsForOwnerDevices(actorUID int64, ownerUID int6
 
 	grants := make([]ScopedDeviceGrant, 0, len(devices))
 	for _, device := range devices {
-		ops := deviceRPCGrantOperations(device.Capabilities)
+		ops := deviceGrantOperations(device.Capabilities)
 		if len(ops) == 0 {
 			continue
 		}
@@ -711,7 +711,7 @@ func deviceSelectionDevice(device UserDevice) *DeviceSelectionDevice {
 		RouteConnected:    device.RouteConnected,
 		Routable:          device.Routable,
 		UnavailableReason: device.UnavailableReason,
-		Operations:        deviceRPCGrantOperations(device.Capabilities),
+		Operations:        deviceGrantOperations(device.Capabilities),
 		LastSeenAt:        device.LastSeenAt,
 	}
 }
@@ -729,21 +729,21 @@ func deviceSelectionCandidates(devices []UserDevice) []DeviceSelectionCandidate 
 			RouteConnected:    device.RouteConnected,
 			Routable:          device.Routable,
 			UnavailableReason: device.UnavailableReason,
-			Operations:        deviceRPCGrantOperations(device.Capabilities),
+			Operations:        deviceGrantOperations(device.Capabilities),
 			LastSeenAt:        device.LastSeenAt,
 		})
 	}
 	return out
 }
 
-func deviceRPCGrantOperations(capabilities []DeviceGrantOperation) []DeviceGrantOperation {
+func deviceGrantOperations(capabilities []DeviceGrantOperation) []DeviceGrantOperation {
 	if len(capabilities) == 0 {
 		return nil
 	}
 	out := make([]DeviceGrantOperation, 0, len(capabilities))
 	seen := make(map[DeviceGrantOperation]struct{}, len(capabilities))
 	for _, operation := range capabilities {
-		if !isAllowedDeviceRPCOperation(operation) {
+		if !isAllowedDeviceGrantRuntimeOperation(operation) {
 			continue
 		}
 		if _, ok := seen[operation]; ok {
@@ -753,6 +753,21 @@ func deviceRPCGrantOperations(capabilities []DeviceGrantOperation) []DeviceGrant
 		out = append(out, operation)
 	}
 	return out
+}
+
+func isAllowedDeviceGrantRuntimeOperation(operation DeviceGrantOperation) bool {
+	switch operation {
+	case DeviceGrantReadFile,
+		DeviceGrantGlob,
+		DeviceGrantGrep,
+		DeviceGrantWriteFile,
+		DeviceGrantEditFile,
+		DeviceGrantSendFile,
+		DeviceGrantExecuteShell:
+		return true
+	default:
+		return false
+	}
 }
 
 func isActiveDevice(device UserDevice, now time.Time, ttl time.Duration) bool {

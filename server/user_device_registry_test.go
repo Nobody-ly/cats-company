@@ -26,7 +26,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 		DisplayName:    " Alice Laptop ",
 		BodyID:         " body-main ",
 		InstallationID: " install-main ",
-		Capabilities:   []string{"read_file", "unknown", "send_file", "read_file"},
+		Capabilities:   []string{"read_file", "unknown", "write_file", "edit_file", "send_file", "read_file"},
 	})
 	if err != nil {
 		t.Fatalf("register device: %v", err)
@@ -34,7 +34,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	if device.DeviceID != "laptop-main" || device.DisplayName != "Alice Laptop" {
 		t.Fatalf("unexpected registered device: %#v", device)
 	}
-	if got := device.Capabilities; len(got) != 2 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantSendFile {
+	if got := device.Capabilities; len(got) != 4 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantWriteFile || got[2] != DeviceGrantEditFile || got[3] != DeviceGrantSendFile {
 		t.Fatalf("unexpected capabilities: %#v", got)
 	}
 
@@ -55,8 +55,8 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	if grant.DeviceID != "laptop-main" || grant.DeviceBodyID != "body-main" || grant.DeviceInstallationID != "install-main" {
 		t.Fatalf("unexpected grant device: %#v", grant)
 	}
-	if len(grant.Operations) != 1 || grant.Operations[0] != DeviceGrantReadFile {
-		t.Fatalf("grant should expose only PR10 readonly RPC operations, got %#v", grant.Operations)
+	if len(grant.Operations) != 4 || grant.Operations[0] != DeviceGrantReadFile || grant.Operations[1] != DeviceGrantWriteFile || grant.Operations[2] != DeviceGrantEditFile || grant.Operations[3] != DeviceGrantSendFile {
+		t.Fatalf("grant should expose registered file operations, got %#v", grant.Operations)
 	}
 	if grant.CreatedAt != unixMillis(now) || grant.ExpiresAt != unixMillis(now.Add(2*time.Minute)) {
 		t.Fatalf("unexpected grant times: %#v", grant)
@@ -98,7 +98,7 @@ func TestUserDeviceRegistrySelectsMentionedDeviceAndRemembersPreference(t *testi
 		t.Fatalf("selected device = %#v, want alice-laptop", ctx.Selection.SelectedDevice)
 	}
 	if got := ctx.Selection.SelectedDevice.Operations; len(got) != 1 || got[0] != DeviceGrantReadFile {
-		t.Fatalf("selection should expose only PR10 readonly RPC operations: %#v", got)
+		t.Fatalf("selection should expose selected device operations: %#v", got)
 	}
 	if len(ctx.Grants) != 1 || ctx.Grants[0].DeviceID != "alice-laptop" {
 		t.Fatalf("grants should be scoped to explicit selected device: %#v", ctx.Grants)
@@ -118,6 +118,9 @@ func TestUserDeviceRegistrySelectsMentionedDeviceAndRemembersPreference(t *testi
 	}
 	if otherTopic.Selection.SelectedDevice == nil || otherTopic.Selection.SelectedDevice.DeviceID != "alice-desktop" {
 		t.Fatalf("other topic selected device = %#v, want alice-desktop", otherTopic.Selection.SelectedDevice)
+	}
+	if got := otherTopic.Selection.SelectedDevice.Operations; len(got) != 2 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantSendFile {
+		t.Fatalf("other topic selected device should expose send_file: %#v", got)
 	}
 }
 
