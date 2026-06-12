@@ -29,21 +29,21 @@ if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
 fi
 
 web_image="ghcr.io/${owner}/cats-company-web:${revision}"
-pull_timeout="${REMOTE_WEB_PULL_TIMEOUT_SECONDS:-900}"
-pull_heartbeat="${REMOTE_WEB_PULL_HEARTBEAT_SECONDS:-20}"
+pull_timeout="${REMOTE_WEB_PULL_TIMEOUT_SECONDS:-300}"
 
-echo "Pulling web image: ${web_image}"
-timeout "$pull_timeout" docker pull "$web_image" &
-pull_pid=$!
-elapsed=0
-while kill -0 "$pull_pid" 2>/dev/null; do
-  sleep "$pull_heartbeat"
-  elapsed=$((elapsed + pull_heartbeat))
-  if kill -0 "$pull_pid" 2>/dev/null; then
-    echo "Still pulling web image after ${elapsed}s..."
+if docker image inspect "$web_image" >/dev/null 2>&1; then
+  echo "Web image already present: ${web_image}"
+else
+  echo "Pulling web image: ${web_image}"
+  if ! timeout "$pull_timeout" docker pull "$web_image"; then
+    echo "Web image pull failed or timed out after ${pull_timeout}s; building locally from source."
+    docker build \
+      --build-arg REACT_APP_API_BASE="${REMOTE_WEB_REACT_APP_API_BASE:-}" \
+      -f deploy/Dockerfile.nginx \
+      -t "$web_image" \
+      .
   fi
-done
-wait "$pull_pid"
+fi
 
 find "$root/source" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} +
 find "$root/releases" -mindepth 1 -maxdepth 1 -name 'cats-company-source-*.tar.gz' -type f -mtime +7 -delete
