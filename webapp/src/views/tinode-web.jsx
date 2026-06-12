@@ -130,8 +130,8 @@ function todayKey() {
   return `${year}-${month}-${day}`;
 }
 
-function findConnectedLocalAgent(agents) {
-  return (agents || []).find((agent) => agent.relation === 'owner' && agent.is_online);
+function findConnectedLocalDevice(devices) {
+  return (devices || []).find((device) => device.routable || device.routeConnected);
 }
 
 export default function TinodeWeb() {
@@ -276,8 +276,8 @@ function TinodeWebApp() {
     if (!user?.uid) return;
     try {
       setLocalAgentStatus((status) => (status === 'connected' ? status : 'checking'));
-      const res = await api.getAgents();
-      const connected = findConnectedLocalAgent(res.agents || []);
+      const res = await api.getDevices();
+      const connected = findConnectedLocalDevice(res.devices || []);
       if (connected) {
         setLocalAgentStatus('connected');
         return;
@@ -389,23 +389,10 @@ function TinodeWebApp() {
     });
   };
 
-  const handleDesktopConnected = async (agent) => {
-    try {
-      const res = await api.openAgent(agent.uid || agent.id);
-      const opened = res.agent || agent;
-      setActiveTopic({
-        topicId: opened.topic_id || res.topic || agent.topic_id,
-        name: opened.display_name || agent.display_name || agent.username,
-        isGroup: false,
-        avatar_url: opened.avatar_url || agent.avatar_url,
-        friendId: opened.uid || agent.uid || agent.id,
-      });
-      setLocalAgentStatus('connected');
-      setShowDesktopConnectModal(false);
-      window.dispatchEvent(new Event('cc:data-changed'));
-    } catch (error) {
-      console.warn('Failed to open connected desktop agent:', error);
-    }
+  const handleDesktopConnected = async () => {
+    setLocalAgentStatus('connected');
+    setShowDesktopConnectModal(false);
+    window.dispatchEvent(new Event('cc:data-changed'));
   };
 
   if (entrySceneKey) {

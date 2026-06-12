@@ -1176,6 +1176,38 @@ body {
   background: rgba(35, 134, 54, 0.26);
 }
 
+.catsco-spin {
+  animation: catsco-spin 0.9s linear infinite;
+}
+
+@keyframes catsco-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.catsco-connect-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--v3-text-main);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.catsco-connect-hint svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #f59e0b;
+}
+
 .v3-message-workspace {
   flex: 1 1 auto;
   min-width: 0;

@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Bot, CheckCircle2, Download, Laptop, Loader2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Download, Laptop, Loader2, X } from 'lucide-react';
 import { api } from '../api';
 import { DOWNLOAD_OPTIONS } from './catsco-download-modal';
 
@@ -16,8 +16,8 @@ function detectRecommendedOption() {
   return DOWNLOAD_OPTIONS.find((option) => option.key === 'windows');
 }
 
-function findConnectedLocalAgent(agents) {
-  return (agents || []).find((agent) => agent.relation === 'owner' && agent.is_online);
+function findConnectedLocalDevice(devices) {
+  return (devices || []).find((device) => device.routable || device.routeConnected);
 }
 
 export default function DesktopConnectModal({ onClose, onConnected, onStatusChange }) {
@@ -38,8 +38,8 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
   };
 
   const finishIfConnected = async () => {
-    const agents = await api.getAgents();
-    const connected = findConnectedLocalAgent(agents.agents);
+    const res = await api.getDevices();
+    const connected = findConnectedLocalDevice(res.devices || []);
     if (!connected) return false;
     if (connectedRef.current) return true;
     connectedRef.current = true;
@@ -94,6 +94,11 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
       markState('waiting');
       window.location.href = session.deeplink_url || `catsco://connect?code=${encodeURIComponent(session.code)}`;
       pollForConnection();
+      window.setTimeout(() => {
+        if (connectedRef.current) return;
+        setShowDownloads(true);
+        setState((current) => (current === 'waiting' || current === 'opening' ? 'waiting_download' : current));
+      }, 3000);
     } catch (err) {
       setError(err.message || '连接失败，请稍后重试。');
       setShowDownloads(true);
@@ -121,7 +126,7 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
     );
   };
 
-  const busy = state === 'opening' || state === 'waiting';
+  const busy = state === 'opening' || state === 'waiting' || state === 'waiting_download';
 
   return (
     <div className="oc-modal-overlay" onClick={onClose}>
@@ -138,18 +143,25 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
 
         <div style={{ display: 'grid', gap: 14 }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', color: 'var(--v3-text-main)' }}>
-            {state === 'connected' ? <CheckCircle2 size={20} color="#0BA36D" /> : busy ? <Loader2 size={20} /> : <Bot size={20} />}
+            {state === 'connected' ? <CheckCircle2 size={20} color="#0BA36D" /> : busy ? <Loader2 className="catsco-spin" size={20} /> : <Laptop size={20} />}
             <div>
               <div style={{ fontWeight: 600 }}>
                 {state === 'connected' ? '已连接本地助手' : busy ? '正在等待桌面端确认' : '打开已安装的 CatsCo 桌面端'}
               </div>
               <div style={{ fontSize: 13, color: 'var(--v3-text-muted)', marginTop: 4 }}>
-                {state === 'download'
+                {state === 'download' || state === 'waiting_download'
                   ? '没有检测到已连接的桌面端。若尚未安装，请下载推荐版本；安装后再点击打开。'
                   : '点击后浏览器可能会询问是否允许打开 CatsCo，请选择允许。'}
               </div>
             </div>
           </div>
+
+          {state === 'waiting_download' && (
+            <div className="catsco-connect-hint">
+              <AlertCircle size={16} />
+              <span>如果浏览器没有弹出打开确认，通常表示这台电脑还没安装新版 CatsCo，或当前版本不支持快捷连接。</span>
+            </div>
+          )}
 
           {error && <div style={{ color: '#FA5151', fontSize: 13 }}>{error}</div>}
 
@@ -160,7 +172,7 @@ export default function DesktopConnectModal({ onClose, onConnected, onStatusChan
           )}
 
           <button className="oc-btn oc-btn-primary" type="button" onClick={startConnect} disabled={state === 'connected' || busy}>
-            {busy ? <Loader2 size={16} style={{ marginRight: 8 }} /> : <Laptop size={16} style={{ marginRight: 8 }} />}
+            {busy ? <Loader2 className="catsco-spin" size={16} style={{ marginRight: 8 }} /> : <Laptop size={16} style={{ marginRight: 8 }} />}
             {busy ? '等待连接...' : '打开 CatsCo 桌面端'}
           </button>
 
