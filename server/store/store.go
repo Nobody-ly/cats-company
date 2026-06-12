@@ -8,6 +8,7 @@ import (
 )
 
 var ErrChannelAgentBindingAlreadyLinked = errors.New("channel agent binding already linked to another canonical user")
+var ErrChannelAgentAccessAlreadyLinked = errors.New("channel agent access request already linked")
 
 // UserStore contains user and profile persistence operations.
 type UserStore interface {
@@ -116,6 +117,10 @@ type ChannelAgentBindingStore interface {
 	ListChannelAgentEntries(ownerUID, agentUID int64) ([]*types.ChannelAgentEntry, error)
 	RegenerateChannelAgentEntry(id, ownerUID int64, sceneKey string) (*types.ChannelAgentEntry, error)
 	GetChannelAgentEntryBySceneKey(sceneKey string) (*types.ChannelAgentEntry, error)
+	RequestChannelAgentAccess(request *types.ChannelAgentAccessRequest) (*types.ChannelAgentAccessRequest, error)
+	ResolveChannelAgentAccessRequest(query types.ChannelAgentBindingQuery) (*types.ChannelAgentAccessRequest, error)
+	ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) ([]*types.ChannelAgentBinding, error)
+	RejectChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) error
 	UpsertChannelAgentBinding(binding *types.ChannelAgentBinding) (*types.ChannelAgentBinding, error)
 	ResolveChannelAgentBinding(query types.ChannelAgentBindingQuery) (*types.ChannelAgentBinding, error)
 	ResolveChannelAgentBindingForActor(channel, channelAppID string, actorUID, agentUID int64) (*types.ChannelAgentBinding, error)

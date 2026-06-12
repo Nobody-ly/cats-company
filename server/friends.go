@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/openchat/openchat/server/store"
+	"github.com/openchat/openchat/server/store/types"
 )
 
 // FriendHandler handles friend-related API requests.
@@ -23,8 +24,9 @@ func NewFriendHandler(db store.Store) *FriendHandler {
 
 // FriendActionRequest is the JSON body for friend actions.
 type FriendActionRequest struct {
-	UserID  int64  `json:"user_id"`
-	Message string `json:"message,omitempty"`
+	UserID   int64  `json:"user_id"`
+	AgentUID int64  `json:"agent_uid,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 // HandleSendRequest handles POST /api/friends/request
@@ -83,13 +85,27 @@ func (h *FriendHandler) HandleAcceptRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.db.AcceptFriendRequest(req.UserID, uid); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to accept"})
+	targetUID, err := h.friendActionTargetUID(uid, req.AgentUID)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
 	}
 
+	if err := h.db.AcceptFriendRequest(req.UserID, targetUID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to accept"})
+		return
+	}
+	if user, err := h.db.GetUser(targetUID); err == nil && user != nil && user.AccountType == types.AccountBot {
+		if bindings, ok := h.db.(store.ChannelAgentBindingStore); ok {
+			if _, err := bindings.ApproveChannelAgentAccessRequestsForActor(req.UserID, targetUID, uid); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to activate channel access"})
+				return
+			}
+		}
+	}
+
 	// Create P2P topic for the new friends
-	topicID := p2pTopicID(uid, req.UserID)
+	topicID := p2pTopicID(targetUID, req.UserID)
 	// Topic creation would be handled by the topic manager
 	_ = topicID
 
@@ -106,9 +122,23 @@ func (h *FriendHandler) HandleRejectRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.db.RejectFriendRequest(req.UserID, uid); err != nil {
+	targetUID, err := h.friendActionTargetUID(uid, req.AgentUID)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.db.RejectFriendRequest(req.UserID, targetUID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reject"})
 		return
+	}
+	if user, err := h.db.GetUser(targetUID); err == nil && user != nil && user.AccountType == types.AccountBot {
+		if bindings, ok := h.db.(store.ChannelAgentBindingStore); ok {
+			if err := bindings.RejectChannelAgentAccessRequestsForActor(req.UserID, targetUID, uid); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reject channel access"})
+				return
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
@@ -165,14 +195,38 @@ func (h *FriendHandler) HandleGetFriends(w http.ResponseWriter, r *http.Request)
 // HandleGetPendingRequests handles GET /api/friends/pending
 func (h *FriendHandler) HandleGetPendingRequests(w http.ResponseWriter, r *http.Request) {
 	uid := UIDFromContext(r.Context())
+	targetUID := uid
+	if agentUID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("agent_uid")), 10, 64); err == nil && agentUID > 0 {
+		resolvedUID, resolveErr := h.friendActionTargetUID(uid, agentUID)
+		if resolveErr != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": resolveErr.Error()})
+			return
+		}
+		targetUID = resolvedUID
+	}
 
-	requests, err := h.db.GetPendingRequests(uid)
+	requests, err := h.db.GetPendingRequests(targetUID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get requests"})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"requests": requests})
+}
+
+func (h *FriendHandler) friendActionTargetUID(currentUID, agentUID int64) (int64, error) {
+	if agentUID <= 0 || agentUID == currentUID {
+		return currentUID, nil
+	}
+	agent, err := h.db.GetUser(agentUID)
+	if err != nil || agent == nil || agent.AccountType != types.AccountBot || agent.State != 0 {
+		return 0, fmt.Errorf("agent not available")
+	}
+	ownerUID, err := h.db.GetBotOwner(agentUID)
+	if err != nil || ownerUID != currentUID {
+		return 0, fmt.Errorf("agent is not owned by current user")
+	}
+	return agentUID, nil
 }
 
 // HandleSearchUsers handles GET /api/users/search?q=xxx

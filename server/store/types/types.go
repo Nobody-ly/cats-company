@@ -2,6 +2,7 @@
 package types
 
 import (
+	"strings"
 	"time"
 )
 
@@ -213,6 +214,23 @@ type BotConfig struct {
 	Config      map[string]string `json:"config,omitempty"`
 }
 
+const (
+	ChannelAgentAccessPublic           = "public"
+	ChannelAgentAccessApprovalRequired = "approval_required"
+)
+
+// NormalizeChannelAgentAccessMode returns the persisted entry access mode.
+func NormalizeChannelAgentAccessMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ChannelAgentAccessApprovalRequired:
+		return ChannelAgentAccessApprovalRequired
+	case ChannelAgentAccessPublic:
+		return ChannelAgentAccessPublic
+	default:
+		return ChannelAgentAccessPublic
+	}
+}
+
 // ChannelAgentEntry is a shareable QR/link entry for a virtual employee on an
 // external chat channel such as Weixin or Feishu.
 type ChannelAgentEntry struct {
@@ -220,12 +238,33 @@ type ChannelAgentEntry struct {
 	SceneKey     string     `json:"scene_key"`
 	Channel      string     `json:"channel"`
 	ChannelAppID string     `json:"channel_app_id,omitempty"`
+	AccessMode   string     `json:"access_mode"`
 	OwnerUID     int64      `json:"owner_uid"`
 	AgentUID     int64      `json:"agent_uid"`
 	Status       string     `json:"status"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+}
+
+// ChannelAgentAccessRequest records a private entry scan which still needs the
+// agent owner to accept the channel actor as an agent friend.
+type ChannelAgentAccessRequest struct {
+	ID                      int64      `json:"id"`
+	EntryID                 int64      `json:"entry_id"`
+	Channel                 string     `json:"channel"`
+	ChannelAppID            string     `json:"channel_app_id,omitempty"`
+	ChannelUserID           string     `json:"channel_user_id"`
+	ChannelConversationID   string     `json:"channel_conversation_id,omitempty"`
+	ChannelConversationType string     `json:"channel_conversation_type,omitempty"`
+	ActorUID                int64      `json:"actor_uid"`
+	OwnerUID                int64      `json:"owner_uid"`
+	AgentUID                int64      `json:"agent_uid"`
+	Status                  string     `json:"status"`
+	ReviewedByUID           int64      `json:"reviewed_by_uid,omitempty"`
+	RequestedAt             time.Time  `json:"requested_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+	ReviewedAt              *time.Time `json:"reviewed_at,omitempty"`
 }
 
 // ChannelAgentBinding records which external-channel identity should talk to

@@ -87,13 +87,17 @@ export const api = {
     request('POST', '/api/me/update', { display_name: displayName, avatar_url: avatarUrl }),
 
   getFriends: () => request('GET', '/api/friends'),
-  getPendingRequests: () => request('GET', '/api/friends/pending'),
+  getPendingRequests: (agentUid = '') => request('GET', `/api/friends/pending${agentUid ? `?agent_uid=${encodeURIComponent(agentUid)}` : ''}`),
   sendFriendRequest: (userId, message) =>
     request('POST', '/api/friends/request', { user_id: userId, message }),
   acceptFriend: (userId) =>
     request('POST', '/api/friends/accept', { user_id: userId }),
+  acceptAgentFriend: (agentUid, userId) =>
+    request('POST', '/api/friends/accept', { agent_uid: agentUid, user_id: userId }),
   rejectFriend: (userId) =>
     request('POST', '/api/friends/reject', { user_id: userId }),
+  rejectAgentFriend: (agentUid, userId) =>
+    request('POST', '/api/friends/reject', { agent_uid: agentUid, user_id: userId }),
   blockUser: (userId) =>
     request('POST', '/api/friends/block', { user_id: userId }),
   removeFriend: (userId) =>
@@ -164,10 +168,11 @@ export const api = {
   getDesktopConnectStatus: (code) =>
     request('GET', `/api/desktop-connect/status?code=${encodeURIComponent(code)}`),
   getAgentEntries: (agentUid) => request('GET', `/api/agent-entries?agent_uid=${encodeURIComponent(agentUid)}`),
-  createAgentEntry: (agentUid, channel, channelAppId = '') =>
+  createAgentEntry: (agentUid, channel, channelAppId = '', accessMode = 'approval_required') =>
     request('POST', '/api/agent-entries', {
       agent_uid: agentUid,
       channel,
+      access_mode: accessMode,
       ...(channelAppId ? { channel_app_id: channelAppId } : {}),
     }),
   regenerateAgentEntry: (entryId) =>

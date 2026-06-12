@@ -48,7 +48,7 @@ export default function AgentEntryBindView({ sceneKey }) {
     try {
       setError('');
       setBinding(true);
-      await api.confirmChannelAgentBinding({
+      const res = await api.confirmChannelAgentBinding({
         scene_key: sceneKey,
         channel: preview?.entry?.channel,
         channel_app_id: preview?.entry?.channel_app_id || params.get('channel_app_id') || '',
@@ -56,7 +56,11 @@ export default function AgentEntryBindView({ sceneKey }) {
         channel_conversation_id: params.get('channel_conversation_id') || '',
         channel_conversation_type: params.get('channel_conversation_type') || 'p2p',
       });
-      setStatus('已进入该虚拟员工，请回到微信/飞书聊天框继续提问。');
+      if (res.status === 'pending_approval') {
+        setStatus('好友申请已提交。管理员通过后，你就可以回到微信/飞书聊天框继续提问。');
+      } else {
+        setStatus('已进入该虚拟员工，请回到微信/飞书聊天框继续提问。');
+      }
     } catch (err) {
       setError(err.message || '绑定失败');
     } finally {

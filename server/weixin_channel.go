@@ -236,19 +236,23 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "创建微信用户身份失败，请稍后重试。")
 		return
 	}
-	binding, err := h.bindWeixinIdentity(entry, actorUID, appID, openID, "", "p2p")
+	binding, accessRequest, err := h.bindOrRequestWeixinIdentity(entry, actorUID, appID, openID, "", "p2p")
 	if err != nil {
 		log.Printf("bind weixin identity failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "保存虚拟员工绑定失败，请稍后重试。")
 		return
 	}
-	if err := h.db.CreateTopic(p2pTopicID(actorUID, entry.AgentUID), "p2p", actorUID); err != nil {
-		log.Printf("create weixin agent topic failed: %v", err)
-	}
 	agent, _ := h.db.GetUser(entry.AgentUID)
 	name := "该虚拟员工"
 	if agent != nil {
 		name = displayNameOrUsername(agent.DisplayName, agent.Username)
+	}
+	if accessRequest != nil && binding == nil {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以在这里直接提问；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。", name))
+		return
+	}
+	if err := h.db.CreateTopic(p2pTopicID(actorUID, entry.AgentUID), "p2p", actorUID); err != nil {
+		log.Printf("create weixin agent topic failed: %v", err)
 	}
 	reply := fmt.Sprintf("已绑定「%s」。你现在可以直接在公众号聊天框里提问。", name)
 	if link := channelBindingDeviceLinkURL(nil, binding); link != "" {
@@ -276,6 +280,16 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		return
 	}
 	if binding == nil {
+		if access, lookupErr := h.resolveWeixinAccessRequest(appID, openID, "", "p2p"); lookupErr == nil && access != nil {
+			if access.Status == "pending" {
+				writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。")
+				return
+			}
+			if access.Status == "rejected" {
+				writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请暂未通过，请联系虚拟员工管理员。")
+				return
+			}
+		}
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "请先扫描虚拟员工入口二维码完成绑定，然后再回到公众号聊天框提问。")
 		return
 	}
@@ -292,6 +306,10 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "更新微信用户身份失败，请稍后重试。")
 			return
 		}
+	}
+	if binding.CanonicalUID <= 0 && isChannelDeviceLinkRequest(text) {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, channelBindingDeviceLinkGuidance(nil, binding))
+		return
 	}
 	clientMsgID := weixinClientMsgID(msg)
 	if err := deliverInboundChannelTextToAgent(h.db, h.hub, actorUID, binding.AgentUID, text, clientMsgID, "weixin", map[string]interface{}{
@@ -317,6 +335,20 @@ func (h *WeixinChannelHandler) resolveWeixinBinding(appID, channelUserID, conver
 		return nil, errors.New("channel binding store not configured")
 	}
 	return bindings.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:                 "weixin",
+		ChannelAppID:            appID,
+		ChannelUserID:           channelUserID,
+		ChannelConversationID:   conversationID,
+		ChannelConversationType: normalizeConversationType(conversationType),
+	})
+}
+
+func (h *WeixinChannelHandler) resolveWeixinAccessRequest(appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentAccessRequest, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.ResolveChannelAgentAccessRequest(types.ChannelAgentBindingQuery{
 		Channel:                 "weixin",
 		ChannelAppID:            appID,
 		ChannelUserID:           channelUserID,
@@ -352,12 +384,17 @@ func (h *WeixinChannelHandler) activeWeixinEntry(sceneKey, appID string) (*types
 }
 
 func (h *WeixinChannelHandler) bindWeixinIdentity(entry *types.ChannelAgentEntry, actorUID int64, appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, error) {
+	binding, _, err := h.bindOrRequestWeixinIdentity(entry, actorUID, appID, channelUserID, conversationID, conversationType)
+	return binding, err
+}
+
+func (h *WeixinChannelHandler) bindOrRequestWeixinIdentity(entry *types.ChannelAgentEntry, actorUID int64, appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
 	if entry == nil {
-		return nil, errors.New("missing channel entry")
+		return nil, nil, errors.New("missing channel entry")
 	}
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
 	if !ok {
-		return nil, errors.New("channel binding store not configured")
+		return nil, nil, errors.New("channel binding store not configured")
 	}
 	if conversationType == "" {
 		conversationType = "p2p"
@@ -366,20 +403,9 @@ func (h *WeixinChannelHandler) bindWeixinIdentity(entry *types.ChannelAgentEntry
 		appID = h.effectiveAppID(entry.ChannelAppID)
 	}
 	if strings.TrimSpace(appID) == "" && isProductionLikeEnv() {
-		return nil, errors.New("weixin app id is required")
+		return nil, nil, errors.New("weixin app id is required")
 	}
-	return bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:                 "weixin",
-		ChannelAppID:            strings.TrimSpace(appID),
-		ChannelUserID:           channelUserID,
-		ChannelConversationID:   strings.TrimSpace(conversationID),
-		ChannelConversationType: normalizeConversationType(conversationType),
-		ActorUID:                actorUID,
-		OwnerUID:                entry.OwnerUID,
-		AgentUID:                entry.AgentUID,
-		EntryID:                 entry.ID,
-		Status:                  "active",
-	})
+	return bindOrRequestChannelAgentAccess(h.db, bindings, entry, actorUID, "weixin", strings.TrimSpace(appID), channelUserID, strings.TrimSpace(conversationID), conversationType)
 }
 
 func (h *WeixinChannelHandler) entryAgentAvailable(entry *types.ChannelAgentEntry) bool {

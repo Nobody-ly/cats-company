@@ -20,6 +20,7 @@ func (a *Adapter) CreateSchema() error {
 		createFeedbackReportsTable,
 		createAuthServicesTable,
 		createChannelAgentEntriesTable,
+		createChannelAgentAccessRequestsTable,
 		createChannelAgentBindingsTable,
 	}
 	for _, q := range tables {
@@ -48,12 +49,16 @@ func (a *Adapter) CreateSchema() error {
 		migrateFriendsAddFromStatusIndex,
 		migrateMessagesAddTopicIDIndex,
 		migrateChannelAgentEntriesAddAppID,
+		migrateChannelAgentEntriesAddAccessMode,
 		migrateChannelAgentBindingsAddActorUID,
 		migrateChannelAgentBindingsAddCanonicalUID,
 		migrateChannelAgentEntriesOwnerAgentIndex,
 		migrateChannelAgentBindingsLookupIndex,
 		migrateChannelAgentBindingsActorAgentIndex,
 		migrateChannelAgentBindingsActorAnyIndex,
+		migrateChannelAgentAccessOwnerAgentIndex,
+		migrateChannelAgentAccessActorAgentIndex,
+		migrateChannelAgentAccessLookupIndex,
 	}
 	for _, m := range migrations {
 		if _, err := a.db.Exec(m); err != nil {
@@ -246,6 +251,7 @@ CREATE TABLE IF NOT EXISTS channel_agent_entries (
     scene_key VARCHAR(64) NOT NULL UNIQUE,
     channel VARCHAR(32) NOT NULL,
     channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    access_mode VARCHAR(32) NOT NULL DEFAULT 'public',
     owner_uid BIGINT NOT NULL,
     agent_uid BIGINT NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
@@ -255,6 +261,35 @@ CREATE TABLE IF NOT EXISTS channel_agent_entries (
     INDEX idx_channel_agent_entries_owner_agent (owner_uid, agent_uid, channel, channel_app_id, status),
     FOREIGN KEY (owner_uid) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (agent_uid) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createChannelAgentAccessRequestsTable = `
+CREATE TABLE IF NOT EXISTS channel_agent_access_requests (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    entry_id BIGINT NOT NULL,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_user_id VARCHAR(128) NOT NULL,
+    channel_conversation_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_conversation_type VARCHAR(32) NOT NULL DEFAULT 'p2p',
+    actor_uid BIGINT NOT NULL,
+    owner_uid BIGINT NOT NULL,
+    agent_uid BIGINT NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    reviewed_by_uid BIGINT DEFAULT NULL,
+    reviewed_at TIMESTAMP NULL DEFAULT NULL,
+    requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_channel_agent_access_identity (entry_id, channel, channel_app_id, channel_user_id, channel_conversation_id),
+    INDEX idx_channel_agent_access_owner_agent (owner_uid, agent_uid, status),
+    INDEX idx_channel_agent_access_actor_agent (actor_uid, agent_uid, status),
+    INDEX idx_channel_agent_access_lookup (channel, channel_app_id, channel_user_id, status),
+    FOREIGN KEY (entry_id) REFERENCES channel_agent_entries(id) ON DELETE CASCADE,
+    FOREIGN KEY (actor_uid) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_uid) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_uid) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (reviewed_by_uid) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 
@@ -377,6 +412,10 @@ const migrateChannelAgentEntriesAddAppID = `
 ALTER TABLE channel_agent_entries ADD COLUMN channel_app_id VARCHAR(128) NOT NULL DEFAULT '';
 `
 
+const migrateChannelAgentEntriesAddAccessMode = `
+ALTER TABLE channel_agent_entries ADD COLUMN access_mode VARCHAR(32) NOT NULL DEFAULT 'public';
+`
+
 const migrateChannelAgentBindingsAddActorUID = `
 ALTER TABLE channel_agent_bindings ADD COLUMN actor_uid BIGINT DEFAULT NULL;
 `
@@ -399,4 +438,16 @@ ALTER TABLE channel_agent_bindings ADD INDEX idx_channel_agent_bindings_actor_ag
 
 const migrateChannelAgentBindingsActorAnyIndex = `
 ALTER TABLE channel_agent_bindings ADD INDEX idx_channel_agent_bindings_actor_any (actor_uid, agent_uid, status);
+`
+
+const migrateChannelAgentAccessOwnerAgentIndex = `
+ALTER TABLE channel_agent_access_requests ADD INDEX idx_channel_agent_access_owner_agent (owner_uid, agent_uid, status);
+`
+
+const migrateChannelAgentAccessActorAgentIndex = `
+ALTER TABLE channel_agent_access_requests ADD INDEX idx_channel_agent_access_actor_agent (actor_uid, agent_uid, status);
+`
+
+const migrateChannelAgentAccessLookupIndex = `
+ALTER TABLE channel_agent_access_requests ADD INDEX idx_channel_agent_access_lookup (channel, channel_app_id, channel_user_id, status);
 `
