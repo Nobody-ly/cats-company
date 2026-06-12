@@ -4,11 +4,21 @@ import { Simulate } from 'react-dom/test-utils';
 
 jest.mock('../widgets/chat-message', () => ({
   __esModule: true,
-  default: function MockChatMessage() {
-    return null;
+  default: function MockChatMessage(props) {
+    const fileBlock = props.message?.content_blocks?.find?.((block) => block.type === 'file');
+    if (!fileBlock) return null;
+    return (
+      <button
+        type="button"
+        className="mock-open-preview"
+        onClick={() => props.onPreviewFile?.(fileBlock.payload)}
+      >
+        open preview
+      </button>
+    );
   },
-  FilePreviewPanel: function MockFilePreviewPanel() {
-    return null;
+  FilePreviewPanel: function MockFilePreviewPanel({ file }) {
+    return <aside className="mock-file-preview">{file?.name || 'preview'}</aside>;
   },
 }));
 
@@ -184,6 +194,51 @@ describe('MessagesView composer draft isolation', () => {
 
     expect(textarea.style.height).toBe('220px');
     expect(textarea.style.overflowY).toBe('auto');
+  });
+
+  it('lets the file preview panel width be adjusted and persisted', async () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 1440,
+    });
+    api.getMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 30,
+        from_uid: 2,
+        content: '[文件] report.html',
+        content_blocks: [{
+          type: 'file',
+          payload: {
+            name: 'report.html',
+            url: '/uploads/files/report.html',
+            mime_type: 'text/html',
+          },
+        }],
+        created_at: '2026-06-12T00:00:00Z',
+      }],
+    });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    await act(async () => {
+      Simulate.click(container.querySelector('.mock-open-preview'));
+      await Promise.resolve();
+    });
+
+    const workspace = container.querySelector('.v3-message-workspace');
+    const handle = container.querySelector('.v3-preview-resize-handle');
+    expect(workspace.className).toContain('has-preview');
+    expect(handle).not.toBeNull();
+
+    await act(async () => {
+      Simulate.pointerDown(handle, { clientX: 900, pointerId: 1 });
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 780 }));
+      window.dispatchEvent(new MouseEvent('pointerup'));
+      await Promise.resolve();
+    });
+
+    expect(workspace.style.getPropertyValue('--v3-file-preview-width')).toBe('760px');
+    expect(localStorage.getItem('cc_file_preview_width_v1')).toBe('760');
   });
 
   it('shows an inline error when an unsupported image is selected', async () => {

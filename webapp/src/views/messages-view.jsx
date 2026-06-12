@@ -14,6 +14,31 @@ const WORKING_TEXT_PREFIX = 'AI文本:';
 const MAX_DROPPED_FILES = 200;
 const HISTORY_AUTO_LOAD_THRESHOLD = 120;
 const STICK_TO_BOTTOM_THRESHOLD = 96;
+const PREVIEW_WIDTH_STORAGE_KEY = 'cc_file_preview_width_v1';
+const PREVIEW_WIDTH_MIN = 360;
+const PREVIEW_WIDTH_DEFAULT = 640;
+const PREVIEW_WIDTH_MAX = 980;
+
+function clampPreviewWidth(width) {
+  const viewport = typeof window !== 'undefined' ? window.innerWidth : 1440;
+  const viewportMax = Number.isFinite(viewport)
+    ? Math.max(PREVIEW_WIDTH_MIN, viewport - 520)
+    : PREVIEW_WIDTH_MAX;
+  const maxWidth = Math.min(PREVIEW_WIDTH_MAX, viewportMax);
+  const numericWidth = Number(width);
+  if (!Number.isFinite(numericWidth)) return PREVIEW_WIDTH_DEFAULT;
+  return Math.min(Math.max(numericWidth, PREVIEW_WIDTH_MIN), maxWidth);
+}
+
+function loadPreviewWidth() {
+  if (typeof window === 'undefined' || !window.localStorage) return PREVIEW_WIDTH_DEFAULT;
+  return clampPreviewWidth(Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY)) || PREVIEW_WIDTH_DEFAULT);
+}
+
+function savePreviewWidth(width) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(Math.round(width)));
+}
 
 export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
   const [input, setInput] = useState('');
@@ -30,6 +55,7 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [mentionFilter, setMentionFilter] = useState('');
   const [replyTo, setReplyTo] = useState(null);
   const [previewFile, setPreviewFile] = useState(null);
+  const [previewWidth, setPreviewWidth] = useState(() => loadPreviewWidth());
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
@@ -55,6 +81,55 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const hasMoreHistoryRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const activeTopicRef = useRef(topic);
+  const previewWidthRef = useRef(previewWidth);
+
+  useEffect(() => {
+    previewWidthRef.current = previewWidth;
+  }, [previewWidth]);
+
+  const updatePreviewWidth = useCallback((nextWidth) => {
+    const clamped = clampPreviewWidth(nextWidth);
+    previewWidthRef.current = clamped;
+    setPreviewWidth(clamped);
+    savePreviewWidth(clamped);
+  }, []);
+
+  const handlePreviewResizePointerDown = useCallback((event) => {
+    if (!previewFile) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = previewWidthRef.current;
+
+    const handlePointerMove = (moveEvent) => {
+      const nextWidth = startWidth + (startX - moveEvent.clientX);
+      updatePreviewWidth(nextWidth);
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  }, [previewFile, updatePreviewWidth]);
+
+  const handlePreviewResizeKeyDown = useCallback((event) => {
+    if (!previewFile) return;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      updatePreviewWidth(previewWidthRef.current + 40);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      updatePreviewWidth(previewWidthRef.current - 40);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      updatePreviewWidth(PREVIEW_WIDTH_MIN);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      updatePreviewWidth(PREVIEW_WIDTH_MAX);
+    }
+  }, [previewFile, updatePreviewWidth]);
 
   const resizeComposerInput = useCallback(() => {
     const textarea = textareaRef.current;
@@ -810,7 +885,10 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
 
   return (
     <>
-      <div className={`v3-message-workspace${previewFile ? ' has-preview' : ''}`}>
+      <div
+        className={`v3-message-workspace${previewFile ? ' has-preview' : ''}`}
+        style={previewFile ? { '--v3-file-preview-width': `${previewWidth}px` } : undefined}
+      >
         <div className="v3-chat-column">
           <div className="v3-header">
             <div className="v3-header-left">
@@ -1047,7 +1125,19 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
       </div>
         </div>
         {previewFile && (
-          <FilePreviewPanel file={previewFile} onClose={() => setPreviewFile(null)} />
+          <div className="v3-file-preview-shell">
+            <div
+              className="v3-preview-resize-handle"
+              role="separator"
+              aria-label="调整预览宽度"
+              aria-orientation="vertical"
+              tabIndex={0}
+              onPointerDown={handlePreviewResizePointerDown}
+              onKeyDown={handlePreviewResizeKeyDown}
+              title="拖动调整预览宽度"
+            />
+            <FilePreviewPanel file={previewFile} onClose={() => setPreviewFile(null)} />
+          </div>
         )}
       </div>
       {showGroupSettings && isGroup && groupId && (

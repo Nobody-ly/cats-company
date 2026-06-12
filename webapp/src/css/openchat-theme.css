@@ -930,10 +930,18 @@ body {
 
 .v3-sidebar {
   width: 280px;
+  flex: 0 0 280px;
   background: var(--v3-bg-sidebar);
   border-right: 1px solid var(--v3-border);
   display: flex;
   flex-direction: column;
+  transition: width 0.18s ease, flex-basis 0.18s ease;
+  overflow: hidden;
+}
+
+.v3-sidebar.collapsed {
+  width: 56px;
+  flex-basis: 56px;
 }
 
 .v3-sidebar-header {
@@ -942,8 +950,36 @@ body {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--v3-border);
-  cursor: pointer;
+  cursor: default;
   transition: background 0.2s;
+}
+
+.v3-sidebar.collapsed .v3-sidebar-header {
+  justify-content: center;
+  padding: 16px 10px;
+}
+
+.v3-sidebar.collapsed .v3-brand-title {
+  display: none;
+}
+
+.v3-sidebar-collapse-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--v3-text-muted);
+  cursor: pointer;
+}
+
+.v3-sidebar-collapse-btn:hover {
+  color: var(--v3-text-main);
+  border-color: #55585B;
+  background: var(--v3-bg-message-hover);
 }
 
 .v3-sidebar-header:hover {
@@ -1149,7 +1185,7 @@ body {
 }
 
 .v3-message-workspace.has-preview {
-  grid-template-columns: minmax(420px, 3fr) minmax(360px, 2fr);
+  grid-template-columns: minmax(360px, 1fr) minmax(360px, var(--v3-file-preview-width, 640px));
 }
 
 .v3-chat-column {
@@ -3807,6 +3843,7 @@ button.catsco-download-action:disabled {
 .v3-file-preview-panel {
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -3814,6 +3851,39 @@ button.catsco-download-action:disabled {
   background: var(--v3-bg-sidebar);
   box-shadow: -10px 0 24px rgba(0, 0, 0, 0.16);
   color: var(--v3-text-name);
+}
+.v3-file-preview-shell {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+}
+.v3-preview-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  bottom: 0;
+  width: 10px;
+  z-index: 9;
+  cursor: col-resize;
+  touch-action: none;
+}
+.v3-preview-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: rgba(148, 163, 184, 0.22);
+  transition: background 0.12s ease;
+}
+.v3-preview-resize-handle:hover::after,
+.v3-preview-resize-handle:focus-visible::after {
+  background: var(--v3-primary);
+}
+.v3-preview-resize-handle:focus-visible {
+  outline: none;
 }
 .v3-file-preview-header {
   display: flex;
@@ -4001,6 +4071,9 @@ button.catsco-download-action:disabled {
   .v3-file-preview-panel {
     border-left: 0;
     border-top: 1px solid var(--v3-border);
+  }
+  .v3-preview-resize-handle {
+    display: none;
   }
   .v3-file-preview-title h3 {
     max-width: 58vw;
