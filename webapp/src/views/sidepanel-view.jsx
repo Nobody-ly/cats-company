@@ -137,7 +137,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
     if (!groupId || !topicId) return;
 
     const confirmed = window.confirm(
-      `Delete group "${name}" permanently?\n\nThis will remove the group, all members, and all chat history.`
+      `确定永久删除群聊“${name}”吗？\n\n删除后会移除群聊、所有成员和聊天记录。`
     );
     if (!confirmed) return;
 

@@ -443,10 +443,10 @@ function TinodeWebApp() {
               <KeyRound size={16} style={{marginRight: 10}} /> CatsCo 中转站
             </div>
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowProfileEditor(true); }}>
-              <Settings size={16} style={{marginRight: 10}} /> Settings & Profile
+              <Settings size={16} style={{marginRight: 10}} /> 设置与资料
             </div>
             <div className="v3-popover-item danger" onClick={() => { localStorage.clear(); window.location.reload(); }}>
-              <LogOut size={16} style={{marginRight: 10}} /> Sign Out
+              <LogOut size={16} style={{marginRight: 10}} /> 退出登录
             </div>
           </div>
         )}
