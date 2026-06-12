@@ -73,3 +73,29 @@ func TestDesktopConnectSessionExchangeIsSingleUse(t *testing.T) {
 		t.Fatalf("reuse status=%d body=%s", reuseRec.Code, reuseRec.Body.String())
 	}
 }
+
+func TestDesktopConnectConfiguredBaseURLsDeriveWebSocketURL(t *testing.T) {
+	t.Setenv("CATSCO_PUBLIC_BASE_URL", "https://app.catsco.cc/")
+	t.Setenv("CATSCO_PUBLIC_WS_URL", "")
+
+	httpBaseURL, wsURL := configuredDesktopConnectBaseURLs()
+	if httpBaseURL != "https://app.catsco.cc" {
+		t.Fatalf("httpBaseURL=%q", httpBaseURL)
+	}
+	if wsURL != "wss://app.catsco.cc/v0/channels" {
+		t.Fatalf("wsURL=%q", wsURL)
+	}
+}
+
+func TestDesktopConnectConfiguredBaseURLsUseExplicitWebSocketURL(t *testing.T) {
+	t.Setenv("CATSCO_PUBLIC_BASE_URL", "https://app.catsco.cc/")
+	t.Setenv("CATSCO_PUBLIC_WS_URL", "wss://edge.catsco.cc/v0/channels/")
+
+	httpBaseURL, wsURL := configuredDesktopConnectBaseURLs()
+	if httpBaseURL != "https://app.catsco.cc" {
+		t.Fatalf("httpBaseURL=%q", httpBaseURL)
+	}
+	if wsURL != "wss://edge.catsco.cc/v0/channels" {
+		t.Fatalf("wsURL=%q", wsURL)
+	}
+}

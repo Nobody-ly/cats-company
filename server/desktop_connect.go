@@ -65,11 +65,11 @@ func (h *DesktopConnectHandler) HandleCreateSession(w http.ResponseWriter, r *ht
 	session := h.sessions.create(uid)
 	httpBaseURL, wsURL := desktopConnectBaseURLs(r)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"code":         session.Code,
-		"expires_at":   session.ExpiresAt.Format(time.RFC3339),
+		"code":          session.Code,
+		"expires_at":    session.ExpiresAt.Format(time.RFC3339),
 		"http_base_url": httpBaseURL,
-		"server_url":   wsURL,
-		"deeplink_url": "catsco://connect?code=" + session.Code + "&base=" + url.QueryEscape(httpBaseURL),
+		"server_url":    wsURL,
+		"deeplink_url":  "catsco://connect?code=" + session.Code + "&base=" + url.QueryEscape(httpBaseURL),
 	})
 }
 
@@ -239,8 +239,33 @@ func desktopConnectBaseURLs(r *http.Request) (string, string) {
 func configuredDesktopConnectBaseURLs() (string, string) {
 	httpBaseURL := strings.TrimRight(firstEnv("CATSCO_PUBLIC_BASE_URL", "PUBLIC_BASE_URL"), "/")
 	wsURL := strings.TrimRight(firstEnv("CATSCO_PUBLIC_WS_URL", "PUBLIC_WS_URL"), "/")
-	if httpBaseURL == "" || wsURL == "" {
+	if httpBaseURL == "" {
+		return "", ""
+	}
+	if wsURL == "" {
+		wsURL = desktopConnectWSURLFromHTTPBase(httpBaseURL)
+	}
+	if wsURL == "" {
 		return "", ""
 	}
 	return httpBaseURL, wsURL
+}
+
+func desktopConnectWSURLFromHTTPBase(httpBaseURL string) string {
+	parsed, err := url.Parse(httpBaseURL)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	case "http":
+		parsed.Scheme = "ws"
+	default:
+		return ""
+	}
+	parsed.Path = "/v0/channels"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
