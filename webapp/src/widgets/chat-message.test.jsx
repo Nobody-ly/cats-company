@@ -52,6 +52,12 @@ describe('ChatMessage rich file rendering', () => {
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true;
     window.open = jest.fn();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: jest.fn(() => Promise.resolve()),
+      },
+    });
     global.fetch = jest.fn(() => Promise.resolve({
       ok: true,
       text: () => Promise.resolve('<!doctype html><h1>Report</h1><script>window.evil=true</script>'),
@@ -135,6 +141,50 @@ describe('ChatMessage rich file rendering', () => {
     expect(link).not.toBeNull();
     expect(link.getAttribute('href')).toBeNull();
     expect(link.getAttribute('onclick')).toBeNull();
+  });
+
+  it('uses the hover action toolbar for reply and more actions without dead reaction buttons', async () => {
+    const onReply = jest.fn();
+    await act(async () => {
+      root.render(
+        <ChatMessage
+          message={{
+            id: 20,
+            from_uid: 2,
+            content: '这是一条可以复制的消息',
+            created_at: '2026-06-09T00:00:00Z',
+          }}
+          isSelf={false}
+          isGroup={false}
+          senderName="CatsCo"
+          onReply={onReply}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[aria-label="Add Reaction"]')).toBeNull();
+
+    await act(async () => {
+      Simulate.click(container.querySelector('[aria-label="回复"]'));
+      await Promise.resolve();
+    });
+    expect(onReply).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      Simulate.click(container.querySelector('[aria-label="更多操作"]'));
+      await Promise.resolve();
+    });
+    const menu = container.querySelector('.v3-message-action-menu');
+    expect(menu).not.toBeNull();
+
+    await act(async () => {
+      Simulate.click(menu.querySelector('[role="menuitem"]'));
+      await Promise.resolve();
+    });
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('这是一条可以复制的消息');
+    expect(menu.textContent).toContain('已复制');
   });
 
   it('opens external HTML files instead of fetching them into the preview panel', async () => {

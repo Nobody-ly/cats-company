@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Terminal, Brain, FileText, Download, CornerUpLeft, MoreHorizontal, SmilePlus, X, Eye } from 'lucide-react';
+import { ChevronDown, ChevronRight, Terminal, Brain, FileText, Download, CornerUpLeft, MoreHorizontal, X, Eye, Copy } from 'lucide-react';
 import t from '../i18n';
 import Avatar from './avatar';
 import { resolveMediaURL } from '../api';
@@ -38,6 +38,61 @@ function truncateResult(text, max = 300) {
   if (typeof text !== 'string') text = JSON.stringify(text);
   if (text.length <= max) return text;
   return text.slice(0, max) + '...';
+}
+
+function contentBlockCopyText(block) {
+  if (!block || typeof block !== 'object') return '';
+  if (block.type === 'text') return block.text || block.content || '';
+  const payload = block.payload || block;
+  if (block.type === 'file') {
+    return `[文件] ${payload.name || payload.url || '文件'}`;
+  }
+  if (block.type === 'image') {
+    return `[图片] ${payload.name || payload.url || '图片'}`;
+  }
+  return '';
+}
+
+function buildMessageCopyText(content, renderedTextContent, richBlocks, parsed) {
+  const parts = [];
+  if (typeof renderedTextContent === 'string' && renderedTextContent.trim()) {
+    parts.push(renderedTextContent.trim());
+  } else if (!parsed && renderedTextContent != null && typeof renderedTextContent !== 'string') {
+    parts.push(JSON.stringify(renderedTextContent));
+  }
+
+  if (parsed && parsed.type) {
+    const parsedText = contentBlockCopyText(parsed);
+    if (parsedText) parts.push(parsedText);
+  }
+
+  richBlocks.forEach((block) => {
+    const text = contentBlockCopyText(block);
+    if (text) parts.push(text);
+  });
+
+  if (parts.length === 0) {
+    if (typeof content === 'string') return content;
+    if (content != null) return JSON.stringify(content);
+  }
+  return parts.join('\n\n');
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
 }
 
 function groupBlocks(messages) {
@@ -535,6 +590,8 @@ function WorkingProcess({ blocks }) {
 }
 
 function ChatMessageComponent({ message, workingMessages = null, isSelf, isGroup, senderName, senderAvatarUrl, senderIsBot, replyMessage, onReply, showThinking = true, isConsecutive, onPreviewFile, activePreviewFile }) {
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [copyState, setCopyState] = useState('');
   const content = message.content;
   const effectiveWorkingMessages = workingMessages || message._working || [];
   const storedBlocks = useMemo(() => Array.isArray(message.content_blocks) ? message.content_blocks : [], [message.content_blocks]);
@@ -583,23 +640,73 @@ function ChatMessageComponent({ message, workingMessages = null, isSelf, isGroup
     new Date(message.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   ), [message.created_at]);
   const displayName = senderName || message.from_name || `User ${message.from_uid || ''}`;
+  const copyText = useMemo(() => (
+    buildMessageCopyText(content, renderedTextContent, richBlocks, parsed)
+  ), [content, renderedTextContent, richBlocks, parsed]);
+
+  const handleReplyClick = (event) => {
+    event.stopPropagation();
+    setActionsOpen(false);
+    onReply?.();
+  };
+
+  const handleMoreClick = (event) => {
+    event.stopPropagation();
+    setActionsOpen((open) => {
+      if (!open) setCopyState('');
+      return !open;
+    });
+  };
+
+  const handleCopyClick = async (event) => {
+    event.stopPropagation();
+    try {
+      await copyTextToClipboard(copyText);
+      setCopyState('copied');
+    } catch (e) {
+      setCopyState('failed');
+    }
+  };
 
   if (!hasText && richBlocks.length === 0 && workingBlocks.length === 0) return null;
 
   return (
-    <div className={`v3-message ${isConsecutive ? 'grouped' : ''}`}>
-      <div className="v3-message-actions">
-        <button className="v3-action-btn" aria-label="Add Reaction" type="button">
-          <SmilePlus size={14} />
-        </button>
+    <div className={`v3-message ${isConsecutive ? 'grouped' : ''}`} onMouseLeave={() => setActionsOpen(false)}>
+      <div className={`v3-message-actions${actionsOpen ? ' open' : ''}`} onClick={(event) => event.stopPropagation()}>
         {onReply && (
-          <button className="v3-action-btn" onClick={onReply} aria-label="Reply" type="button">
+          <button className="v3-action-btn" onClick={handleReplyClick} aria-label={t('chat_reply')} title={t('chat_reply')} type="button">
             <CornerUpLeft size={14} />
           </button>
         )}
-        <button className="v3-action-btn" aria-label="More Options" type="button">
+        <button
+          className="v3-action-btn"
+          onClick={handleMoreClick}
+          aria-label="更多操作"
+          aria-expanded={actionsOpen}
+          title="更多操作"
+          type="button"
+        >
           <MoreHorizontal size={14} />
         </button>
+        {actionsOpen && (
+          <div className="v3-message-action-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={handleCopyClick}
+              disabled={!copyText}
+            >
+              <Copy size={14} />
+              <span>{copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : t('chat_copy')}</span>
+            </button>
+            {onReply && (
+              <button type="button" role="menuitem" onClick={handleReplyClick}>
+                <CornerUpLeft size={14} />
+                <span>{t('chat_reply')}</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="v3-avatar-col">
