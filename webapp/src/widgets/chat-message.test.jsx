@@ -107,7 +107,9 @@ describe('ChatMessage rich file rendering', () => {
     expect(container.querySelector('.v3-file-preview-panel')).not.toBeNull();
     const frame = container.querySelector('iframe.v3-file-preview-frame');
     expect(frame).not.toBeNull();
-    expect(frame.getAttribute('sandbox')).toBe('');
+    expect(frame.getAttribute('sandbox')).toContain('allow-scripts');
+    expect(frame.getAttribute('sandbox')).toContain('allow-forms');
+    expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin');
     expect(frame.getAttribute('srcdoc')).toContain('<h1>Report</h1>');
   });
 

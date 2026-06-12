@@ -13,6 +13,7 @@ const HIDDEN_TOOL_PROGRESS_NAMES = new Set([
 const HTML_FILE_EXTENSIONS = new Set(['HTML', 'HTM', 'XHTML']);
 const TEXT_FILE_EXTENSIONS = new Set(['TXT', 'JSON', 'MD', 'CSV', 'JS', 'PY', 'GO', 'HTML', 'HTM', 'CSS', 'XML']);
 const PREVIEW_FILE_EXTENSIONS = new Set(['PDF', ...TEXT_FILE_EXTENSIONS]);
+const HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals';
 
 function shouldHideToolProgressName(name) {
   return HIDDEN_TOOL_PROGRESS_NAMES.has(String(name || '').trim());
@@ -1018,7 +1019,7 @@ export function FilePreviewPanel({ file, onClose }) {
           <iframe
             className="v3-file-preview-frame"
             title="HTML Report Preview"
-            sandbox=""
+            sandbox={HTML_PREVIEW_SANDBOX}
             referrerPolicy="no-referrer"
             srcDoc={textContent || '<!doctype html><meta charset="utf-8"><body></body>'}
           />
