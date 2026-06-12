@@ -257,6 +257,7 @@ func main() {
 	deviceHandler := server.NewDeviceHandler(db, hub)
 	deviceConnectorHandler := server.NewDeviceConnectorHandler(db, hub)
 	uploadHandler := server.NewUploadHandler("./uploads", "/uploads")
+	tutorialTaskHandler := server.NewTutorialTaskHandler("./uploads", "/uploads")
 	readerHandler := server.NewReaderProxyHandlerFromEnv()
 	feedbackHandler := server.NewFeedbackHandler(db)
 	relayConfigHandler := server.NewRelayConfigHandler()
@@ -459,6 +460,8 @@ func main() {
 	mux.HandleFunc("/api/groups/role", jwtAuthWithDB(groupHandler.HandleUpdateRole))
 
 	// File upload (accepts both JWT and API Key for bot uploads)
+	mux.HandleFunc("/api/tutorial-tasks", tutorialTaskHandler.HandleTasks)
+	mux.HandleFunc("/api/tutorial-tasks/upload", tutorialTaskHandler.HandleUpload)
 	mux.HandleFunc("/api/upload", chainHTTP(uploadHandler.HandleUpload, uploadIPLimit, authWithDB, uploadUserLimit))
 	mux.HandleFunc("/api/reader/analyze", chainHTTP(readerHandler.HandleAnalyze, readerIPLimit, authWithDB, readerUserLimit))
 	mux.HandleFunc("/uploads/", uploadHandler.HandleServeFile)

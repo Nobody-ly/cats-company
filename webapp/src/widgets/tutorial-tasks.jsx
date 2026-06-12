@@ -26,13 +26,13 @@ export const TUTORIAL_TASKS = [
   },
 ];
 
-export function TutorialEmptyState({ onSelectTask, onDismiss }) {
+export function TutorialEmptyState({ tasks = TUTORIAL_TASKS, onSelectTask, onDismiss }) {
   return (
     <div className="cc-tutorial-empty">
       <div className="cc-tutorial-empty-kicker">试一个文件任务</div>
       <div className="cc-tutorial-empty-desc">下载一份示例文件，让 CatsCo 演示读图和整理本机文件。</div>
       <div className="cc-tutorial-task-grid">
-        {TUTORIAL_TASKS.map((task) => (
+        {tasks.map((task) => (
           <TutorialTaskCard key={task.id} task={task} onClick={() => onSelectTask(task)} />
         ))}
       </div>
@@ -43,7 +43,7 @@ export function TutorialEmptyState({ onSelectTask, onDismiss }) {
   );
 }
 
-export function TutorialTaskPicker({ onClose, onSelectTask }) {
+export function TutorialTaskPicker({ tasks = TUTORIAL_TASKS, onClose, onSelectTask }) {
   return (
     <div className="oc-modal-overlay" onClick={onClose}>
       <div className="oc-modal catsco-download-modal cc-tutorial-modal" onClick={(event) => event.stopPropagation()}>
@@ -57,7 +57,7 @@ export function TutorialTaskPicker({ onClose, onSelectTask }) {
           </button>
         </div>
         <div className="cc-tutorial-task-list">
-          {TUTORIAL_TASKS.map((task) => (
+          {tasks.map((task) => (
             <TutorialTaskCard key={task.id} task={task} onClick={() => onSelectTask(task)} compact />
           ))}
         </div>
@@ -148,7 +148,7 @@ export function TutorialTaskModal({
 }
 
 function TutorialTaskCard({ task, onClick, compact = false }) {
-  const Icon = task.icon;
+  const Icon = task.icon || (task.iconType === 'move' ? FolderUp : FileImage);
   return (
     <button type="button" className={`cc-tutorial-card${compact ? ' compact' : ''}`} onClick={onClick}>
       <span className="cc-tutorial-card-icon">

@@ -37,6 +37,7 @@ jest.mock('../api', () => ({
     getGroupInfo: jest.fn(),
     sendMessage: jest.fn(),
     uploadFile: jest.fn(),
+    getTutorialTasks: jest.fn(),
   },
   wsSendMessage: jest.fn(),
   wsSendStreamCancel: jest.fn(),
@@ -102,6 +103,7 @@ describe('MessagesView composer draft isolation', () => {
     api.getFriends.mockResolvedValue({ friends: [] });
     api.getGroupInfo.mockResolvedValue({ members: [], group: null });
     api.sendMessage.mockResolvedValue({ seq_id: 100 });
+    api.getTutorialTasks.mockResolvedValue({ tasks: [], limit: 6 });
     api.uploadFile.mockResolvedValue({
       file_key: '20260610_default.jpg',
       url: '/uploads/images/20260610_default.jpg',

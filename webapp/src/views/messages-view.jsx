@@ -5,7 +5,7 @@ import t from '../i18n';
 import ChatMessage, { FilePreviewPanel } from '../widgets/chat-message';
 import GroupSettings from '../widgets/group-settings';
 import Avatar from '../widgets/avatar';
-import { TutorialEmptyState, TutorialTaskModal, TutorialTaskPicker } from '../widgets/tutorial-tasks';
+import { TutorialEmptyState, TutorialTaskModal, TutorialTaskPicker, TUTORIAL_TASKS } from '../widgets/tutorial-tasks';
 import { IMAGE_UPLOAD_ACCEPT, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_MB, inferAttachmentType, validateImageUpload } from '../utils/upload-rules';
 
 const PAGE_SIZE = 50;
@@ -76,6 +76,7 @@ export default function MessagesView({
   const [attachmentStatus, setAttachmentStatus] = useState(null);
   const [showTutorialPicker, setShowTutorialPicker] = useState(false);
   const [selectedTutorialTask, setSelectedTutorialTask] = useState(null);
+  const [tutorialTasks, setTutorialTasks] = useState(TUTORIAL_TASKS);
   const [tutorialDismissed, setTutorialDismissed] = useState(() => localStorage.getItem(tutorialDismissStorageKey(user.uid, topic)) === '1');
   const [showThinking, setShowThinking] = useState(() => {
     const saved = localStorage.getItem('cc_show_thinking');
@@ -170,6 +171,19 @@ export default function MessagesView({
       setShowTutorialPicker(true);
     }
   }, [tutorialOpenToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getTutorialTasks()
+      .then((data) => {
+        const tasks = Array.isArray(data.tasks) ? data.tasks.filter((task) => task && task.prompt).slice(0, Number(data.limit) || 6) : [];
+        if (!cancelled && tasks.length > 0) setTutorialTasks(tasks);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const clearRuntimePlan = useCallback(() => {
     if (runtimePlanClearTimer.current) {
@@ -973,7 +987,7 @@ export default function MessagesView({
         )}
         
         {messages.length === 0 && !runtimePlan && !peerTyping && !tutorialDismissed && (
-          <TutorialEmptyState onSelectTask={openTutorialTask} onDismiss={dismissTutorialEmptyState} />
+          <TutorialEmptyState tasks={tutorialTasks} onSelectTask={openTutorialTask} onDismiss={dismissTutorialEmptyState} />
         )}
 
         {groupedMessages.map((group, i) => {
@@ -1201,6 +1215,7 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
       )}
       {showTutorialPicker && (
         <TutorialTaskPicker
+          tasks={tutorialTasks}
           onClose={() => setShowTutorialPicker(false)}
           onSelectTask={openTutorialTask}
         />

@@ -13,6 +13,7 @@ import DesktopConnectModal from '../widgets/desktop-connect-modal';
 import RelayAccessModal from '../widgets/relay-access-modal';
 import PasswordResetForm from '../widgets/password-reset-form';
 import WorkflowRichMediaDemo from './workflow-rich-media-demo';
+import TutorialAdminView from './tutorial-admin-view';
 import Avatar from '../widgets/avatar';
 import { BookOpen, Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff, Laptop, CheckCircle2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
@@ -135,6 +136,10 @@ function findConnectedLocalAgent(agents) {
 }
 
 export default function TinodeWeb() {
+  if (window.location.pathname === '/tutorial-admin') {
+    return <TutorialAdminView />;
+  }
+
   const demoParams = new URLSearchParams(window.location.search);
   const showWorkflowDemo = demoParams.get('workflow_demo') === '1';
   if (showWorkflowDemo) {

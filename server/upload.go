@@ -32,6 +32,7 @@ var allowedUploadDirs = map[string]bool{
 	"images":   true,
 	"files":    true,
 	"feedback": true,
+	"tutorial": true,
 }
 
 var uploadFileNamePattern = regexp.MustCompile(`^\d{8}_[a-f0-9]{32}\.[a-z0-9]+$`)
@@ -78,6 +79,7 @@ func NewUploadHandler(baseDir, baseURL string) *UploadHandler {
 	os.MkdirAll(filepath.Join(baseDir, "images"), 0755)
 	os.MkdirAll(filepath.Join(baseDir, "files"), 0755)
 	os.MkdirAll(filepath.Join(baseDir, "feedback"), 0755)
+	os.MkdirAll(filepath.Join(baseDir, "tutorial"), 0755)
 	return &UploadHandler{baseDir: baseDir, baseURL: baseURL}
 }
 
