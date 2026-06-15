@@ -58,13 +58,14 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const loadBots = async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
-      const [botsRes, agentsRes] = await Promise.all([
+      const [botsRes, agentsRes, friendsRes] = await Promise.all([
         api.getMyBots().catch((err) => {
           throw err;
         }),
         api.getAgents ? api.getAgents().catch(() => ({})) : Promise.resolve({}),
+        api.getFriends ? api.getFriends().catch(() => ({})) : Promise.resolve({}),
       ]);
-      setBots(mergeManageableBots(botsRes.bots || [], agentsRes.agents || []));
+      setBots(mergeManageableBots(botsRes.bots || [], agentsRes.agents || [], friendsRes.friends || []));
     } catch (e) {
       console.error('Load bots error:', e);
       setError(e.message || t('error_server'));
@@ -540,7 +541,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   );
 }
 
-function mergeManageableBots(rawBots, rawAgents) {
+function mergeManageableBots(rawBots, rawAgents, rawFriends = []) {
   const byID = new Map();
   const add = (item, fallback = {}) => {
     const id = item?.id || item?.uid;
@@ -566,6 +567,24 @@ function mergeManageableBots(rawBots, rawAgents) {
         relation: agent.relation || 'friend',
         is_owner: agent.relation === 'owner',
         visibility: agent.visibility || 'friend',
+      });
+    });
+  rawFriends
+    .filter((friend) => friend && (friend.bot === true || friend.is_bot === true || friend.account_type === 'bot' || friend.accountType === 'bot'))
+    .forEach((friend) => {
+      const id = friend.uid || friend.id;
+      if (!id || byID.has(String(id))) return;
+      add({
+        id,
+        uid: id,
+        username: friend.username,
+        display_name: friend.display_name,
+        avatar_url: friend.avatar_url,
+        relation: 'friend',
+        is_owner: false,
+        visibility: 'friend',
+        is_bot: true,
+        is_online: friend.is_online || friend.online || false,
       });
     });
 
