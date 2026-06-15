@@ -303,6 +303,27 @@ describe('MessagesView composer draft isolation', () => {
     expect(container.textContent).toContain('移动文件到桌面');
   });
 
+  it('waits for history before showing tutorial task cards', async () => {
+    let resolveHistory;
+    api.getMessages.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveHistory = resolve;
+    }));
+
+    await act(async () => {
+      renderTopic(root, 'p2p_1_2');
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.cc-tutorial-empty')).toBeNull();
+
+    await act(async () => {
+      resolveHistory({ messages: [] });
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.cc-tutorial-empty')).not.toBeNull();
+  });
+
   it('downloads tutorial media and fills the selected prompt', async () => {
     await mountTopic(root, 'p2p_1_2', { localAssistantStatus: 'connected' });
 

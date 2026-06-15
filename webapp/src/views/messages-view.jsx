@@ -70,6 +70,7 @@ export default function MessagesView({
   const [previewFile, setPreviewFile] = useState(null);
   const [previewWidth, setPreviewWidth] = useState(() => loadPreviewWidth());
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [isStopRequested, setIsStopRequested] = useState(false);
@@ -245,6 +246,7 @@ export default function MessagesView({
     setMembers([]);
     setGroupInfo(null);
     setPeerProfile(null);
+    setHistoryLoaded(false);
     historyOffsetRef.current = 0;
     hasMoreHistoryRef.current = false;
     loadingOlderRef.current = false;
@@ -253,7 +255,7 @@ export default function MessagesView({
     setLoadingOlder(false);
     setIsStopRequested(false);
     setAttachmentStatus(null);
-    loadHistory();
+    loadHistory(topic);
     if (isGroup && groupId) {
       loadGroupMembers();
     } else {
@@ -444,9 +446,10 @@ export default function MessagesView({
     }
   }, [messages, runtimePlan, peerTyping]);
 
-  const loadHistory = async () => {
+  const loadHistory = async (targetTopic = topic) => {
     try {
-      const res = await api.getMessages(topic, PAGE_SIZE, 0, true);
+      const res = await api.getMessages(targetTopic, PAGE_SIZE, 0, true);
+      if (activeTopicRef.current !== targetTopic) return;
       if (res.messages) {
         const { visibleMessages } = normalizeHistoryMessages(res.messages);
         setMessages(visibleMessages);
@@ -455,6 +458,10 @@ export default function MessagesView({
         hasMoreHistoryRef.current = (res.messages || []).length === PAGE_SIZE;
       }
     } catch (e) {
+    } finally {
+      if (activeTopicRef.current === targetTopic) {
+        setHistoryLoaded(true);
+      }
     }
   };
 
@@ -986,7 +993,7 @@ export default function MessagesView({
           </div>
         )}
         
-        {messages.length === 0 && !runtimePlan && !peerTyping && !tutorialDismissed && (
+        {historyLoaded && messages.length === 0 && !runtimePlan && !peerTyping && !tutorialDismissed && (
           <TutorialEmptyState tasks={tutorialTasks} onSelectTask={openTutorialTask} onDismiss={dismissTutorialEmptyState} />
         )}
 
