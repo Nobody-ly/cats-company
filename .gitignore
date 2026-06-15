@@ -23,6 +23,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+local.tinode.conf
 deploy/.env
 *.pem
 *.key
@@ -35,6 +36,8 @@ deploy/nginx/ssl/fullchain.pem
 
 # Data
 mysql_data/
+uploads/
+server/cmd/uploads/
 *.log
 
 # Local AI tooling

@@ -37,6 +37,8 @@ jest.mock('../api', () => ({
     getGroupInfo: jest.fn(),
     sendMessage: jest.fn(),
     uploadFile: jest.fn(),
+    createMobileUploadSession: jest.fn(),
+    getMobileUploadSession: jest.fn(),
     getTutorialTasks: jest.fn(),
   },
   wsSendMessage: jest.fn(),
@@ -111,6 +113,12 @@ describe('MessagesView composer draft isolation', () => {
       size: 12,
       mime_type: 'image/jpeg',
     });
+    api.createMobileUploadSession.mockResolvedValue({
+      session_id: 'abc123',
+      upload_url: '/mobile-upload/abc123',
+      api_upload_url: '/api/mobile-upload/sessions/abc123/files',
+    });
+    api.getMobileUploadSession.mockResolvedValue({ session_id: 'abc123', files: [] });
     wsHandler = null;
     onWSMessage.mockImplementation((handler) => {
       wsHandler = handler;
@@ -293,6 +301,38 @@ describe('MessagesView composer draft isolation', () => {
     expect(api.uploadFile).toHaveBeenCalledWith(image, 'image');
     expect(container.textContent).toContain('已添加图片：cat.jpg');
     expect(container.textContent).toContain('cat.jpg');
+  });
+
+  it('opens a phone upload QR dialog from the composer', async () => {
+    await mountTopic(root, 'p2p_1_2');
+
+    const phoneUploadButton = container.querySelector('button[aria-label="手机上传"]');
+    expect(phoneUploadButton).not.toBeNull();
+    expect(phoneUploadButton.getAttribute('data-tooltip')).toBe('手机上传');
+
+    await act(async () => {
+      Simulate.click(phoneUploadButton);
+    });
+
+    expect(container.textContent).toContain('手机扫码上传');
+    expect(container.textContent).toContain('/mobile-upload/');
+  });
+
+  it('uses an absolute phone upload URL without prefixing the browser origin', async () => {
+    api.createMobileUploadSession.mockResolvedValueOnce({
+      session_id: 'lan123',
+      upload_url: 'https://app.example.test/mobile-upload/lan123',
+      api_upload_url: '/api/mobile-upload/sessions/lan123/files',
+    });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    await act(async () => {
+      Simulate.click(container.querySelector('button[aria-label="手机上传"]'));
+    });
+
+    expect(container.textContent).toContain('https://app.example.test/mobile-upload/lan123');
+    expect(container.textContent).not.toContain('localhost:6061https://app.example.test');
   });
 
   it('shows tutorial task cards on an empty topic', async () => {

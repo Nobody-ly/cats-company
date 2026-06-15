@@ -252,6 +252,19 @@ export const api = {
     if (!res.ok) throw new Error(data.error || `Upload failed with HTTP ${res.status}`);
     return data;
   },
+  createMobileUploadSession: async (topic) => request('POST', '/api/mobile-upload/sessions', { topic }),
+  getMobileUploadSession: async (sessionId) => request('GET', `/api/mobile-upload/sessions/${encodeURIComponent(sessionId)}`),
+  uploadMobileSessionFile: async (sessionId, file, type = 'file') => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/api/mobile-upload/sessions/${encodeURIComponent(sessionId)}/files?type=${type}`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    return data;
+  },
   uploadFeedbackImage: (file) => api.uploadFile(file, 'feedback'),
   submitFeedback: (data) => request('POST', '/api/feedback', data),
   getTutorialTasks: () => request('GET', '/api/tutorial-tasks'),

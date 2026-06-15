@@ -220,6 +220,69 @@ func TestHandleUploadRejectsUnsupportedImageMimeType(t *testing.T) {
 	}
 }
 
+func TestMobileUploadSessionAcceptsPhoneUploadsAndListsFiles(t *testing.T) {
+	handler := NewUploadHandler(t.TempDir(), "/uploads")
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/mobile-upload/sessions", strings.NewReader(`{"topic":"p2p_1_2"}`))
+	createRec := httptest.NewRecorder()
+	handler.HandleMobileUploadSession(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	var created struct {
+		SessionID    string `json:"session_id"`
+		UploadURL    string `json:"upload_url"`
+		APIUploadURL string `json:"api_upload_url"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.SessionID == "" || !strings.Contains(created.UploadURL, created.SessionID) || !strings.Contains(created.APIUploadURL, created.SessionID) {
+		t.Fatalf("unexpected create response: %+v", created)
+	}
+	if len(created.SessionID) < 32 {
+		t.Fatalf("session id length = %d, want at least 32 hex chars", len(created.SessionID))
+	}
+
+	uploadReq := buildUploadRequestWithPartContentType(t, "/api/mobile-upload/sessions/"+created.SessionID+"/files?type=image", "paper.jpg", "image/jpeg", []byte("fake paper image"))
+	uploadRec := httptest.NewRecorder()
+	handler.HandleMobileUploadSession(uploadRec, uploadReq)
+	if uploadRec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, body=%s", uploadRec.Code, uploadRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/mobile-upload/sessions/"+created.SessionID, nil)
+	listRec := httptest.NewRecorder()
+	handler.HandleMobileUploadSession(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listed struct {
+		SessionID string `json:"session_id"`
+		Topic     string `json:"topic"`
+		Files     []struct {
+			FileKey  string `json:"file_key"`
+			URL      string `json:"url"`
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			MimeType string `json:"mime_type"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if listed.Topic != "p2p_1_2" {
+		t.Fatalf("topic = %q, want p2p_1_2", listed.Topic)
+	}
+	if len(listed.Files) != 1 {
+		t.Fatalf("files = %+v, want one file", listed.Files)
+	}
+	if listed.Files[0].Name != "paper.jpg" || listed.Files[0].Type != "image" || !strings.HasPrefix(listed.Files[0].URL, "/uploads/images/") {
+		t.Fatalf("unexpected file result: %+v", listed.Files[0])
+	}
+}
+
 func buildUploadRequest(t *testing.T, target, fileName string, content []byte) *http.Request {
 	t.Helper()
 	return buildUploadRequestWithPartContentType(t, target, fileName, "application/octet-stream", content)

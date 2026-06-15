@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, MoreHorizontal, SendHorizontal, Square } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDot, MoreHorizontal, SendHorizontal, Smartphone, Square, X } from 'lucide-react';
 import { api, wsSendMessage, wsSendStreamCancel, wsSendTyping, wsSendRead, onWSMessage, updateTopicSeq } from '../api';
 import t from '../i18n';
 import ChatMessage, { FilePreviewPanel } from '../widgets/chat-message';
 import GroupSettings from '../widgets/group-settings';
 import Avatar from '../widgets/avatar';
+import QRCode from '../widgets/qr-code';
 import { TutorialEmptyState, TutorialTaskModal, TutorialTaskPicker, TUTORIAL_TASKS } from '../widgets/tutorial-tasks';
 import { IMAGE_UPLOAD_ACCEPT, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_MB, inferAttachmentType, validateImageUpload } from '../utils/upload-rules';
 
@@ -41,6 +42,13 @@ function savePreviewWidth(width) {
   window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(Math.round(width)));
 }
 
+function resolvePhoneUploadLink(uploadUrl) {
+  if (!uploadUrl) return '';
+  if (/^https?:\/\//i.test(uploadUrl)) return uploadUrl;
+  const normalizedPath = uploadUrl.startsWith('/') ? uploadUrl : `/${uploadUrl}`;
+  return `${window.location.origin}${normalizedPath}`;
+}
+
 export default function MessagesView({
   topic,
   topicName,
@@ -75,6 +83,9 @@ export default function MessagesView({
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [isStopRequested, setIsStopRequested] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState(null);
+  const [phoneUploadDialogOpen, setPhoneUploadDialogOpen] = useState(false);
+  const [phoneUploadSession, setPhoneUploadSession] = useState(null);
+  const [phoneUploadError, setPhoneUploadError] = useState('');
   const [showTutorialPicker, setShowTutorialPicker] = useState(false);
   const [selectedTutorialTask, setSelectedTutorialTask] = useState(null);
   const [tutorialTasks, setTutorialTasks] = useState(TUTORIAL_TASKS);
@@ -100,6 +111,7 @@ export default function MessagesView({
   const loadingOlderRef = useRef(false);
   const activeTopicRef = useRef(topic);
   const previewWidthRef = useRef(previewWidth);
+  const phoneUploadFileKeysRef = useRef(new Set());
 
   useEffect(() => {
     previewWidthRef.current = previewWidth;
@@ -741,6 +753,81 @@ export default function MessagesView({
     }
   };
 
+  const openPhoneUploadDialog = async () => {
+    if (!topic || phoneUploadDialogOpen) return;
+    setPhoneUploadDialogOpen(true);
+    setPhoneUploadError('');
+    setPhoneUploadSession(null);
+    phoneUploadFileKeysRef.current = new Set();
+    try {
+      const session = await api.createMobileUploadSession(topic);
+      if (activeTopicRef.current !== topic) return;
+      setPhoneUploadSession(session);
+    } catch (err) {
+      setPhoneUploadError(err.message || '手机上传入口创建失败');
+    }
+  };
+
+  const closePhoneUploadDialog = () => {
+    setPhoneUploadDialogOpen(false);
+    setPhoneUploadError('');
+  };
+
+  const phoneUploadLink = resolvePhoneUploadLink(phoneUploadSession?.upload_url);
+
+  useEffect(() => {
+    if (!phoneUploadDialogOpen || !phoneUploadSession?.session_id) return undefined;
+    let stopped = false;
+    const sessionId = phoneUploadSession.session_id;
+
+    const poll = async () => {
+      try {
+        const data = await api.getMobileUploadSession(sessionId);
+        if (stopped || activeTopicRef.current !== topic) return;
+        const files = Array.isArray(data.files) ? data.files : [];
+        const nextAttachments = [];
+        for (const file of files) {
+          const fileKey = file.file_key || file.url || file.name;
+          if (!fileKey || phoneUploadFileKeysRef.current.has(fileKey)) continue;
+          phoneUploadFileKeysRef.current.add(fileKey);
+          const type = file.type === 'image' ? 'image' : 'file';
+          const content = {
+            type,
+            payload: {
+              file_key: file.file_key,
+              url: file.url,
+              name: file.name,
+              size: file.size,
+              mime_type: file.mime_type || '',
+            },
+          };
+          if (type === 'image') {
+            content.payload.thumbnail = file.url;
+          }
+          nextAttachments.push({
+            type,
+            name: file.name,
+            size: file.size,
+            content,
+          });
+        }
+        if (nextAttachments.length > 0) {
+          setPendingAttachments((prev) => [...prev, ...nextAttachments]);
+          setAttachmentStatus({ tone: 'success', message: `手机已上传 ${nextAttachments.length} 个附件，发送后对方可见。` });
+        }
+      } catch (err) {
+        if (!stopped) setPhoneUploadError(err.message || '读取手机上传结果失败');
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [phoneUploadDialogOpen, phoneUploadSession?.session_id, topic]);
+
   const handleDragEnter = (e) => {
     if (!hasFileDrag(e.dataTransfer)) return;
     e.preventDefault();
@@ -1112,6 +1199,17 @@ export default function MessagesView({
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
             </button>
+            <button
+              className="v3-tool v3-tool-with-tooltip"
+              onClick={openPhoneUploadDialog}
+              title="手机上传"
+              aria-label="手机上传"
+              data-tooltip="手机上传"
+              disabled={isUploadingAttachment}
+              type="button"
+            >
+              <Smartphone size={16} strokeWidth={2} />
+            </button>
             <div style={{flex:1}}></div>
             <button className="v3-tool" style={{ fontWeight: 600 }} onClick={() => { if(isGroup && textareaRef.current) { const pos = textareaRef.current.selectionStart; setInput(input.slice(0,pos) + '@' + input.slice(pos)); textareaRef.current.focus(); } }} title="@成员" type="button">@</button>
           </div>
@@ -1193,6 +1291,33 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
           
           <input ref={imageInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'image')} />
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, 'file')} />
+          {phoneUploadDialogOpen && (
+            <div className="v3-phone-upload-backdrop" role="dialog" aria-modal="true" aria-label="手机扫码上传">
+              <div className="v3-phone-upload-modal">
+                <div className="v3-phone-upload-header">
+                  <div>
+                    <div className="v3-phone-upload-title">手机扫码上传</div>
+                    <div className="v3-phone-upload-subtitle">用手机打开后可多选图片或文件上传到当前会话。</div>
+                  </div>
+                  <button className="v3-tool" type="button" aria-label="关闭手机上传" onClick={closePhoneUploadDialog}>
+                    <X size={16} strokeWidth={2} />
+                  </button>
+                </div>
+                <div className="v3-phone-upload-body">
+                  {phoneUploadError ? (
+                    <div className="v3-phone-upload-error">{phoneUploadError}</div>
+                  ) : phoneUploadLink ? (
+                    <>
+                      <QRCode value={phoneUploadLink} size={180} />
+                      <div className="v3-phone-upload-link">{phoneUploadLink}</div>
+                    </>
+                  ) : (
+                    <div className="v3-phone-upload-loading">正在创建上传入口...</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
         </div>
