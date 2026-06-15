@@ -39,6 +39,7 @@ jest.mock('../api', () => ({
     uploadFile: jest.fn(),
     createMobileUploadSession: jest.fn(),
     getMobileUploadSession: jest.fn(),
+    getTutorialTasks: jest.fn(),
   },
   wsSendMessage: jest.fn(),
   wsSendStreamCancel: jest.fn(),
@@ -49,6 +50,7 @@ jest.mock('../api', () => ({
 }));
 
 const MessagesView = require('./messages-view').default;
+const { TUTORIAL_TASKS } = require('../widgets/tutorial-tasks');
 const { api, onWSMessage } = require('../api');
 
 const user = {
@@ -59,7 +61,7 @@ const user = {
   account_type: 'human',
 };
 
-function renderTopic(root, topic) {
+function renderTopic(root, topic, extraProps = {}) {
   root.render(
     <MessagesView
       topic={topic}
@@ -69,13 +71,14 @@ function renderTopic(root, topic) {
       groupId={null}
       topicAvatarUrl=""
       onTopicUpdated={jest.fn()}
+      {...extraProps}
     />
   );
 }
 
-async function mountTopic(root, topic) {
+async function mountTopic(root, topic, extraProps = {}) {
   await act(async () => {
-    renderTopic(root, topic);
+    renderTopic(root, topic, extraProps);
     await Promise.resolve();
   });
 }
@@ -97,10 +100,12 @@ describe('MessagesView composer draft isolation', () => {
 
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
     api.getMessages.mockResolvedValue({ messages: [] });
     api.getFriends.mockResolvedValue({ friends: [] });
     api.getGroupInfo.mockResolvedValue({ members: [], group: null });
     api.sendMessage.mockResolvedValue({ seq_id: 100 });
+    api.getTutorialTasks.mockResolvedValue({ tasks: [], limit: 6 });
     api.uploadFile.mockResolvedValue({
       file_key: '20260610_default.jpg',
       url: '/uploads/images/20260610_default.jpg',
@@ -328,6 +333,78 @@ describe('MessagesView composer draft isolation', () => {
 
     expect(container.textContent).toContain('https://app.example.test/mobile-upload/lan123');
     expect(container.textContent).not.toContain('localhost:6061https://app.example.test');
+  });
+
+  it('shows tutorial task cards on an empty topic', async () => {
+    await mountTopic(root, 'p2p_1_2');
+
+    expect(container.textContent).toContain('试一个文件任务');
+    expect(container.textContent).toContain('读图提取信息');
+    expect(container.textContent).toContain('移动文件到桌面');
+  });
+
+  it('waits for history before showing tutorial task cards', async () => {
+    let resolveHistory;
+    api.getMessages.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveHistory = resolve;
+    }));
+
+    await act(async () => {
+      renderTopic(root, 'p2p_1_2');
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.cc-tutorial-empty')).toBeNull();
+
+    await act(async () => {
+      resolveHistory({ messages: [] });
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.cc-tutorial-empty')).not.toBeNull();
+  });
+
+  it('downloads tutorial media and fills the selected prompt', async () => {
+    await mountTopic(root, 'p2p_1_2', { localAssistantStatus: 'connected' });
+
+    await act(async () => {
+      Simulate.click(Array.from(container.querySelectorAll('.cc-tutorial-card')).find((el) => el.textContent.includes('读图提取信息')));
+    });
+
+    const downloadLink = container.querySelector('a[download="catsco-tutorial-sample.png"]');
+    expect(downloadLink.getAttribute('href')).toBe('/demo-artifacts/catsco-tutorial-sample.png');
+
+    await act(async () => {
+      Simulate.click(downloadLink);
+    });
+    expect(container.textContent).toContain('已开始下载');
+
+    await act(async () => {
+      Simulate.click(Array.from(container.querySelectorAll('button')).find((el) => el.textContent.includes('填入任务')));
+    });
+
+    expect(container.querySelector('textarea.v3-composer-input').value).toBe(TUTORIAL_TASKS[0].prompt);
+    expect(container.textContent).toContain('已填入示例任务，你可以直接发送。');
+  });
+
+  it('dismisses tutorial cards for the current topic and stores the choice', async () => {
+    const onTutorialHint = jest.fn();
+    await mountTopic(root, 'p2p_1_2', { onTutorialHint });
+
+    await act(async () => {
+      Simulate.click(Array.from(container.querySelectorAll('button')).find((el) => el.textContent.includes('暂时不用')));
+    });
+
+    expect(container.textContent).not.toContain('试一个文件任务');
+    expect(localStorage.getItem('cc_tutorial_empty_dismissed:v1:1:p2p_1_2')).toBe('1');
+    expect(onTutorialHint).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens tutorial picker from the profile menu trigger token', async () => {
+    await mountTopic(root, 'p2p_1_2', { tutorialOpenToken: 1 });
+
+    expect(container.textContent).toContain('选择示例任务');
+    expect(container.textContent).toContain('选择一个任务，下载示例文件');
   });
 
   it('clears peer typing immediately when a peer final reply arrives', async () => {

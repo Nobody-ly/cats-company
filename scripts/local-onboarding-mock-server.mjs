@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
 import { URL } from 'node:url';
 
 const port = Number(process.env.MOCK_CATS_PORT || 6061);
 const scenario = String(process.env.MOCK_CATS_SCENARIO || 'new').trim().toLowerCase();
 const echoReplies = ['1', 'true', 'yes', 'on'].includes(String(process.env.MOCK_CATS_ECHO || '').trim().toLowerCase());
+const tutorialTasksFile = String(process.env.MOCK_CATS_TUTORIAL_TASKS_FILE || '').trim();
+const tutorialTasksJSON = String(process.env.MOCK_CATS_TUTORIAL_TASKS_JSON || '').trim();
 
 let nextUserId = 100;
 let nextBotId = 200;
@@ -157,6 +160,52 @@ function send(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function mockTutorialTasks() {
+  if (tutorialTasksJSON) {
+    try {
+      const parsed = JSON.parse(stripJSONBOM(tutorialTasksJSON));
+      if (parsed && Array.isArray(parsed.tasks)) return parsed;
+    } catch (error) {
+      return { tasks: [], limit: 12, error: `invalid MOCK_CATS_TUTORIAL_TASKS_JSON: ${error.message}` };
+    }
+  }
+  if (tutorialTasksFile) {
+    try {
+      const parsed = JSON.parse(stripJSONBOM(fs.readFileSync(tutorialTasksFile, 'utf8')));
+      if (parsed && Array.isArray(parsed.tasks)) return parsed;
+    } catch (error) {
+      return { tasks: [], limit: 12, error: `invalid MOCK_CATS_TUTORIAL_TASKS_FILE: ${error.message}` };
+    }
+  }
+  return {
+    limit: 12,
+    tasks: [
+      {
+        id: 'read-image',
+        title: '读图提取信息',
+        intro: '下载一张示例图片，让 CatsCo 读取图片内容并整理出清晰要点。',
+        files: [
+          { name: 'catsco-tutorial-sample.png', url: '/demo-artifacts/catsco-tutorial-sample.png' },
+        ],
+        prompt: '请在我的下载文件夹中找到“catsco-tutorial-sample.png”，读取这张图片的内容，并帮我整理成清晰的要点。',
+      },
+      {
+        id: 'move-image',
+        title: '移动文件到桌面',
+        intro: '下载同一张示例图片，让 CatsCo 在本机下载目录找到它，并安全移动到桌面。',
+        files: [
+          { name: 'catsco-tutorial-sample.png', url: '/demo-artifacts/catsco-tutorial-sample.png' },
+        ],
+        prompt: '请在我的下载文件夹中找到“catsco-tutorial-sample.png”，把它移动到桌面。完成后告诉我你移动前后的文件位置。如果桌面上已经有同名文件，请不要覆盖，改用一个安全的新文件名。',
+      },
+    ],
+  };
+}
+
+function stripJSONBOM(value) {
+  return String(value || '').replace(/^\uFEFF/, '');
+}
+
 function requireUser(req, res) {
   const user = getBearerUser(req);
   if (!user) {
@@ -240,6 +289,10 @@ async function handleApi(req, res) {
       return send(res, 200, userPayload(user));
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/tutorial-tasks') {
+      return send(res, 200, mockTutorialTasks());
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/desktop-connect/session') {
       const user = requireUser(req, res);
       if (!user) return;
@@ -293,6 +346,23 @@ async function handleApi(req, res) {
           is_online: onlineBodies.has(bot.api_key),
           topic_id: p2pTopicId(user.id, bot.id),
         })),
+      });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/devices') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      return send(res, 200, {
+        devices: [],
+        checked_at: Date.now(),
+      });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/devices/audit') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      return send(res, 200, {
+        events: [],
       });
     }
 

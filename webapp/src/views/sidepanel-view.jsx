@@ -415,7 +415,11 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
             const agentId = agent.uid || agent.id;
             const isOnline = onlineStatusFor(onlineUsers, agentId, agent.is_online);
             return (
-              <div key={agentId} className="v3-chat-item" style={{opacity: 0.7, cursor: 'default'}}>
+              <div
+                key={agentId}
+                className={`v3-chat-item ${activeTopic === agent.topic_id ? 'active' : ''}`}
+                onClick={() => handleSelectAgent(agent)}
+              >
                 <span className="prefix" style={{display: 'flex', alignItems: 'center'}}><Bot size={18} /></span>
                 <span className="v3-chat-item-label">{agent.display_name || agent.username}</span>
                 <span

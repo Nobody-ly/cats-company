@@ -15,7 +15,7 @@ import RelayAccessModal from '../widgets/relay-access-modal';
 import PasswordResetForm from '../widgets/password-reset-form';
 import WorkflowRichMediaDemo from './workflow-rich-media-demo';
 import Avatar from '../widgets/avatar';
-import { Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff, Laptop, CheckCircle2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { BookOpen, Bug, Download, KeyRound, Settings, LogOut, Eye, EyeOff, Laptop, CheckCircle2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import CatOrb from '../components/CatOrb/CatOrb';
 import '../css/openchat-theme.css';
 
@@ -177,6 +177,8 @@ function TinodeWebApp() {
   const [localAgentStatus, setLocalAgentStatus] = useState('checking');
   const [showRelayModal, setShowRelayModal] = useState(false);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(() => loadAppSidebarCollapsed());
+  const [tutorialOpenToken, setTutorialOpenToken] = useState(0);
+  const [showTutorialMenuHint, setShowTutorialMenuHint] = useState(false);
 
 
 
@@ -397,7 +399,14 @@ function TinodeWebApp() {
 
   const handleDesktopConnected = async (agent) => {
     try {
-      const res = await api.openAgent(agent.uid || agent.id);
+      const agentUid = agent?.uid || agent?.id;
+      if (!agentUid) {
+        setLocalAgentStatus('connected');
+        setShowDesktopConnectModal(false);
+        window.dispatchEvent(new Event('cc:data-changed'));
+        return;
+      }
+      const res = await api.openAgent(agentUid);
       const opened = res.agent || agent;
       setActiveTopic({
         topicId: opened.topic_id || res.topic || agent.topic_id,
@@ -414,10 +423,6 @@ function TinodeWebApp() {
     }
   };
 
-  if (entrySceneKey) {
-    return <AgentEntryBindView sceneKey={entrySceneKey} />;
-  }
-
   if (channelDeviceLink && user) {
     const params = new URLSearchParams(window.location.search);
     return (
@@ -431,6 +436,10 @@ function TinodeWebApp() {
 
   if (!user) {
     return <AuthView mode={authMode} setMode={setAuthMode} onLogin={handleLogin} onRegister={handleRegister} />;
+  }
+
+  if (entrySceneKey) {
+    return <AgentEntryBindView sceneKey={entrySceneKey} />;
   }
 
   return (
@@ -479,6 +488,9 @@ function TinodeWebApp() {
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowDesktopConnectModal(true); }}>
               <Laptop size={16} style={{marginRight: 10}} /> 连接我的电脑助手
             </div>
+            <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowTutorialMenuHint(false); setTutorialOpenToken((value) => value + 1); }}>
+              <BookOpen size={16} style={{marginRight: 10}} /> 示例任务
+            </div>
             <div className="v3-popover-item" onClick={() => { setShowProfilePopover(false); setShowRelayModal(true); }}>
               <KeyRound size={16} style={{marginRight: 10}} /> CatsCo 中转站
             </div>
@@ -506,6 +518,10 @@ function TinodeWebApp() {
             groupId={activeTopic.groupId}
             topicAvatarUrl={activeTopic.avatar_url}
             onTopicUpdated={handleTopicUpdated}
+            tutorialOpenToken={tutorialOpenToken}
+            localAssistantStatus={localAgentStatus}
+            onOpenDesktopConnect={() => setShowDesktopConnectModal(true)}
+            onTutorialHint={() => setShowTutorialMenuHint(true)}
           />
         ) : (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888' }}>
@@ -541,6 +557,13 @@ function TinodeWebApp() {
 
       {showRelayModal && (
         <RelayAccessModal onClose={() => setShowRelayModal(false)} />
+      )}
+
+      {showTutorialMenuHint && (
+        <div className="cc-tutorial-menu-hint">
+          <button type="button" onClick={() => setShowTutorialMenuHint(false)} aria-label="关闭">x</button>
+          以后可从头像菜单里的“示例任务”重新打开。
+        </div>
       )}
     </div>
   );

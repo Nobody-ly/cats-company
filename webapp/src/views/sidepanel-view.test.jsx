@@ -123,7 +123,7 @@ describe('ChatListView sidebar sections', () => {
     Simulate.click(section);
   }
 
-  it('renders agents as a non-chat assistant roster', async () => {
+  it('opens an agent conversation from the assistant roster', async () => {
     await mount();
 
     expect(container.textContent).toContain('AI 助手');
@@ -134,8 +134,13 @@ describe('ChatListView sidebar sections', () => {
       await Promise.resolve();
     });
 
-    expect(api.openAgent).not.toHaveBeenCalled();
-    expect(onSelectTopic).not.toHaveBeenCalled();
+    expect(api.openAgent).toHaveBeenCalledWith(42);
+    expect(onSelectTopic).toHaveBeenCalledWith(expect.objectContaining({
+      topicId: 'p2p_7_42',
+      name: 'Dev Agent',
+      friendId: 42,
+      isBot: true,
+    }));
   });
 
   it('keeps server-confirmed bot groups in the groups section', async () => {

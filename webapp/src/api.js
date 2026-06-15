@@ -177,6 +177,8 @@ export const api = {
     }),
   regenerateAgentEntry: (entryId) =>
     request('POST', `/api/agent-entries/${encodeURIComponent(entryId)}/regenerate`, {}),
+  getAgentChannelBindings: (agentUid) =>
+    request('GET', `/api/channel-agent-bindings?agent_uid=${encodeURIComponent(agentUid)}`),
   getChannelAgentEntryPreview: (sceneKey) =>
     request('GET', `/api/channel-agent-entry/preview?scene_key=${encodeURIComponent(sceneKey)}`),
   confirmChannelAgentBinding: (payload) =>
@@ -265,6 +267,7 @@ export const api = {
   },
   uploadFeedbackImage: (file) => api.uploadFile(file, 'feedback'),
   submitFeedback: (data) => request('POST', '/api/feedback', data),
+  getTutorialTasks: () => request('GET', '/api/tutorial-tasks'),
 };
 
 // --- WebSocket ---
