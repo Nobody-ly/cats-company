@@ -343,7 +343,7 @@ describe('MessagesView composer draft isolation', () => {
     await mountTopic(root, 'p2p_1_2', { tutorialOpenToken: 1 });
 
     expect(container.textContent).toContain('选择示例任务');
-    expect(container.textContent).toContain('每个任务都带有示例文件和写好的任务说明');
+    expect(container.textContent).toContain('选择一个任务，下载示例文件');
   });
 
   it('clears peer typing immediately when a peer final reply arrives', async () => {

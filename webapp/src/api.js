@@ -253,35 +253,7 @@ export const api = {
   uploadFeedbackImage: (file) => api.uploadFile(file, 'feedback'),
   submitFeedback: (data) => request('POST', '/api/feedback', data),
   getTutorialTasks: () => request('GET', '/api/tutorial-tasks'),
-  saveTutorialTasks: (data, adminToken) => requestWithExtraHeaders('PUT', '/api/tutorial-tasks', data, {
-    'X-Tutorial-Admin-Token': adminToken,
-  }),
-  uploadTutorialFile: async (file, adminToken) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    const res = await fetch(`${API_BASE}/api/tutorial-tasks/upload`, {
-      method: 'POST',
-      headers: { 'X-Tutorial-Admin-Token': adminToken },
-      body: formData,
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `Upload failed with HTTP ${res.status}`);
-    return data;
-  },
 };
-
-async function requestWithExtraHeaders(method, path, body, extraHeaders) {
-  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
-}
 
 // --- WebSocket ---
 

@@ -357,6 +357,10 @@ func main() {
 	mux.HandleFunc("/local/account-admin/users/state", accountAdminHandler.HandleUserState)
 	mux.HandleFunc("/local/account-admin/services", accountAdminHandler.HandleServices)
 	mux.HandleFunc("/local/account-admin/services/revoke", accountAdminHandler.HandleRevokeService)
+	mux.HandleFunc("/local/tutorial-admin", tutorialTaskHandler.HandleAdminPage)
+	mux.HandleFunc("/local/tutorial-admin/", tutorialTaskHandler.HandleAdminPage)
+	mux.HandleFunc("/local/tutorial-admin/tasks", tutorialTaskHandler.HandleAdminTasks)
+	mux.HandleFunc("/local/tutorial-admin/upload", chainHTTP(tutorialTaskHandler.HandleAdminUpload, uploadIPLimit))
 
 	// Friends (require auth — JWT or API Key for bot access)
 	authWithDB := server.AuthMiddlewareWithDB(db)
@@ -461,7 +465,6 @@ func main() {
 
 	// File upload (accepts both JWT and API Key for bot uploads)
 	mux.HandleFunc("/api/tutorial-tasks", tutorialTaskHandler.HandleTasks)
-	mux.HandleFunc("/api/tutorial-tasks/upload", tutorialTaskHandler.HandleUpload)
 	mux.HandleFunc("/api/upload", chainHTTP(uploadHandler.HandleUpload, uploadIPLimit, authWithDB, uploadUserLimit))
 	mux.HandleFunc("/api/reader/analyze", chainHTTP(readerHandler.HandleAnalyze, readerIPLimit, authWithDB, readerUserLimit))
 	mux.HandleFunc("/uploads/", uploadHandler.HandleServeFile)

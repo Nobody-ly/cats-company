@@ -1233,7 +1233,8 @@ body {
 
 .cc-tutorial-task-grid,
 .cc-tutorial-task-list,
-.cc-tutorial-detail {
+.cc-tutorial-detail,
+.cc-tutorial-file-list {
   display: grid;
   gap: 12px;
 }
