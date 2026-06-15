@@ -38,9 +38,28 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
     loadLink();
   }, [loadLink]);
 
-  const qrValue = linkInfo?.qr_value || linkInfo?.channel_qr_url || '';
-  const weixinImageURL = channel === 'weixin' ? (linkInfo?.channel_qr_url || '') : '';
-  const copyValue = qrValue || linkInfo?.channel_qr_url || '';
+  const qrKind = linkInfo?.qr_kind || linkInfo?.entry?.qr_kind || '';
+  const isWeixinOfficialQR = channel === 'weixin' && qrKind === 'weixin_official_qr';
+  const isFeishuNativeUnconfigured = channel === 'feishu' && qrKind === 'feishu_native_unconfigured';
+  const qrValue = channel === 'weixin' && !isWeixinOfficialQR
+    ? ''
+    : (linkInfo?.qr_value || linkInfo?.channel_qr_url || '');
+  const weixinImageURL = isWeixinOfficialQR ? (linkInfo?.channel_qr_url || '') : '';
+  const copyValue = qrValue || '';
+  const channelCopy = (() => {
+    if (channel === 'weixin' && linkInfo && !isWeixinOfficialQR) {
+      return '微信公众号参数二维码尚未配置，暂时不能生成微信移动端绑定二维码。';
+    }
+    if (isFeishuNativeUnconfigured) {
+      return '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码。';
+    }
+    return `扫码后会把你的${channel === 'weixin' ? '微信' : '飞书'}身份绑定到当前 CatsCo 账号，之后可直接在移动端继续和这个虚拟员工对话。`;
+  })();
+  const emptyQrText = isFeishuNativeUnconfigured
+    ? '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码'
+    : channel === 'weixin' && linkInfo && !isWeixinOfficialQR
+      ? '微信公众号参数二维码尚未配置'
+      : '暂时没有可用二维码';
 
   const handleCopy = async () => {
     if (!copyValue || !navigator.clipboard) return;
@@ -71,9 +90,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
           <button type="button" className={channel === 'feishu' ? 'active' : ''} onClick={() => setChannel('feishu')}>飞书</button>
         </div>
 
-        <p className="mobile-channel-copy">
-          扫码后会把你的{channel === 'weixin' ? '微信' : '飞书'}身份绑定到当前 CatsCo 账号，之后可直接在移动端继续和这个虚拟员工对话。
-        </p>
+        <p className="mobile-channel-copy">{channelCopy}</p>
 
         <div className="mobile-channel-qr-wrap">
           {loading && <div className="mobile-channel-placeholder">正在生成...</div>}
@@ -87,11 +104,11 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
             </div>
           )}
           {!loading && !error && !qrValue && (
-            <div className="mobile-channel-placeholder">暂时没有可用二维码</div>
+            <div className="mobile-channel-placeholder">{emptyQrText}</div>
           )}
         </div>
 
-        {!loading && !error && linkInfo && (
+        {!loading && !error && qrValue && (
           <p className="mobile-channel-expiry">二维码 10 分钟内有效，完成绑定后会自动失效。</p>
         )}
 

@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getWebSocketURL } from '../api';
 import t from '../i18n';
-import { CheckCircle, Copy, QrCode, RefreshCw, Smartphone, XCircle, Zap, Bot, Upload } from 'lucide-react';
+import { CheckCircle, Copy, QrCode, RefreshCw, XCircle, Zap, Bot, Upload } from 'lucide-react';
 import Avatar from './avatar';
 import QRCode from './qr-code';
-import MobileChannelBindModal from './mobile-channel-bind-modal';
 import { IMAGE_UPLOAD_ACCEPT, validateImageUpload } from '../utils/upload-rules';
 
 const CREATE_MODES = {
@@ -49,7 +48,6 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const [copyingBotKey, setCopyingBotKey] = useState(null);
   const [editingBot, setEditingBot] = useState(null);
   const [entryBot, setEntryBot] = useState(null);
-  const [mobileLinkBot, setMobileLinkBot] = useState(null);
   const avatarFileRef = useRef(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
 
@@ -65,7 +63,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
         api.getAgents ? api.getAgents().catch(() => ({})) : Promise.resolve({}),
         api.getFriends ? api.getFriends().catch(() => ({})) : Promise.resolve({}),
       ]);
-      setBots(mergeManageableBots(botsRes.bots || [], agentsRes.agents || [], friendsRes.friends || []));
+      setBots(mergeManageableBots(botsRes.bots || [], agentsRes.agents || [], friendsRes.friends || []).filter(isOwnedBot));
     } catch (e) {
       console.error('Load bots error:', e);
       setError(e.message || t('error_server'));
@@ -161,7 +159,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
     const owned = isOwnedBot(bot);
     const confirmed = owned
       ? window.confirm(`确定要永久删除 ${bot.display_name} 吗？`)
-      : window.confirm(`确定从我的助手中移除 ${bot.display_name} 吗？\n\n这只会解除你的好友关系，不会删除对方创建的虚拟员工。`);
+      : window.confirm(`确定从 AI 助手列表中移除 ${bot.display_name} 吗？\n\n这只会解除你的好友关系，不会删除对方创建的虚拟员工。`);
     if (!confirmed) return;
     try {
       if (owned) {
@@ -215,7 +213,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                 style={{ background: 'none', border: 'none', color: tab === 'hub' ? 'var(--v3-text-name)' : 'var(--v3-text-muted)', fontWeight: tab === 'hub' ? 600 : 400, cursor: 'pointer', outline: 'none' }}
                 onClick={() => setTab('hub')}
               >
-                我的助手
+                我创建的助手
               </button>
               <button
                 style={{ background: 'none', border: 'none', color: tab === 'create' ? 'var(--v3-text-name)' : 'var(--v3-text-muted)', fontWeight: tab === 'create' ? 600 : 400, cursor: 'pointer', outline: 'none' }}
@@ -240,7 +238,10 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
               ) : bots.length === 0 ? (
                 <div style={{ padding: 60, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
                   <div style={{ color: 'var(--v3-text-muted)' }}><Bot size={48} strokeWidth={1.5} /></div>
-                  <div style={{ color: 'var(--v3-text-main)' }}>还没有 AI 助手</div>
+                  <div style={{ color: 'var(--v3-text-main)' }}>还没有你创建的 AI 助手</div>
+                  <div style={{ color: 'var(--v3-text-muted)', fontSize: 13, maxWidth: 280 }}>
+                    已添加的助手会保留在左侧 AI 助手列表，可直接移动端使用或移除。
+                  </div>
                   <button className="oc-btn oc-btn-primary" style={{ padding: '8px 16px', borderRadius: 8 }} onClick={() => setTab('create')}>创建第一个助手</button>
                 </div>
               ) : (
@@ -292,19 +293,8 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                             {copiedField === `api_${botId}` ? '已复制' : copyingBotKey === botId ? '加载中...' : '复制 Key'}
                           </button>
                         )}
-                        {!owned && (
-                          <button
-                            className="oc-btn oc-btn-default"
-                            style={{ padding: '8px 12px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6 }}
-                            onClick={() => setMobileLinkBot(bot)}
-                            title="移动端使用"
-                          >
-                            <Smartphone size={14} />
-                            移动端
-                          </button>
-                        )}
                         <button className="oc-btn oc-btn-default" style={{ padding: '8px 16px', borderRadius: 8, borderColor: 'rgba(250,81,81,0.3)' }} onClick={() => handleDelete(bot)}>
-                          <span style={{ color: '#FA5151' }}>{owned ? '删除' : '移除'}</span>
+                          <span style={{ color: '#FA5151' }}>删除</span>
                         </button>
                       </div>
                     </div>
@@ -528,13 +518,6 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
           onClose={() => setEntryBot(null)}
           onCopy={handleCopy}
           copiedField={copiedField}
-        />
-      )}
-      {mobileLinkBot && (
-        <MobileChannelBindModal
-          agentUid={mobileLinkBot.uid || mobileLinkBot.id}
-          agentName={mobileLinkBot.display_name || mobileLinkBot.username}
-          onClose={() => setMobileLinkBot(null)}
         />
       )}
     </div>
