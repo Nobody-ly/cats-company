@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getWebSocketURL } from '../api';
 import t from '../i18n';
-import { CheckCircle, Copy, QrCode, RefreshCw, XCircle, Zap, Bot, Upload } from 'lucide-react';
+import { CheckCircle, Copy, QrCode, RefreshCw, Smartphone, XCircle, Zap, Bot, Upload } from 'lucide-react';
 import Avatar from './avatar';
 import QRCode from './qr-code';
+import MobileChannelBindModal from './mobile-channel-bind-modal';
 import { IMAGE_UPLOAD_ACCEPT, validateImageUpload } from '../utils/upload-rules';
 
 const CREATE_MODES = {
@@ -48,6 +49,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const [copyingBotKey, setCopyingBotKey] = useState(null);
   const [editingBot, setEditingBot] = useState(null);
   const [entryBot, setEntryBot] = useState(null);
+  const [mobileLinkBot, setMobileLinkBot] = useState(null);
   const avatarFileRef = useRef(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
 
@@ -56,8 +58,13 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const loadBots = async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
-      const botsRes = await api.getMyBots();
-      setBots(botsRes.bots || []);
+      const [botsRes, agentsRes] = await Promise.all([
+        api.getMyBots().catch((err) => {
+          throw err;
+        }),
+        api.getAgents ? api.getAgents().catch(() => ({})) : Promise.resolve({}),
+      ]);
+      setBots(mergeManageableBots(botsRes.bots || [], agentsRes.agents || []));
     } catch (e) {
       console.error('Load bots error:', e);
       setError(e.message || t('error_server'));
@@ -282,6 +289,17 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                             disabled={copyingBotKey === botId}
                           >
                             {copiedField === `api_${botId}` ? '已复制' : copyingBotKey === botId ? '加载中...' : '复制 Key'}
+                          </button>
+                        )}
+                        {!owned && (
+                          <button
+                            className="oc-btn oc-btn-default"
+                            style={{ padding: '8px 12px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6 }}
+                            onClick={() => setMobileLinkBot(bot)}
+                            title="移动端使用"
+                          >
+                            <Smartphone size={14} />
+                            移动端
                           </button>
                         )}
                         <button className="oc-btn oc-btn-default" style={{ padding: '8px 16px', borderRadius: 8, borderColor: 'rgba(250,81,81,0.3)' }} onClick={() => handleDelete(bot)}>
@@ -511,8 +529,52 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
           copiedField={copiedField}
         />
       )}
+      {mobileLinkBot && (
+        <MobileChannelBindModal
+          agentUid={mobileLinkBot.uid || mobileLinkBot.id}
+          agentName={mobileLinkBot.display_name || mobileLinkBot.username}
+          onClose={() => setMobileLinkBot(null)}
+        />
+      )}
     </div>
   );
+}
+
+function mergeManageableBots(rawBots, rawAgents) {
+  const byID = new Map();
+  const add = (item, fallback = {}) => {
+    const id = item?.id || item?.uid;
+    if (!id) return;
+    byID.set(String(id), {
+      ...fallback,
+      ...item,
+      id,
+      uid: item.uid || id,
+      display_name: item.display_name || item.username || fallback.display_name || fallback.username || '未命名助手',
+      username: item.username || fallback.username || `agent-${id}`,
+      is_bot: true,
+    });
+  };
+
+  rawBots.forEach((bot) => add(bot));
+  rawAgents
+    .filter((agent) => agent && (agent.is_bot === true || agent.relation === 'friend' || agent.relation === 'owner'))
+    .forEach((agent) => {
+      const id = agent.uid || agent.id;
+      if (!id || byID.has(String(id))) return;
+      add(agent, {
+        relation: agent.relation || 'friend',
+        is_owner: agent.relation === 'owner',
+        visibility: agent.visibility || 'friend',
+      });
+    });
+
+  return Array.from(byID.values()).sort((a, b) => {
+    const leftOwned = isOwnedBot(a);
+    const rightOwned = isOwnedBot(b);
+    if (leftOwned !== rightOwned) return leftOwned ? -1 : 1;
+    return String(a.display_name || '').localeCompare(String(b.display_name || ''));
+  });
 }
 
 function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {

@@ -316,11 +316,17 @@ export default function MessagesView({
 
   const loadPeerProfile = async () => {
     try {
-      const res = await api.getFriends();
-      const friends = res.friends || [];
       const [left, right] = topic.replace('p2p_', '').split('_').map((n) => parseInt(n, 10));
       const peerId = left === user.uid ? right : left;
-      const peer = friends.find((friend) => friend.id === peerId);
+      const [friendsRes, agentsRes] = await Promise.all([
+        api.getFriends().catch(() => ({})),
+        api.getAgents ? api.getAgents().catch(() => ({})) : Promise.resolve({}),
+      ]);
+      const friends = friendsRes.friends || [];
+      const agents = agentsRes.agents || [];
+      const friendPeer = friends.find((friend) => friend.id === peerId);
+      const agentPeer = agents.find((agent) => agent.uid === peerId || agent.id === peerId);
+      const peer = agentPeer ? { ...friendPeer, ...agentPeer } : friendPeer;
       if (peer) setPeerProfile(peer);
     } catch (e) {
     }
