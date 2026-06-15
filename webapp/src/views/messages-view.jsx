@@ -5,6 +5,7 @@ import t from '../i18n';
 import ChatMessage, { FilePreviewPanel } from '../widgets/chat-message';
 import GroupSettings from '../widgets/group-settings';
 import Avatar from '../widgets/avatar';
+import { TutorialEmptyState, TutorialTaskModal, TutorialTaskPicker, TUTORIAL_TASKS } from '../widgets/tutorial-tasks';
 import { IMAGE_UPLOAD_ACCEPT, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_MB, inferAttachmentType, validateImageUpload } from '../utils/upload-rules';
 
 const PAGE_SIZE = 50;
@@ -40,7 +41,19 @@ function savePreviewWidth(width) {
   window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(Math.round(width)));
 }
 
-export default function MessagesView({ topic, topicName, user, isGroup, groupId, topicAvatarUrl, onTopicUpdated }) {
+export default function MessagesView({
+  topic,
+  topicName,
+  user,
+  isGroup,
+  groupId,
+  topicAvatarUrl,
+  onTopicUpdated,
+  tutorialOpenToken = 0,
+  localAssistantStatus = 'unknown',
+  onOpenDesktopConnect,
+  onTutorialHint,
+}) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [pendingAttachments, setPendingAttachments] = useState([]);
@@ -61,6 +74,10 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [isStopRequested, setIsStopRequested] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState(null);
+  const [showTutorialPicker, setShowTutorialPicker] = useState(false);
+  const [selectedTutorialTask, setSelectedTutorialTask] = useState(null);
+  const [tutorialTasks, setTutorialTasks] = useState(TUTORIAL_TASKS);
+  const [tutorialDismissed, setTutorialDismissed] = useState(() => localStorage.getItem(tutorialDismissStorageKey(user.uid, topic)) === '1');
   const [showThinking, setShowThinking] = useState(() => {
     const saved = localStorage.getItem('cc_show_thinking');
     return saved === null ? true : saved === 'true';
@@ -144,6 +161,29 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
   useEffect(() => {
     resizeComposerInput();
   }, [input, resizeComposerInput]);
+
+  useEffect(() => {
+    setTutorialDismissed(localStorage.getItem(tutorialDismissStorageKey(user.uid, topic)) === '1');
+  }, [topic, user.uid]);
+
+  useEffect(() => {
+    if (tutorialOpenToken > 0) {
+      setShowTutorialPicker(true);
+    }
+  }, [tutorialOpenToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getTutorialTasks()
+      .then((data) => {
+        const tasks = Array.isArray(data.tasks) ? data.tasks.filter((task) => task && task.prompt).slice(0, Number(data.limit) || 6) : [];
+        if (!cancelled && tasks.length > 0) setTutorialTasks(tasks);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const clearRuntimePlan = useCallback(() => {
     if (runtimePlanClearTimer.current) {
@@ -875,6 +915,27 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
     window.dispatchEvent(new Event('cc:data-changed'));
   };
 
+  const openTutorialTask = (task) => {
+    setShowTutorialPicker(false);
+    setSelectedTutorialTask(task);
+  };
+
+  const dismissTutorialEmptyState = () => {
+    localStorage.setItem(tutorialDismissStorageKey(user.uid, topic), '1');
+    setTutorialDismissed(true);
+    onTutorialHint?.();
+  };
+
+  const applyTutorialPrompt = (prompt) => {
+    setInput(prompt);
+    setAttachmentStatus({ tone: 'success', message: '已填入示例任务，你可以直接发送。' });
+    setSelectedTutorialTask(null);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      resizeComposerInput();
+    }, 0);
+  };
+
   const handleTimelineScroll = (e) => {
     const el = e.target;
     stickToBottomRef.current = isTimelineNearBottom(el);
@@ -925,6 +986,10 @@ export default function MessagesView({ topic, topicName, user, isGroup, groupId,
           </div>
         )}
         
+        {messages.length === 0 && !runtimePlan && !peerTyping && !tutorialDismissed && (
+          <TutorialEmptyState tasks={tutorialTasks} onSelectTask={openTutorialTask} onDismiss={dismissTutorialEmptyState} />
+        )}
+
         {groupedMessages.map((group, i) => {
           if (group.type === 'working') {
             if (!showThinking) return null;
@@ -1148,8 +1213,32 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
           onSaved={handleGroupSaved}
         />
       )}
+      {showTutorialPicker && (
+        <TutorialTaskPicker
+          tasks={tutorialTasks}
+          onClose={() => setShowTutorialPicker(false)}
+          onSelectTask={openTutorialTask}
+        />
+      )}
+      {selectedTutorialTask && (
+        <TutorialTaskModal
+          task={selectedTutorialTask}
+          desktopReady={localAssistantStatus === 'connected'}
+          onClose={() => setSelectedTutorialTask(null)}
+          onBack={() => {
+            setSelectedTutorialTask(null);
+            setShowTutorialPicker(true);
+          }}
+          onApplyPrompt={applyTutorialPrompt}
+          onOpenDesktopConnect={onOpenDesktopConnect}
+        />
+      )}
     </>
   );
+}
+
+function tutorialDismissStorageKey(uid, topic) {
+  return `cc_tutorial_empty_dismissed:v1:${uid || 'anon'}:${topic || 'unknown'}`;
 }
 
 function hasFileDrag(dataTransfer) {
