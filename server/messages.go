@@ -224,7 +224,7 @@ func (h *Hub) messageForRecipient(uid int64, recipientUID int64, topicID string,
 	if payload == nil {
 		return nil
 	}
-	metadata := withCatscoIdentityMetadata(payload.Metadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent)))
+	metadata := withCatscoIdentityMetadata(payload.Metadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent), catscoIdentityMetadataOptions{SourceMetadata: payload.Metadata}))
 	return &ServerMessage{
 		Data: &MsgServerData{
 			Topic:         topicID,
@@ -310,6 +310,7 @@ func withCatscoIdentityMetadata(metadata map[string]interface{}, identity map[st
 type catscoIdentityMetadataOptions struct {
 	OmitDeviceAccess bool
 	Replay           bool
+	SourceMetadata   map[string]interface{}
 }
 
 func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, topicID string, msgID int64, messageText string, options ...catscoIdentityMetadataOptions) map[string]interface{} {
@@ -374,7 +375,7 @@ func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, to
 			agent["display_name"] = client.displayName
 		}
 		if !opts.OmitDeviceAccess && h != nil && h.userDevices != nil {
-			deviceOwnerUID, deviceOwnerSource := h.deviceAccessOwnerUID(actorUID, recipientUID)
+			deviceOwnerUID, deviceOwnerSource := h.deviceAccessOwnerUID(actorUID, recipientUID, opts.SourceMetadata)
 			if deviceOwnerUID > 0 {
 				permissions := identity["permissions"].(map[string]interface{})
 				permissions["device_owner_user_id"] = formatUID(deviceOwnerUID)
@@ -394,25 +395,52 @@ func (h *Hub) buildCatscoIdentityMetadata(actorUID int64, recipientUID int64, to
 	return identity
 }
 
-func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64) (int64, string) {
+func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...map[string]interface{}) (int64, string) {
 	if h == nil || actorUID <= 0 || agentUID <= 0 {
 		return actorUID, "actor"
 	}
 	if h.db != nil {
 		if bindings, ok := h.db.(store.ChannelAgentBindingStore); ok {
-			binding, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)
-			if err == nil && binding != nil {
+			var metadata map[string]interface{}
+			if len(sourceMetadata) > 0 {
+				metadata = sourceMetadata[0]
+			}
+			if query, scoped := channelAgentBindingQueryFromMessageMetadata(metadata, actorUID, agentUID); scoped {
+				binding, err := bindings.ResolveChannelAgentBinding(query)
+				if err != nil || binding == nil {
+					return 0, "channel_binding_not_found"
+				}
 				if err := validateDeliverableChannelBinding(h.db, binding); err != nil {
 					return 0, "channel_identity_unapproved"
 				}
-				if binding.CanonicalUID > 0 {
+				if binding.CanonicalUID > 0 && binding.DeviceAccessEnabled {
 					return binding.CanonicalUID, "channel_identity_link"
 				}
 				return 0, "channel_identity_unlinked"
 			}
+			if existing, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID); err == nil && existing != nil {
+				return 0, "channel_device_context_missing"
+			}
 		}
 	}
 	return actorUID, "actor"
+}
+
+func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
+	channel := normalizeChannel(firstMetadataString(metadata, "source_channel", "channel"))
+	channelUserID := firstMetadataString(metadata, "channel_user_id")
+	if channel == "" || channelUserID == "" {
+		return types.ChannelAgentBindingQuery{}, false
+	}
+	return types.ChannelAgentBindingQuery{
+		Channel:                 channel,
+		ChannelAppID:            firstMetadataString(metadata, "channel_app_id"),
+		ChannelUserID:           channelUserID,
+		ChannelConversationID:   firstMetadataString(metadata, "channel_conversation_id"),
+		ChannelConversationType: normalizeConversationType(firstMetadataString(metadata, "channel_conversation_type")),
+		AgentUID:                agentUID,
+		ActorUID:                actorUID,
+	}, true
 }
 
 func topicTypeForID(topicID string) string {

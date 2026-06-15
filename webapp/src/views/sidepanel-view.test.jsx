@@ -128,9 +128,12 @@ describe('ChatListView sidebar sections', () => {
 
     expect(container.textContent).toContain('AI 助手');
     expect(container.textContent).toContain('Dev Agent');
+    const agentItem = Array.from(container.querySelectorAll('.v3-chat-item'))
+      .find((node) => node.textContent.includes('Dev Agent'));
+    expect(agentItem).toBeTruthy();
 
     await act(async () => {
-      Simulate.click(container.querySelector('.v3-chat-item'));
+      Simulate.click(agentItem);
       await Promise.resolve();
     });
 

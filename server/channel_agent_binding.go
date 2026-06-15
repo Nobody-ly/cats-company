@@ -49,8 +49,9 @@ type channelAgentConfirmRequest struct {
 }
 
 type channelAgentLinkRequest struct {
-	BindingID int64  `json:"binding_id"`
-	LinkToken string `json:"link_token"`
+	BindingID    int64  `json:"binding_id"`
+	LinkToken    string `json:"link_token"`
+	DeviceAccess bool   `json:"device_access,omitempty"`
 }
 
 type channelAgentLinkTokenPayload struct {
@@ -68,6 +69,20 @@ type channelAgentEntryResponse struct {
 	FeishuEntryStatus *feishuEntryConfigStatus `json:"feishu_entry_status,omitempty"`
 	QRValue           string                   `json:"qr_value,omitempty"`
 	QRKind            string                   `json:"qr_kind,omitempty"`
+}
+
+type channelAgentMobileLinkRequest struct {
+	AgentUID int64  `json:"agent_uid"`
+	Channel  string `json:"channel"`
+}
+
+type channelAgentMobileLinkResponse struct {
+	Entry        channelAgentEntryResponse `json:"entry"`
+	SceneKey     string                    `json:"scene_key"`
+	ExpiresAt    time.Time                 `json:"expires_at"`
+	ChannelQRURL string                    `json:"channel_qr_url,omitempty"`
+	QRValue      string                    `json:"qr_value,omitempty"`
+	QRKind       string                    `json:"qr_kind,omitempty"`
 }
 
 type feishuEntryConfigStatus struct {
@@ -169,10 +184,25 @@ func (h *ChannelAgentBindingHandler) HandleAgentEntryPreview(w http.ResponseWrit
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scene_key"})
 		return
 	}
+	responseSceneKey := sceneKey
 	entry, err := bindings.GetChannelAgentEntryBySceneKey(sceneKey)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to preview entry"})
 		return
+	}
+	if entry == nil && strings.HasPrefix(sceneKey, "m.") {
+		link, linkErr := bindings.GetChannelIdentityMobileLink(sceneKey)
+		if linkErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to preview entry"})
+			return
+		}
+		if link != nil && link.Status == "active" && link.ExpiresAt.After(time.Now()) {
+			entry, _, err = resolveChannelIdentityMobileLink(h.db, sceneKey, link.Channel, link.ChannelAppID, false)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+				return
+			}
+		}
 	}
 	if entry == nil || entry.Status != "active" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
@@ -187,7 +217,7 @@ func (h *ChannelAgentBindingHandler) HandleAgentEntryPreview(w http.ResponseWrit
 	owner, _ := h.db.GetUser(entry.OwnerUID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"entry": h.entryResponse(r, entry),
+		"entry": h.entryResponseWithScene(r, entry, responseSceneKey),
 		"agent": map[string]interface{}{
 			"uid":          agent.ID,
 			"username":     agent.Username,
@@ -462,6 +492,10 @@ func (h *ChannelAgentBindingHandler) HandleResolveChannelAgentBinding(w http.Res
 		})
 		return
 	}
+	var deviceOwnerUID int64
+	if binding.DeviceAccessEnabled && binding.CanonicalUID > 0 {
+		deviceOwnerUID = binding.CanonicalUID
+	}
 	bodyID, _ := h.db.GetBotBodyID(binding.AgentUID)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"bound":            true,
@@ -472,8 +506,8 @@ func (h *ChannelAgentBindingHandler) HandleResolveChannelAgentBinding(w http.Res
 		"owner_uid":        binding.OwnerUID,
 		"canonical_uid":    binding.CanonicalUID,
 		"device_link_url":  channelBindingDeviceLinkURL(r, binding),
-		"device_linked":    binding.CanonicalUID > 0,
-		"device_owner_uid": binding.CanonicalUID,
+		"device_linked":    deviceOwnerUID > 0,
+		"device_owner_uid": deviceOwnerUID,
 		"agent": map[string]interface{}{
 			"uid":          agent.ID,
 			"username":     agent.Username,
@@ -518,7 +552,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only active human CatsCo users can link channel device authorization"})
 		return
 	}
-	binding, err := bindings.LinkChannelAgentBindingCanonicalUser(payload.BindingID, payload.ActorUID, payload.AgentUID, canonicalUID)
+	binding, err := bindings.LinkChannelAgentBindingCanonicalUser(payload.BindingID, payload.ActorUID, payload.AgentUID, canonicalUID, req.DeviceAccess)
 	if err != nil {
 		if errors.Is(err, store.ErrChannelAgentBindingAlreadyLinked) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "channel identity already linked to another CatsCo user"})
@@ -538,7 +572,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 			"actor_uid":        binding.ActorUID,
 			"agent_uid":        binding.AgentUID,
 			"canonical_uid":    binding.CanonicalUID,
-			"device_owner_uid": binding.CanonicalUID,
+			"device_owner_uid": int64(0),
 			"device_linked":    false,
 		})
 		return
@@ -611,15 +645,125 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 			}
 		}
 	}
+	deviceLinked := binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
+	deviceOwnerUID := int64(0)
+	if deviceLinked {
+		deviceOwnerUID = binding.CanonicalUID
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":           status,
 		"binding":          binding,
 		"actor_uid":        binding.ActorUID,
 		"agent_uid":        binding.AgentUID,
 		"canonical_uid":    binding.CanonicalUID,
-		"device_owner_uid": binding.CanonicalUID,
-		"device_linked":    binding.CanonicalUID > 0,
+		"device_owner_uid": deviceOwnerUID,
+		"device_linked":    deviceLinked,
 	})
+}
+
+// HandleCreateChannelIdentityMobileLink creates a short-lived mobile-channel
+// binding QR for the current CatsCo user. It is for "I already use this agent
+// on Web; let my Weixin/Feishu identity use the same agent". It only inherits
+// device access when the current user owns the virtual employee; other users
+// must authorize their own devices separately.
+func (h *ChannelAgentBindingHandler) HandleCreateChannelIdentityMobileLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	bindings, ok := h.bindingStore(w)
+	if !ok {
+		return
+	}
+	canonicalUID := UIDFromContext(r.Context())
+	if canonicalUID <= 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
+	user, err := h.db.GetUser(canonicalUID)
+	if err != nil || user == nil || user.AccountType != types.AccountHuman || user.State != 0 {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only active human CatsCo users can create mobile channel links"})
+		return
+	}
+	var req channelAgentMobileLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	channel := normalizeChannel(req.Channel)
+	if channel == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported channel"})
+		return
+	}
+	entry, err := h.findMobileIdentityEntry(bindings, canonicalUID, req.AgentUID, channel)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	if entry == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "channel entry is not available for this agent"})
+		return
+	}
+	expiresAt := time.Now().Add(10 * time.Minute)
+	mobileLink, err := bindings.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     mustGenerateMobileSceneKey(),
+		EntryID:      entry.ID,
+		Channel:      entry.Channel,
+		ChannelAppID: entry.ChannelAppID,
+		CanonicalUID: canonicalUID,
+		ExpiresAt:    expiresAt,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create mobile link"})
+		return
+	}
+	entryResp := h.entryResponseWithScene(r, entry, mobileLink.SceneKey)
+	resp := channelAgentMobileLinkResponse{
+		Entry:        entryResp,
+		SceneKey:     mobileLink.SceneKey,
+		ExpiresAt:    mobileLink.ExpiresAt,
+		ChannelQRURL: entryResp.ChannelQRURL,
+		QRValue:      entryResp.QRValue,
+		QRKind:       entryResp.QRKind,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *ChannelAgentBindingHandler) findMobileIdentityEntry(bindings store.ChannelAgentBindingStore, canonicalUID, agentUID int64, channel string) (*types.ChannelAgentEntry, error) {
+	if bindings == nil || canonicalUID <= 0 || agentUID <= 0 {
+		return nil, fmt.Errorf("invalid mobile channel link scope")
+	}
+	appID := canonicalEntryChannelAppID(channel, "")
+	entries, err := bindings.ListChannelAgentEntriesByChannelApp(channel, appID)
+	if err != nil {
+		return nil, err
+	}
+	var fallback *types.ChannelAgentEntry
+	for _, entry := range entries {
+		if entry == nil || entry.AgentUID != agentUID || entry.Status != "active" {
+			continue
+		}
+		if !channelEntryAgentAvailable(h.db, entry) {
+			continue
+		}
+		status, _, err := channelBindingStatusForEntryCanonicalUser(h.db, entry, canonicalUID)
+		if err != nil {
+			return nil, err
+		}
+		if status != types.ChannelAgentBindingActive {
+			continue
+		}
+		if types.NormalizeChannelAgentAccessMode(entry.AccessMode) == types.ChannelAgentAccessPublic {
+			return entry, nil
+		}
+		if fallback == nil {
+			fallback = entry
+		}
+	}
+	if fallback != nil {
+		return fallback, nil
+	}
+	return nil, fmt.Errorf("you must add this virtual employee on CatsCo before binding it to a mobile channel")
 }
 
 func (h *ChannelAgentBindingHandler) handleListAgentEntries(w http.ResponseWriter, r *http.Request) {
@@ -820,24 +964,31 @@ func (h *ChannelAgentBindingHandler) bindingStore(w http.ResponseWriter) (store.
 }
 
 func (h *ChannelAgentBindingHandler) entryResponse(r *http.Request, entry *types.ChannelAgentEntry) channelAgentEntryResponse {
+	return h.entryResponseWithScene(r, entry, safeEntrySceneKey(entry))
+}
+
+func (h *ChannelAgentBindingHandler) entryResponseWithScene(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) channelAgentEntryResponse {
+	if sceneKey == "" {
+		sceneKey = safeEntrySceneKey(entry)
+	}
 	resp := channelAgentEntryResponse{
 		ChannelAgentEntry: entry,
-		EntryURL:          entryURL(r, entry.SceneKey),
-		QRValue:           entryURL(r, entry.SceneKey),
+		EntryURL:          entryURL(r, sceneKey),
+		QRValue:           entryURL(r, sceneKey),
 		QRKind:            "web_entry",
 	}
 	if entry != nil && entry.Channel == "weixin" && weixinQRCodeConfiguredFromEnv() && entry.ChannelAppID == configuredWeixinAppID() {
-		resp.ChannelQRURL = publicBaseURL(r) + weixinQRCodePath(entry.SceneKey)
+		resp.ChannelQRURL = publicBaseURL(r) + weixinQRCodePath(sceneKey)
 		resp.QRValue = resp.ChannelQRURL
 		resp.QRKind = "weixin_official_qr"
 	}
 	if entry != nil && entry.Channel == "feishu" {
 		resp.QRValue = ""
 		resp.QRKind = "feishu_native_unconfigured"
-		feishuStatus := buildFeishuEntryConfigStatus(r, entry)
+		feishuStatus := buildFeishuEntryConfigStatusForScene(r, entry, sceneKey)
 		resp.FeishuEntryStatus = feishuStatus
 		appID := configuredFeishuAppID()
-		resp.FeishuOAuthURL = feishuOAuthStartURL(r, entry.SceneKey)
+		resp.FeishuOAuthURL = feishuOAuthStartURL(r, sceneKey)
 		if feishuStatus.Ready {
 			resp.ChannelQRURL = feishuStatus.NativeShortURL
 			resp.QRValue = resp.ChannelQRURL
@@ -871,10 +1022,17 @@ func configuredFeishuEntryURLTemplate() string {
 }
 
 func buildFeishuEntryConfigStatus(r *http.Request, entry *types.ChannelAgentEntry) *feishuEntryConfigStatus {
+	return buildFeishuEntryConfigStatusForScene(r, entry, safeEntrySceneKey(entry))
+}
+
+func buildFeishuEntryConfigStatusForScene(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) *feishuEntryConfigStatus {
+	if sceneKey == "" {
+		sceneKey = safeEntrySceneKey(entry)
+	}
 	status := &feishuEntryConfigStatus{
 		Status:                   "unconfigured",
-		LandingURL:               entryURL(r, safeEntrySceneKey(entry)),
-		OAuthURL:                 feishuOAuthStartURL(r, safeEntrySceneKey(entry)),
+		LandingURL:               entryURL(r, sceneKey),
+		OAuthURL:                 feishuOAuthStartURL(r, sceneKey),
 		OAuthCallbackURL:         publicBaseURL(r) + "/api/channel-agent-bindings/oauth/feishu/callback",
 		EventsCallbackURL:        publicBaseURL(r) + "/api/channels/feishu/events",
 		NativeTemplateConfigured: configuredFeishuEntryURLTemplate() != "",
@@ -922,7 +1080,7 @@ func buildFeishuEntryConfigStatus(r *http.Request, entry *types.ChannelAgentEntr
 		}
 		status.Reasons = append(status.Reasons, "生产环境缺少 CATSCO_FEISHU_EVENT_VERIFICATION_TOKEN，飞书消息回调应 fail-closed")
 	}
-	nativeURL := feishuNativeEntryURL(r, entry)
+	nativeURL := feishuNativeEntryURLForScene(r, entry, sceneKey)
 	status.NativeURL = nativeURL
 	status.NativeURLValid = nativeURL == "" || isUsableRedirectURL(nativeURL)
 	if nativeURL != "" && !status.NativeURLValid {
@@ -934,7 +1092,7 @@ func buildFeishuEntryConfigStatus(r *http.Request, entry *types.ChannelAgentEntr
 	if len(status.Reasons) == 0 {
 		status.Ready = true
 		status.Status = "ready"
-		status.NativeShortURL = feishuNativeEntryShortURL(r, entry.SceneKey)
+		status.NativeShortURL = feishuNativeEntryShortURL(r, sceneKey)
 	}
 	return status
 }
@@ -954,20 +1112,27 @@ func safeEntrySceneKey(entry *types.ChannelAgentEntry) string {
 }
 
 func feishuNativeEntryURL(r *http.Request, entry *types.ChannelAgentEntry) string {
+	return feishuNativeEntryURLForScene(r, entry, safeEntrySceneKey(entry))
+}
+
+func feishuNativeEntryURLForScene(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) string {
 	template := configuredFeishuEntryURLTemplate()
 	if template == "" || entry == nil {
 		return ""
 	}
-	entryURLValue := entryURL(r, entry.SceneKey)
-	oauthURLValue := feishuOAuthStartURL(r, entry.SceneKey)
-	shortURLValue := feishuNativeEntryShortURL(r, entry.SceneKey)
+	if sceneKey == "" {
+		sceneKey = entry.SceneKey
+	}
+	entryURLValue := entryURL(r, sceneKey)
+	oauthURLValue := feishuOAuthStartURL(r, sceneKey)
+	shortURLValue := feishuNativeEntryShortURL(r, sceneKey)
 	appID := strings.TrimSpace(entry.ChannelAppID)
 	if appID == "" {
 		appID = configuredFeishuAppID()
 	}
 	replacer := strings.NewReplacer(
-		"{scene_key}", entry.SceneKey,
-		"{scene_key_encoded}", url.QueryEscape(entry.SceneKey),
+		"{scene_key}", sceneKey,
+		"{scene_key_encoded}", url.QueryEscape(sceneKey),
 		"{app_id}", appID,
 		"{app_id_encoded}", url.QueryEscape(appID),
 		"{agent_uid}", strconv.FormatInt(entry.AgentUID, 10),
@@ -1060,6 +1225,21 @@ func bindOrRequestChannelAgentAccess(
 	conversationID string,
 	conversationType string,
 ) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
+	return bindOrRequestChannelAgentAccessWithCanonical(db, bindings, entry, actorUID, channel, channelAppID, channelUserID, conversationID, conversationType, 0)
+}
+
+func bindOrRequestChannelAgentAccessWithCanonical(
+	db store.Store,
+	bindings store.ChannelAgentBindingStore,
+	entry *types.ChannelAgentEntry,
+	actorUID int64,
+	channel string,
+	channelAppID string,
+	channelUserID string,
+	conversationID string,
+	conversationType string,
+	canonicalUIDHint int64,
+) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
 	if db == nil || bindings == nil || entry == nil || actorUID <= 0 || strings.TrimSpace(channelUserID) == "" {
 		return nil, nil, fmt.Errorf("invalid channel agent access")
 	}
@@ -1084,12 +1264,24 @@ func bindOrRequestChannelAgentAccess(
 	if binding != nil && binding.Status == types.ChannelAgentBindingRejected {
 		return binding, nil, nil
 	}
-	if channelBindingTargetsEntry(binding, entry) {
+	if canonicalUIDHint <= 0 && channelBindingTargetsEntry(binding, entry) {
 		return binding, nil, nil
 	}
 	status := types.ChannelAgentBindingPendingLogin
 	canonicalUID := int64(0)
-	if binding != nil && binding.CanonicalUID > 0 {
+	if canonicalUIDHint > 0 {
+		existingIdentity, err := bindings.ResolveChannelAgentBindingForChannelUser(channel, strings.TrimSpace(channelAppID), strings.TrimSpace(channelUserID))
+		if err != nil {
+			return nil, nil, err
+		}
+		if existingIdentity != nil && existingIdentity.CanonicalUID > 0 && existingIdentity.CanonicalUID != canonicalUIDHint {
+			return nil, nil, store.ErrChannelAgentBindingAlreadyLinked
+		}
+		if binding != nil && binding.CanonicalUID > 0 && binding.CanonicalUID != canonicalUIDHint {
+			return nil, nil, store.ErrChannelAgentBindingAlreadyLinked
+		}
+		canonicalUID = canonicalUIDHint
+	} else if binding != nil && binding.CanonicalUID > 0 {
 		canonicalUID = binding.CanonicalUID
 	} else if conversationID != "" {
 		baseBinding, err := bindings.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
@@ -1147,6 +1339,7 @@ func bindOrRequestChannelAgentAccess(
 			}
 		}
 	}
+	deviceAccessEnabled := canonicalUID > 0 && canonicalUID == entry.OwnerUID
 	binding, err = bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:                 channel,
 		ChannelAppID:            strings.TrimSpace(channelAppID),
@@ -1155,6 +1348,7 @@ func bindOrRequestChannelAgentAccess(
 		ChannelConversationType: conversationType,
 		ActorUID:                actorUID,
 		CanonicalUID:            canonicalUID,
+		DeviceAccessEnabled:     deviceAccessEnabled,
 		OwnerUID:                entry.OwnerUID,
 		AgentUID:                entry.AgentUID,
 		EntryID:                 entry.ID,
@@ -1263,6 +1457,77 @@ func mustGenerateSceneKey() string {
 	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
+func mustGenerateMobileSceneKey() string {
+	sceneKey := "m." + mustGenerateSceneKey()
+	if len(sceneKey) > 64 {
+		panic("mobile channel link is too long")
+	}
+	return sceneKey
+}
+
+func resolveChannelIdentityMobileLink(db store.Store, sceneKey, channel, channelAppID string, consume bool) (*types.ChannelAgentEntry, int64, error) {
+	bindings, ok := db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, 0, errors.New("channel binding store not configured")
+	}
+	var link *types.ChannelIdentityMobileLink
+	var err error
+	if consume {
+		link, err = bindings.ConsumeChannelIdentityMobileLink(sceneKey, normalizeChannel(channel), strings.TrimSpace(channelAppID))
+	} else {
+		link, err = bindings.GetChannelIdentityMobileLink(sceneKey)
+	}
+	if err != nil || link == nil {
+		return nil, 0, err
+	}
+	if link.Status != "active" && !(consume && link.Status == "consumed") {
+		return nil, 0, nil
+	}
+	if !link.ExpiresAt.After(time.Now()) || normalizeChannel(link.Channel) != normalizeChannel(channel) {
+		return nil, 0, nil
+	}
+	if strings.TrimSpace(channelAppID) != "" && strings.TrimSpace(link.ChannelAppID) != strings.TrimSpace(channelAppID) {
+		return nil, 0, nil
+	}
+	entry, err := bindings.GetChannelAgentEntryByID(link.EntryID)
+	if err != nil || entry == nil {
+		return nil, 0, err
+	}
+	if entry.Status != "active" || normalizeChannel(entry.Channel) != normalizeChannel(channel) {
+		return nil, 0, nil
+	}
+	if strings.TrimSpace(channelAppID) != "" && strings.TrimSpace(entry.ChannelAppID) != strings.TrimSpace(channelAppID) {
+		return nil, 0, nil
+	}
+	if !channelEntryAgentAvailable(db, entry) {
+		return nil, 0, nil
+	}
+	user, err := db.GetUser(link.CanonicalUID)
+	if err != nil || user == nil || user.AccountType != types.AccountHuman || user.State != 0 {
+		return nil, 0, fmt.Errorf("mobile link user is not available")
+	}
+	status, _, err := channelBindingStatusForEntryCanonicalUser(db, entry, link.CanonicalUID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if status != types.ChannelAgentBindingActive {
+		return nil, 0, fmt.Errorf("mobile link user can no longer access this agent")
+	}
+	return entry, link.CanonicalUID, nil
+}
+
+func channelEntryAgentAvailable(db store.Store, entry *types.ChannelAgentEntry) bool {
+	if db == nil || entry == nil || entry.AgentUID <= 0 || entry.OwnerUID <= 0 {
+		return false
+	}
+	agent, err := db.GetUser(entry.AgentUID)
+	if err != nil || agent == nil || agent.AccountType != types.AccountBot || agent.State != 0 {
+		return false
+	}
+	ownerUID, err := db.GetBotOwner(entry.AgentUID)
+	return err == nil && ownerUID == entry.OwnerUID
+}
+
 func entryURL(r *http.Request, sceneKey string) string {
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("CATSCO_PUBLIC_BASE_URL")), "/")
 	if base == "" && r != nil {
@@ -1324,7 +1589,7 @@ func channelBindingRejected(binding *types.ChannelAgentBinding) bool {
 	return binding != nil && binding.Status == types.ChannelAgentBindingRejected
 }
 
-func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64) (*types.ChannelAgentBinding, error) {
+func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64, sourceMetadata ...map[string]interface{}) (*types.ChannelAgentBinding, error) {
 	if db == nil || actorUID <= 0 || agentUID <= 0 {
 		return nil, errors.New("invalid channel binding scope")
 	}
@@ -1332,7 +1597,17 @@ func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64) 
 	if !ok {
 		return nil, errors.New("channel binding store not configured")
 	}
-	binding, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)
+	var binding *types.ChannelAgentBinding
+	var err error
+	var metadata map[string]interface{}
+	if len(sourceMetadata) > 0 {
+		metadata = sourceMetadata[0]
+	}
+	if query, scoped := channelAgentBindingQueryFromMessageMetadata(metadata, actorUID, agentUID); scoped {
+		binding, err = bindings.ResolveChannelAgentBinding(query)
+	} else {
+		binding, err = bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)
+	}
 	if err != nil {
 		return nil, err
 	}

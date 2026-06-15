@@ -20,6 +20,7 @@ export default function ChannelDeviceLinkView({ bindingId, linkToken, user }) {
     api.linkChannelAgentBindingUser({
       binding_id: Number(bindingId),
       link_token: linkToken,
+      device_access: true,
     })
       .then(() => {
         setStatus('linked');

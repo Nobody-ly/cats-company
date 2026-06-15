@@ -23,6 +23,7 @@ func (a *Adapter) CreateSchema() error {
 		createChannelAgentAccessRequestsTable,
 		createChannelAgentBindingsTable,
 		createChannelAgentRoutesTable,
+		createChannelIdentityMobileLinksTable,
 		migrateUsersAddBotDisclose,
 		migrateMessagesAddReplyTo,
 		migrateBotConfigAddAPIKey,
@@ -35,6 +36,7 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentEntriesDefaultAccessMode,
 		migrateChannelAgentBindingsAddActorUID,
 		migrateChannelAgentBindingsAddCanonicalUID,
+		migrateChannelAgentBindingsAddDeviceAccessEnabled,
 		migrateMessagesAddCodeMode,
 		migrateMessagesAddClientMsgID,
 		migrateGroupsAddCreatedAtColumn,
@@ -282,6 +284,7 @@ CREATE TABLE IF NOT EXISTS channel_agent_bindings (
 	channel_conversation_type VARCHAR(32) NOT NULL DEFAULT 'p2p',
 	actor_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
 	canonical_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+	device_access_enabled BOOLEAN NOT NULL DEFAULT FALSE,
 	owner_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	agent_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     entry_id BIGINT DEFAULT NULL REFERENCES channel_agent_entries(id) ON DELETE SET NULL,
@@ -311,6 +314,22 @@ CREATE TABLE IF NOT EXISTS channel_agent_routes (
 );
 `
 
+const createChannelIdentityMobileLinksTable = `
+CREATE TABLE IF NOT EXISTS channel_identity_mobile_links (
+    id BIGSERIAL PRIMARY KEY,
+    scene_key VARCHAR(64) NOT NULL UNIQUE,
+    entry_id BIGINT NOT NULL REFERENCES channel_agent_entries(id) ON DELETE CASCADE,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    canonical_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ DEFAULT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`
+
 const migrateUsersAddBotDisclose = `ALTER TABLE users ADD COLUMN IF NOT EXISTS bot_disclose BOOLEAN NOT NULL DEFAULT FALSE;`
 const migrateMessagesAddReplyTo = `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to BIGINT DEFAULT NULL;`
 const migrateBotConfigAddAPIKey = `ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS api_key VARCHAR(128) DEFAULT NULL;`
@@ -323,6 +342,7 @@ const migrateChannelAgentEntriesAddAccessMode = `ALTER TABLE channel_agent_entri
 const migrateChannelAgentEntriesDefaultAccessMode = `ALTER TABLE channel_agent_entries ALTER COLUMN access_mode SET DEFAULT 'approval_required';`
 const migrateChannelAgentBindingsAddActorUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS actor_uid BIGINT DEFAULT NULL;`
 const migrateChannelAgentBindingsAddCanonicalUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS canonical_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL;`
+const migrateChannelAgentBindingsAddDeviceAccessEnabled = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS device_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;`
 const migrateChannelAgentBindingsUniqueIncludesAgent = `
 ALTER TABLE channel_agent_bindings DROP CONSTRAINT IF EXISTS uk_channel_agent_binding_identity;
 ALTER TABLE channel_agent_bindings ADD CONSTRAINT uk_channel_agent_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, agent_uid);
@@ -398,6 +418,8 @@ CREATE INDEX IF NOT EXISTS idx_channel_agent_routes_actor ON channel_agent_route
 CREATE INDEX IF NOT EXISTS idx_channel_agent_access_owner_agent ON channel_agent_access_requests (owner_uid, agent_uid, status);
 CREATE INDEX IF NOT EXISTS idx_channel_agent_access_actor_agent ON channel_agent_access_requests (actor_uid, agent_uid, status);
 CREATE INDEX IF NOT EXISTS idx_channel_agent_access_lookup ON channel_agent_access_requests (channel, channel_app_id, channel_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_channel_mobile_links_entry ON channel_identity_mobile_links (entry_id, status);
+CREATE INDEX IF NOT EXISTS idx_channel_mobile_links_canonical ON channel_identity_mobile_links (canonical_uid, status, expires_at);
 `
 
 const createUpdatedAtTriggers = `
@@ -418,5 +440,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_agent_routes_updated_at BEFORE UPDATE ON channel_agent_routes
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_agent_access_requests_updated_at BEFORE UPDATE ON channel_agent_access_requests
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE TRIGGER trg_channel_identity_mobile_links_updated_at BEFORE UPDATE ON channel_identity_mobile_links
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 `

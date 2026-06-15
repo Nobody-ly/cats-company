@@ -122,7 +122,7 @@ func (h *WeixinChannelHandler) HandleQRCode(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	appID := h.effectiveAppID("")
-	entry, err := h.activeWeixinEntry(sceneKey, appID)
+	entry, _, err := h.resolveWeixinEntryScene(sceneKey, appID, false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
 		return
@@ -135,7 +135,7 @@ func (h *WeixinChannelHandler) HandleQRCode(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "weixin official account is not configured"})
 		return
 	}
-	qr, err := h.api.CreatePermanentQRCode(r.Context(), entry.SceneKey)
+	qr, err := h.api.CreatePermanentQRCode(r.Context(), sceneKey)
 	if err != nil {
 		log.Printf("weixin qr create failed: %v", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to create weixin qr code"})
@@ -220,7 +220,7 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		return
 	}
 	appID := h.effectiveAppID(msg.ToUserName)
-	entry, err := h.activeWeixinEntry(sceneKey, appID)
+	entry, canonicalUIDHint, err := h.resolveWeixinEntryScene(sceneKey, appID, true)
 	if err != nil {
 		log.Printf("weixin scan entry lookup failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取虚拟员工入口失败，请稍后重试。")
@@ -236,7 +236,7 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "创建微信用户身份失败，请稍后重试。")
 		return
 	}
-	binding, accessRequest, err := h.bindOrRequestWeixinIdentity(entry, actorUID, appID, openID, "", "p2p")
+	binding, accessRequest, err := h.bindOrRequestWeixinIdentityWithCanonical(entry, actorUID, appID, openID, "", "p2p", canonicalUIDHint)
 	if err != nil {
 		log.Printf("bind weixin identity failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "保存虚拟员工绑定失败，请稍后重试。")
@@ -415,12 +415,30 @@ func (h *WeixinChannelHandler) activeWeixinEntry(sceneKey, appID string) (*types
 	return entry, nil
 }
 
+func (h *WeixinChannelHandler) resolveWeixinEntryScene(sceneKey, appID string, consumeMobileLink bool) (*types.ChannelAgentEntry, int64, error) {
+	entry, err := h.activeWeixinEntry(sceneKey, appID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if entry != nil {
+		return entry, 0, nil
+	}
+	if !strings.HasPrefix(strings.TrimSpace(sceneKey), "m.") {
+		return nil, 0, nil
+	}
+	return resolveChannelIdentityMobileLink(h.db, sceneKey, "weixin", appID, consumeMobileLink)
+}
+
 func (h *WeixinChannelHandler) bindWeixinIdentity(entry *types.ChannelAgentEntry, actorUID int64, appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, error) {
 	binding, _, err := h.bindOrRequestWeixinIdentity(entry, actorUID, appID, channelUserID, conversationID, conversationType)
 	return binding, err
 }
 
 func (h *WeixinChannelHandler) bindOrRequestWeixinIdentity(entry *types.ChannelAgentEntry, actorUID int64, appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
+	return h.bindOrRequestWeixinIdentityWithCanonical(entry, actorUID, appID, channelUserID, conversationID, conversationType, 0)
+}
+
+func (h *WeixinChannelHandler) bindOrRequestWeixinIdentityWithCanonical(entry *types.ChannelAgentEntry, actorUID int64, appID, channelUserID, conversationID, conversationType string, canonicalUIDHint int64) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
 	if entry == nil {
 		return nil, nil, errors.New("missing channel entry")
 	}
@@ -437,7 +455,7 @@ func (h *WeixinChannelHandler) bindOrRequestWeixinIdentity(entry *types.ChannelA
 	if strings.TrimSpace(appID) == "" && isProductionLikeEnv() {
 		return nil, nil, errors.New("weixin app id is required")
 	}
-	return bindOrRequestChannelAgentAccess(h.db, bindings, entry, actorUID, "weixin", strings.TrimSpace(appID), channelUserID, strings.TrimSpace(conversationID), conversationType)
+	return bindOrRequestChannelAgentAccessWithCanonical(h.db, bindings, entry, actorUID, "weixin", strings.TrimSpace(appID), channelUserID, strings.TrimSpace(conversationID), conversationType, canonicalUIDHint)
 }
 
 func (h *WeixinChannelHandler) entryAgentAvailable(entry *types.ChannelAgentEntry) bool {

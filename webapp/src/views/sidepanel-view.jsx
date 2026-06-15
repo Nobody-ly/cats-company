@@ -414,10 +414,12 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
           filteredAgents.map((agent) => {
             const agentId = agent.uid || agent.id;
             const isOnline = onlineStatusFor(onlineUsers, agentId, agent.is_online);
+            const topicId = agent.topic_id || p2pTopicId(user.uid, agentId);
             return (
               <div
                 key={agentId}
-                className={`v3-chat-item ${activeTopic === agent.topic_id ? 'active' : ''}`}
+                className={`v3-chat-item ${activeTopic === topicId ? 'active' : ''}`}
+                style={{opacity: 0.85, cursor: 'pointer'}}
                 onClick={() => handleSelectAgent(agent)}
               >
                 <span className="prefix" style={{display: 'flex', alignItems: 'center'}}><Bot size={18} /></span>

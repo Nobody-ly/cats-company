@@ -407,6 +407,23 @@ describe('MessagesView composer draft isolation', () => {
     expect(container.textContent).toContain('选择一个任务，下载示例文件');
   });
 
+  it('shows mobile binding action for bot friends identified by bot flag', async () => {
+    api.getFriends.mockResolvedValueOnce({
+      friends: [
+        {
+          id: 2,
+          username: 'dev-agent',
+          display_name: 'Dev Agent',
+          bot: true,
+        },
+      ],
+    });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    expect(container.querySelector('button[title="移动端使用"]')).toBeTruthy();
+  });
+
   it('clears peer typing immediately when a peer final reply arrives', async () => {
     await mountTopic(root, 'p2p_1_2');
 

@@ -286,6 +286,7 @@ type ChannelAgentBinding struct {
 	ChannelConversationType string     `json:"channel_conversation_type,omitempty"`
 	ActorUID                int64      `json:"actor_uid,omitempty"`
 	CanonicalUID            int64      `json:"canonical_uid,omitempty"`
+	DeviceAccessEnabled     bool       `json:"device_access_enabled,omitempty"`
 	OwnerUID                int64      `json:"owner_uid"`
 	AgentUID                int64      `json:"agent_uid"`
 	EntryID                 int64      `json:"entry_id,omitempty"`
@@ -293,6 +294,23 @@ type ChannelAgentBinding struct {
 	BoundAt                 time.Time  `json:"bound_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
 	LastUsedAt              *time.Time `json:"last_used_at,omitempty"`
+}
+
+// ChannelIdentityMobileLink is a one-time QR scene generated from an existing
+// CatsCo web identity so the same human user can bind Weixin/Feishu without
+// repeating the full CatsCo login or friend-request flow.
+type ChannelIdentityMobileLink struct {
+	ID           int64      `json:"id"`
+	SceneKey     string     `json:"scene_key"`
+	EntryID      int64      `json:"entry_id"`
+	Channel      string     `json:"channel"`
+	ChannelAppID string     `json:"channel_app_id,omitempty"`
+	CanonicalUID int64      `json:"canonical_uid"`
+	Status       string     `json:"status"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	ConsumedAt   *time.Time `json:"consumed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // ChannelAgentBindingQuery is the normalized lookup key used by channel

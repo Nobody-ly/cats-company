@@ -330,14 +330,15 @@ func TestBotRecipientIdentityUsesLinkedChannelDeviceOwner(t *testing.T) {
 	db.friends[friendKey(9, 42)] = types.FriendAccepted
 	db.friends[friendKey(42, 9)] = types.FriendAccepted
 	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:       "weixin",
-		ChannelAppID:  "wx_app",
-		ChannelUserID: "openid-100",
-		ActorUID:      100,
-		CanonicalUID:  7,
-		OwnerUID:      7,
-		AgentUID:      42,
-		Status:        "active",
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-100",
+		ActorUID:            100,
+		CanonicalUID:        7,
+		DeviceAccessEnabled: true,
+		OwnerUID:            7,
+		AgentUID:            42,
+		Status:              "active",
 	}); err != nil {
 		t.Fatalf("seed channel binding: %v", err)
 	}
@@ -376,6 +377,12 @@ func TestBotRecipientIdentityUsesLinkedChannelDeviceOwner(t *testing.T) {
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
 		TopicID: "p2p_100_42",
 		Content: json.RawMessage(`"查一下我的电脑文件"`),
+		Metadata: map[string]interface{}{
+			"source_channel":            "weixin",
+			"channel_app_id":            "wx_app",
+			"channel_user_id":           "openid-100",
+			"channel_conversation_type": "p2p",
+		},
 	})
 	if err != nil {
 		t.Fatalf("normalize request: %v", err)
@@ -412,14 +419,15 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	db.friends[friendKey(9, 42)] = types.FriendAccepted
 	db.friends[friendKey(42, 9)] = types.FriendAccepted
 	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:       "weixin",
-		ChannelAppID:  "wx_app",
-		ChannelUserID: "openid-100",
-		ActorUID:      100,
-		CanonicalUID:  9,
-		OwnerUID:      7,
-		AgentUID:      42,
-		Status:        "active",
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-100",
+		ActorUID:            100,
+		CanonicalUID:        9,
+		DeviceAccessEnabled: true,
+		OwnerUID:            7,
+		AgentUID:            42,
+		Status:              "active",
 	}); err != nil {
 		t.Fatalf("seed channel binding: %v", err)
 	}
@@ -458,6 +466,12 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
 		TopicID: "p2p_100_42",
 		Content: json.RawMessage(`"在我的电脑上写一个文件"`),
+		Metadata: map[string]interface{}{
+			"source_channel":            "weixin",
+			"channel_app_id":            "wx_app",
+			"channel_user_id":           "openid-100",
+			"channel_conversation_type": "p2p",
+		},
 	})
 	if err != nil {
 		t.Fatalf("normalize request: %v", err)

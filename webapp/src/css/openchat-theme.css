@@ -477,6 +477,120 @@ body {
   margin-bottom: 16px;
 }
 
+.mobile-channel-bind-modal {
+  width: 380px;
+  max-width: min(92vw, 380px);
+}
+
+.mobile-channel-bind-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.mobile-channel-bind-header .oc-modal-title {
+  margin-bottom: 4px;
+}
+
+.mobile-channel-bind-subtitle {
+  color: var(--oc-text-secondary);
+  font-size: 13px;
+}
+
+.mobile-channel-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mobile-channel-tabs button {
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--oc-border);
+  background: var(--oc-bg-secondary);
+  color: var(--oc-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mobile-channel-tabs button.active {
+  background: var(--oc-primary);
+  border-color: var(--oc-primary);
+  color: #fff;
+}
+
+.mobile-channel-copy {
+  color: var(--oc-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+
+.mobile-channel-qr-wrap {
+  min-height: 230px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.mobile-channel-qr-box,
+.mobile-channel-qr-img {
+  width: 230px;
+  height: 230px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mobile-channel-qr-img {
+  object-fit: contain;
+}
+
+.mobile-channel-placeholder,
+.mobile-channel-error {
+  width: 100%;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  color: var(--oc-text-secondary);
+  text-align: center;
+  padding: 16px;
+}
+
+.mobile-channel-error {
+  color: var(--oc-danger);
+  background: rgba(255, 77, 79, 0.08);
+}
+
+.mobile-channel-expiry {
+  margin: -2px 0 12px;
+  color: var(--oc-text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mobile-channel-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.mobile-channel-actions .oc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 /* Profile / Me Tab */
 .oc-profile {
   padding: 20px 16px;

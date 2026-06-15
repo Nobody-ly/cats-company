@@ -1672,7 +1672,7 @@ func (h *Hub) broadcastToGroupWithMentions(groupID int64, msg *ServerMessage, ex
 				msg,
 				withCatscoIdentityMetadata(
 					msg.Data.Metadata,
-					h.buildCatscoIdentityMetadata(senderUID, m.UserID, msg.Data.Topic, int64(msg.Data.SeqID), normalizeContentText(msg.Data.Content)),
+					h.buildCatscoIdentityMetadata(senderUID, m.UserID, msg.Data.Topic, int64(msg.Data.SeqID), normalizeContentText(msg.Data.Content), catscoIdentityMetadataOptions{SourceMetadata: msg.Data.Metadata}),
 				),
 			)
 		}

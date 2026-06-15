@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -90,14 +92,19 @@ func TestChannelAgentEntryAndBindingFlow(t *testing.T) {
 		t.Fatalf("link status=%d body=%s", linkRec.Code, linkRec.Body.String())
 	}
 	var linked struct {
-		Status  string                    `json:"status"`
-		Binding types.ChannelAgentBinding `json:"binding"`
+		Status         string                    `json:"status"`
+		Binding        types.ChannelAgentBinding `json:"binding"`
+		DeviceLinked   bool                      `json:"device_linked"`
+		DeviceOwnerUID int64                     `json:"device_owner_uid"`
 	}
 	if err := json.Unmarshal(linkRec.Body.Bytes(), &linked); err != nil {
 		t.Fatalf("decode link response: %v", err)
 	}
 	if linked.Status != "linked" || linked.Binding.Status != types.ChannelAgentBindingActive || linked.Binding.CanonicalUID != 8 {
 		t.Fatalf("public link should activate without friend approval: %+v", linked)
+	}
+	if linked.DeviceLinked || linked.DeviceOwnerUID != 0 || linked.Binding.DeviceAccessEnabled {
+		t.Fatalf("public account binding must not automatically grant device access: %+v", linked)
 	}
 	if db.friends[friendKey(8, 43)] == types.FriendPending || db.friends[friendKey(43, 8)] == types.FriendPending {
 		t.Fatalf("public link should not create friend requests: %+v", db.friends)
@@ -167,6 +174,364 @@ func TestChannelAgentEntryCanKeepApprovalAndPublicEntries(t *testing.T) {
 	}
 	if !modes[types.ChannelAgentAccessApprovalRequired] || !modes[types.ChannelAgentAccessPublic] {
 		t.Fatalf("expected both access entries, got %+v entries=%+v", modes, listed.Entries)
+	}
+}
+
+func TestCreateChannelIdentityMobileLinkRequiresExistingAccess(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	_, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-private-weixin",
+		Channel:    "weixin",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/mobile-link", strings.NewReader(`{"agent_uid":43,"channel":"weixin"}`))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "must add") {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestCreateChannelIdentityMobileLinkUsesExistingFriendAccess(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	t.Setenv("CATSCO_WEIXIN_APP_ID", "wx_app")
+	t.Setenv("CATSCO_WEIXIN_APP_SECRET", "wx_secret")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-private-weixin",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "https://app.catsco.cc/api/channel-agent-bindings/mobile-link", strings.NewReader(`{"agent_uid":43,"channel":"weixin"}`))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp channelAgentMobileLinkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Entry.ID != entry.ID || resp.SceneKey == "" || !strings.HasPrefix(resp.SceneKey, "m.") {
+		t.Fatalf("unexpected mobile response: %+v", resp)
+	}
+	if resp.QRKind != "weixin_official_qr" || !strings.Contains(resp.ChannelQRURL, url.QueryEscape(resp.SceneKey)) {
+		t.Fatalf("unexpected QR metadata: %+v", resp)
+	}
+	previewReq := httptest.NewRequest(http.MethodGet, "/api/channel-agent-entry/preview?scene_key="+url.QueryEscape(resp.SceneKey), nil)
+	previewRec := httptest.NewRecorder()
+	handler.HandleAgentEntryPreview(previewRec, previewReq)
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("mobile preview status=%d body=%s", previewRec.Code, previewRec.Body.String())
+	}
+	var previewed struct {
+		Entry channelAgentEntryResponse `json:"entry"`
+	}
+	if err := json.Unmarshal(previewRec.Body.Bytes(), &previewed); err != nil {
+		t.Fatalf("decode mobile preview: %v", err)
+	}
+	if !strings.Contains(previewed.Entry.EntryURL, resp.SceneKey) {
+		t.Fatalf("mobile preview should preserve mobile scene in entry URL: %+v", previewed.Entry)
+	}
+	resolved, canonicalUID, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin", "wx_app", false)
+	if err != nil || resolved == nil || resolved.ID != entry.ID || canonicalUID != 9 {
+		t.Fatalf("resolve mobile link entry=%+v canonical=%d err=%v", resolved, canonicalUID, err)
+	}
+	consumed, canonicalUID, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin", "wx_app", true)
+	if err != nil || consumed == nil || consumed.ID != entry.ID || canonicalUID != 9 {
+		t.Fatalf("consume mobile link entry=%+v canonical=%d err=%v", consumed, canonicalUID, err)
+	}
+	reused, _, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin", "wx_app", true)
+	if err != nil {
+		t.Fatalf("reuse should not error: %v", err)
+	}
+	if reused != nil {
+		t.Fatalf("mobile link should be one-time, reused=%+v", reused)
+	}
+}
+
+func TestChannelIdentityMobileLinkRejectsInvalidOrRevokedAccess(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-private-weixin",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+
+	wrongApp, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.wrong-app",
+		EntryID:      entry.ID,
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		CanonicalUID: 9,
+		ExpiresAt:    time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create wrong app link: %v", err)
+	}
+	resolved, _, err := resolveChannelIdentityMobileLink(db, wrongApp.SceneKey, "weixin", "wx_other", true)
+	if err != nil {
+		t.Fatalf("wrong app should not error: %v", err)
+	}
+	if resolved != nil {
+		t.Fatalf("wrong app should not resolve: %+v", resolved)
+	}
+	// The failed app mismatch must not consume the code; a correct scan can still use it.
+	resolved, canonicalUID, err := resolveChannelIdentityMobileLink(db, wrongApp.SceneKey, "weixin", "wx_app", true)
+	if err != nil || resolved == nil || canonicalUID != 9 {
+		t.Fatalf("correct app should still consume link, resolved=%+v canonical=%d err=%v", resolved, canonicalUID, err)
+	}
+
+	expired, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.expired",
+		EntryID:      entry.ID,
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		CanonicalUID: 9,
+		ExpiresAt:    time.Now().Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create expired link: %v", err)
+	}
+	resolved, _, err = resolveChannelIdentityMobileLink(db, expired.SceneKey, "weixin", "wx_app", true)
+	if err != nil {
+		t.Fatalf("expired link should not error: %v", err)
+	}
+	if resolved != nil {
+		t.Fatalf("expired link should not resolve: %+v", resolved)
+	}
+
+	db.friends[friendKey(9, 43)] = types.FriendRejected
+	revokedAccess, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.revoked-access",
+		EntryID:      entry.ID,
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		CanonicalUID: 9,
+		ExpiresAt:    time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create revoked access link: %v", err)
+	}
+	resolved, _, err = resolveChannelIdentityMobileLink(db, revokedAccess.SceneKey, "weixin", "wx_app", true)
+	if err == nil || resolved != nil {
+		t.Fatalf("revoked access should fail closed, resolved=%+v err=%v", resolved, err)
+	}
+}
+
+func TestMobileChannelBindingDeviceAccessFollowsAgentOwnership(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "friend", DisplayName: "Friend", AccountType: types.AccountHuman}
+	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("weixin", "wx_app", "openid-friend"), DisplayName: "Weixin Friend", AccountType: types.AccountHuman}
+	db.users[101] = &types.User{ID: 101, Username: channelActorUsername("weixin", "wx_app", "openid-owner"), DisplayName: "Weixin Owner", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "owner-agent", DisplayName: "Owner Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-private-weixin",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+
+	friendBinding, _, err := bindOrRequestChannelAgentAccessWithCanonical(db, db, entry, 100, "weixin", "wx_app", "openid-friend", "", "p2p", 9)
+	if err != nil {
+		t.Fatalf("bind friend mobile identity: %v", err)
+	}
+	if friendBinding == nil || friendBinding.Status != types.ChannelAgentBindingActive || friendBinding.DeviceAccessEnabled {
+		t.Fatalf("friend mobile binding should chat without device access: %+v", friendBinding)
+	}
+	hub := NewHub(db, nil)
+	friendMetadata := map[string]interface{}{
+		"source_channel":            "weixin",
+		"channel_app_id":            "wx_app",
+		"channel_user_id":           "openid-friend",
+		"channel_conversation_type": "p2p",
+	}
+	if ownerUID, source := hub.deviceAccessOwnerUID(100, 43, friendMetadata); ownerUID != 0 || source != "channel_identity_unlinked" {
+		t.Fatalf("friend mobile binding should not expose device access, owner=%d source=%s", ownerUID, source)
+	}
+
+	ownerBinding, _, err := bindOrRequestChannelAgentAccessWithCanonical(db, db, entry, 101, "weixin", "wx_app", "openid-owner", "", "p2p", 7)
+	if err != nil {
+		t.Fatalf("bind owner mobile identity: %v", err)
+	}
+	if ownerBinding == nil || ownerBinding.Status != types.ChannelAgentBindingActive || !ownerBinding.DeviceAccessEnabled {
+		t.Fatalf("owner mobile binding should inherit own device access: %+v", ownerBinding)
+	}
+	ownerMetadata := map[string]interface{}{
+		"source_channel":            "weixin",
+		"channel_app_id":            "wx_app",
+		"channel_user_id":           "openid-owner",
+		"channel_conversation_type": "p2p",
+	}
+	if ownerUID, source := hub.deviceAccessOwnerUID(101, 43, ownerMetadata); ownerUID != 7 || source != "channel_identity_link" {
+		t.Fatalf("owner mobile binding should expose owner device access, owner=%d source=%s", ownerUID, source)
+	}
+}
+
+func TestChannelDeviceAccessDoesNotLeakAcrossConversations(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: "visitor", DisplayName: "Visitor", AccountType: types.AccountHuman}
+	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("weixin", "wx_app", "openid-shared"), DisplayName: "Weixin Visitor", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "weixin",
+		ChannelAppID:            "wx_app",
+		ChannelUserID:           "openid-shared",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		CanonicalUID:            8,
+		DeviceAccessEnabled:     true,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed p2p binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "weixin",
+		ChannelAppID:            "wx_app",
+		ChannelUserID:           "openid-shared",
+		ChannelConversationID:   "chat-group",
+		ChannelConversationType: "group",
+		ActorUID:                100,
+		CanonicalUID:            8,
+		DeviceAccessEnabled:     false,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed group binding: %v", err)
+	}
+
+	hub := NewHub(db, nil)
+	p2pMetadata := map[string]interface{}{
+		"source_channel":            "weixin",
+		"channel_app_id":            "wx_app",
+		"channel_user_id":           "openid-shared",
+		"channel_conversation_type": "p2p",
+	}
+	if ownerUID, source := hub.deviceAccessOwnerUID(100, 43, p2pMetadata); ownerUID != 8 || source != "channel_identity_link" {
+		t.Fatalf("p2p binding should keep explicit device access, owner=%d source=%s", ownerUID, source)
+	}
+	groupMetadata := map[string]interface{}{
+		"source_channel":            "weixin",
+		"channel_app_id":            "wx_app",
+		"channel_user_id":           "openid-shared",
+		"channel_conversation_id":   "chat-group",
+		"channel_conversation_type": "group",
+	}
+	if ownerUID, source := hub.deviceAccessOwnerUID(100, 43, groupMetadata); ownerUID != 0 || source != "channel_identity_unlinked" {
+		t.Fatalf("group binding must not inherit p2p device access, owner=%d source=%s", ownerUID, source)
+	}
+}
+
+func TestMobileChannelBindingRejectsExternalIdentityCanonicalConflict(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[10] = &types.User{ID: 10, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman}
+	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("weixin", "wx_app", "openid-same-1"), DisplayName: "Weixin Alice", AccountType: types.AccountHuman}
+	db.users[101] = &types.User{ID: 101, Username: channelActorUsername("weixin", "wx_app", "openid-same-2"), DisplayName: "Weixin Bob", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "agent-a", DisplayName: "Agent A", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "agent-b", DisplayName: "Agent B", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	db.friends[friendKey(10, 44)] = types.FriendAccepted
+	db.friends[friendKey(44, 10)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "weixin",
+		ChannelAppID:            "wx_app",
+		ChannelUserID:           "openid-same",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		CanonicalUID:            9,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed identity binding: %v", err)
+	}
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-second-agent",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     44,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed second entry: %v", err)
+	}
+
+	_, _, err = bindOrRequestChannelAgentAccessWithCanonical(db, db, entry, 101, "weixin", "wx_app", "openid-same", "", "p2p", 10)
+	if !errors.Is(err, store.ErrChannelAgentBindingAlreadyLinked) {
+		t.Fatalf("expected canonical identity conflict, got %v", err)
 	}
 }
 
@@ -612,7 +977,7 @@ func TestChannelAgentBindingLinkUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign link token: %v", err)
 	}
-	body := `{"binding_id":` + strconv.FormatInt(binding.ID, 10) + `,"link_token":"` + token + `"}`
+	body := `{"binding_id":` + strconv.FormatInt(binding.ID, 10) + `,"link_token":"` + token + `","device_access":true}`
 	req := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/link-user", strings.NewReader(body))
 	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
 	rec := httptest.NewRecorder()
@@ -723,6 +1088,58 @@ func TestChannelAgentPublicLinkDoesNotActivateApprovalBinding(t *testing.T) {
 	}
 	if updatedApproval.Status != types.ChannelAgentBindingPendingApproval || updatedApproval.ID != approvalBinding.ID {
 		t.Fatalf("public link should not activate approval binding, got %+v", updatedApproval)
+	}
+}
+
+func TestChannelAgentFriendCanExplicitlyEnableOwnDeviceAccess(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: "visitor", DisplayName: "Visitor", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.users[100] = &types.User{ID: 100, Username: "ch_weixin_user", DisplayName: "Weixin User", AccountType: types.AccountHuman}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	binding, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:             "weixin",
+		ChannelUserID:       "openid-friend",
+		ActorUID:            100,
+		CanonicalUID:        8,
+		DeviceAccessEnabled: false,
+		OwnerUID:            7,
+		AgentUID:            43,
+		Status:              types.ChannelAgentBindingActive,
+	})
+	if err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	body := `{"binding_id":` + strconv.FormatInt(binding.ID, 10) + `,"link_token":"` + validChannelAgentLinkToken(t, binding) + `","device_access":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/link-user", strings.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(8)))
+	rec := httptest.NewRecorder()
+	handler.HandleLinkChannelAgentBindingUser(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("link status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var linked struct {
+		Binding        types.ChannelAgentBinding `json:"binding"`
+		DeviceLinked   bool                      `json:"device_linked"`
+		DeviceOwnerUID int64                     `json:"device_owner_uid"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &linked); err != nil {
+		t.Fatalf("decode link response: %v", err)
+	}
+	if !linked.DeviceLinked || linked.DeviceOwnerUID != 8 || !linked.Binding.DeviceAccessEnabled {
+		t.Fatalf("friend explicit device authorization should target friend device owner: %+v", linked)
+	}
+	deviceOwnerUID, reason := NewHub(db, nil).deviceAccessOwnerUID(100, 43, map[string]interface{}{
+		"source_channel":            "weixin",
+		"channel_user_id":           "openid-friend",
+		"channel_conversation_type": "p2p",
+	})
+	if deviceOwnerUID != 8 || reason != "channel_identity_link" {
+		t.Fatalf("device access owner should be friend after explicit authorization, owner=%d reason=%q", deviceOwnerUID, reason)
 	}
 }
 
@@ -1241,6 +1658,7 @@ type channelAgentTestStore struct {
 	entries        map[int64]*types.ChannelAgentEntry
 	accessRequests map[string]*types.ChannelAgentAccessRequest
 	bindings       map[string]*types.ChannelAgentBinding
+	mobileLinks    map[string]*types.ChannelIdentityMobileLink
 	routes         map[string]*types.ChannelAgentRoute
 	friends        map[string]types.FriendStatus
 	messages       []*types.Message
@@ -1266,6 +1684,7 @@ func newChannelAgentTestStore() *channelAgentTestStore {
 		entries:        map[int64]*types.ChannelAgentEntry{},
 		accessRequests: map[string]*types.ChannelAgentAccessRequest{},
 		bindings:       map[string]*types.ChannelAgentBinding{},
+		mobileLinks:    map[string]*types.ChannelIdentityMobileLink{},
 		routes:         map[string]*types.ChannelAgentRoute{},
 		friends:        map[string]types.FriendStatus{},
 		messages:       []*types.Message{},
@@ -1485,6 +1904,48 @@ func (s *channelAgentTestStore) GetChannelAgentEntryByID(id int64) (*types.Chann
 	return cloneEntry(s.entries[id]), nil
 }
 
+func (s *channelAgentTestStore) CreateChannelIdentityMobileLink(link *types.ChannelIdentityMobileLink) (*types.ChannelIdentityMobileLink, error) {
+	if link == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	next := cloneMobileLink(link)
+	next.ID = s.nextID
+	s.nextID++
+	next.Channel = normalizeChannel(next.Channel)
+	if next.Status == "" {
+		next.Status = "active"
+	}
+	if next.CreatedAt.IsZero() {
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	s.mobileLinks[strings.TrimSpace(next.SceneKey)] = next
+	return cloneMobileLink(next), nil
+}
+
+func (s *channelAgentTestStore) GetChannelIdentityMobileLink(sceneKey string) (*types.ChannelIdentityMobileLink, error) {
+	return cloneMobileLink(s.mobileLinks[strings.TrimSpace(sceneKey)]), nil
+}
+
+func (s *channelAgentTestStore) ConsumeChannelIdentityMobileLink(sceneKey, channel, channelAppID string) (*types.ChannelIdentityMobileLink, error) {
+	link := s.mobileLinks[strings.TrimSpace(sceneKey)]
+	if link == nil || link.Status != "active" || !link.ExpiresAt.After(time.Now()) {
+		return nil, nil
+	}
+	if normalizeChannel(link.Channel) != normalizeChannel(channel) {
+		return nil, nil
+	}
+	if expectedAppID := strings.TrimSpace(channelAppID); expectedAppID != "" && strings.TrimSpace(link.ChannelAppID) != expectedAppID {
+		return nil, nil
+	}
+	now := time.Now()
+	link.Status = "consumed"
+	link.ConsumedAt = &now
+	link.UpdatedAt = now
+	return cloneMobileLink(link), nil
+}
+
 func (s *channelAgentTestStore) RequestChannelAgentAccess(request *types.ChannelAgentAccessRequest) (*types.ChannelAgentAccessRequest, error) {
 	now := time.Now()
 	next := *request
@@ -1634,6 +2095,9 @@ func (s *channelAgentTestStore) UpsertChannelAgentBinding(binding *types.Channel
 		if next.EntryID <= 0 {
 			next.EntryID = existing.EntryID
 		}
+		if !next.DeviceAccessEnabled {
+			next.DeviceAccessEnabled = existing.DeviceAccessEnabled
+		}
 		next.BoundAt = existing.BoundAt
 	} else {
 		next.ID = s.nextID
@@ -1694,7 +2158,32 @@ func (s *channelAgentTestStore) ResolveChannelAgentBindingForActorAny(actorUID, 
 	return nil, nil
 }
 
-func (s *channelAgentTestStore) LinkChannelAgentBindingCanonicalUser(bindingID, actorUID, agentUID, canonicalUID int64) (*types.ChannelAgentBinding, error) {
+func (s *channelAgentTestStore) ResolveChannelAgentBindingForChannelUser(channel, channelAppID, channelUserID string) (*types.ChannelAgentBinding, error) {
+	var selected *types.ChannelAgentBinding
+	for _, binding := range s.bindings {
+		if binding.Channel != channel || binding.ChannelAppID != channelAppID || binding.ChannelUserID != channelUserID || binding.CanonicalUID <= 0 {
+			continue
+		}
+		if selected == nil || binding.UpdatedAt.After(selected.UpdatedAt) {
+			selected = binding
+		}
+	}
+	if selected == nil {
+		return nil, nil
+	}
+	return cloneBinding(selected), nil
+}
+
+func (s *channelAgentTestStore) ResolveChannelAgentDeviceAccessBindingForActorAny(actorUID, agentUID int64) (*types.ChannelAgentBinding, error) {
+	for _, binding := range s.bindings {
+		if binding.ActorUID == actorUID && binding.AgentUID == agentUID && binding.Status == "active" && binding.CanonicalUID > 0 && binding.DeviceAccessEnabled {
+			return cloneBinding(binding), nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *channelAgentTestStore) LinkChannelAgentBindingCanonicalUser(bindingID, actorUID, agentUID, canonicalUID int64, enableDeviceAccess bool) (*types.ChannelAgentBinding, error) {
 	s.linkCalls = append(s.linkCalls, channelAgentLinkCall{
 		BindingID:    bindingID,
 		ActorUID:     actorUID,
@@ -1709,12 +2198,23 @@ func (s *channelAgentTestStore) LinkChannelAgentBindingCanonicalUser(bindingID, 
 			if binding.CanonicalUID > 0 && binding.CanonicalUID != canonicalUID {
 				return nil, store.ErrChannelAgentBindingAlreadyLinked
 			}
+			for _, existing := range s.bindings {
+				if existing.ID == binding.ID {
+					continue
+				}
+				if existing.Channel == binding.Channel && existing.ChannelAppID == binding.ChannelAppID && existing.ChannelUserID == binding.ChannelUserID && existing.CanonicalUID > 0 && existing.CanonicalUID != canonicalUID {
+					return nil, store.ErrChannelAgentBindingAlreadyLinked
+				}
+			}
 			if binding.Status == types.ChannelAgentBindingRejected {
 				return cloneBinding(binding), nil
 			}
 			binding.CanonicalUID = canonicalUID
 			if binding.Status != types.ChannelAgentBindingActive {
 				binding.Status = types.ChannelAgentBindingPendingApproval
+			}
+			if enableDeviceAccess {
+				binding.DeviceAccessEnabled = true
 			}
 			binding.UpdatedAt = time.Now()
 			return cloneBinding(binding), nil
@@ -1771,6 +2271,18 @@ func cloneEntry(entry *types.ChannelAgentEntry) *types.ChannelAgentEntry {
 		return nil
 	}
 	next := *entry
+	return &next
+}
+
+func cloneMobileLink(link *types.ChannelIdentityMobileLink) *types.ChannelIdentityMobileLink {
+	if link == nil {
+		return nil
+	}
+	next := *link
+	if link.ConsumedAt != nil {
+		consumedAt := *link.ConsumedAt
+		next.ConsumedAt = &consumedAt
+	}
 	return &next
 }
 
