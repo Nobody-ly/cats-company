@@ -65,12 +65,16 @@ func TestFeishuEventURLVerification(t *testing.T) {
 func TestFeishuOAuthCallbackBindsActor(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Feishu Alice", AccountType: types.AccountHuman}
 	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
 	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
 	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
 		SceneKey:     "scene-feishu",
 		Channel:      "feishu",
 		ChannelAppID: "cli_app",
+		AccessMode:   types.ChannelAgentAccessPublic,
 		OwnerUID:     7,
 		AgentUID:     43,
 		Status:       "active",
@@ -107,8 +111,8 @@ func TestFeishuOAuthCallbackBindsActor(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "设备授权") || !strings.Contains(body, "/channel-device-link") || !strings.Contains(body, "binding_id=") || !strings.Contains(body, "link_token=") {
-		t.Fatalf("oauth success page should include device link guidance, body=%s", body)
+	if body := rec.Body.String(); !strings.Contains(body, "登录 CatsCo") || !strings.Contains(body, "/channel-device-link") || !strings.Contains(body, "binding_id=") || !strings.Contains(body, "link_token=") {
+		t.Fatalf("oauth success page should require CatsCo account link, body=%s", body)
 	}
 	binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
 		Channel:       "feishu",
@@ -118,7 +122,7 @@ func TestFeishuOAuthCallbackBindsActor(t *testing.T) {
 	if err != nil || binding == nil {
 		t.Fatalf("binding=%+v err=%v", binding, err)
 	}
-	if binding.ActorUID <= 0 || binding.AgentUID != 43 || binding.OwnerUID != 7 {
+	if binding.ActorUID <= 0 || binding.AgentUID != 43 || binding.OwnerUID != 7 || binding.CanonicalUID != 0 {
 		t.Fatalf("unexpected binding: %+v", binding)
 	}
 	actor := db.users[binding.ActorUID]
@@ -127,15 +131,125 @@ func TestFeishuOAuthCallbackBindsActor(t *testing.T) {
 	}
 }
 
-func TestFeishuOAuthCallbackUsesConfiguredAppID(t *testing.T) {
+func TestFeishuOAuthShortLinkRedirectsToStart(t *testing.T) {
+	handler := NewFeishuChannelHandler(newChannelAgentTestStore(), nil, FeishuChannelConfig{
+		AppID: "cli_app",
+	}, &fakeFeishuAPI{appID: "cli_app"})
+	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/f/scene-feishu", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleOAuthShortLink(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/start?scene_key=scene-feishu" {
+		t.Fatalf("redirect=%s", got)
+	}
+}
+
+func TestFeishuNativeEntryShortLinkRedirectsToNativeEntry(t *testing.T) {
+	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
+	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
+	t.Setenv("CATSCO_FEISHU_ENTRY_URL_TEMPLATE", "https://applink.feishu.cn/client/app/open?app_id={app_id}&scene={scene_key}&oauth={oauth_url_encoded}")
+	db := newChannelAgentTestStore()
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-feishu",
+		Channel:      "feishu",
+		ChannelAppID: "cli_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{
+		AppID: "cli_app",
+	}, &fakeFeishuAPI{appID: "cli_app"})
+	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/fn/scene-feishu", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleNativeEntryShortLink(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	want := "https://applink.feishu.cn/client/app/open?app_id=cli_app&scene=scene-feishu&oauth=https%3A%2F%2Fapp.catsco.cc%2Fapi%2Fchannel-agent-bindings%2Foauth%2Ffeishu%2Fstart%3Fscene_key%3Dscene-feishu"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Fatalf("redirect=%s", got)
+	}
+}
+
+func TestFeishuNativeEntryShortLinkRequiresTemplate(t *testing.T) {
+	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
+	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
+	db := newChannelAgentTestStore()
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-feishu",
+		Channel:      "feishu",
+		ChannelAppID: "cli_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{
+		AppID: "cli_app",
+	}, &fakeFeishuAPI{appID: "cli_app"})
+	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/fn/scene-feishu", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleNativeEntryShortLink(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "feishu native entry is not ready") {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestFeishuNativeEntryShortLinkRejectsAppIDMismatch(t *testing.T) {
+	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
+	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
+	t.Setenv("CATSCO_FEISHU_ENTRY_URL_TEMPLATE", "https://applink.feishu.cn/client/app/open?app_id={app_id}&scene={scene_key}")
+	db := newChannelAgentTestStore()
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-feishu",
+		Channel:      "feishu",
+		ChannelAppID: "legacy_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{
+		AppID: "cli_app",
+	}, &fakeFeishuAPI{appID: "cli_app"})
+	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/fn/scene-feishu", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleNativeEntryShortLink(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFeishuOAuthCallbackRejectsEntryAppIDMismatch(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cloud_app", "ou_user"), DisplayName: "Feishu Alice", AccountType: types.AccountHuman}
 	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
 	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
 	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
 		SceneKey:     "scene-feishu-legacy",
 		Channel:      "feishu",
 		ChannelAppID: "legacy_app",
+		AccessMode:   types.ChannelAgentAccessPublic,
 		OwnerUID:     7,
 		AgentUID:     43,
 		Status:       "active",
@@ -167,7 +281,7 @@ func TestFeishuOAuthCallbackUsesConfiguredAppID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/channel-agent-bindings/oauth/feishu/callback?code=code-1&state="+state, nil)
 	rec := httptest.NewRecorder()
 	handler.HandleOAuthCallback(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
@@ -175,39 +289,48 @@ func TestFeishuOAuthCallbackUsesConfiguredAppID(t *testing.T) {
 		ChannelAppID:  "cloud_app",
 		ChannelUserID: "ou_user",
 	})
-	if err != nil || binding == nil {
-		t.Fatalf("cloud app binding=%+v err=%v", binding, err)
-	}
-	legacy, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
-		Channel:       "feishu",
-		ChannelAppID:  "legacy_app",
-		ChannelUserID: "ou_user",
-	})
 	if err != nil {
-		t.Fatalf("legacy resolve: %v", err)
+		t.Fatalf("cloud app resolve: %v", err)
 	}
-	if legacy != nil {
-		t.Fatalf("legacy app should not receive OAuth binding: %+v", legacy)
+	if binding != nil {
+		t.Fatalf("mismatched entry should not receive OAuth binding: %+v", binding)
 	}
 }
 
 func TestFeishuMessageEventDeliversToBoundAgent(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
-	db.users[8] = &types.User{ID: 8, Username: "feishu-alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
 	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
 	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
 	_, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:       "feishu",
-		ChannelAppID:  "cli_app",
-		ChannelUserID: "ou_user",
-		ActorUID:      8,
-		OwnerUID:      7,
-		AgentUID:      43,
-		Status:        "active",
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  "active",
 	})
 	if err != nil {
 		t.Fatalf("seed binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "test",
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
 	}
 	api := &fakeFeishuAPI{appID: "cli_app"}
 	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
@@ -253,15 +376,281 @@ func TestFeishuMessageEventDeliversToBoundAgent(t *testing.T) {
 	}
 }
 
+func TestFeishuMessageEventRequiresSelectedAgent(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  "active",
+	}); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	rec := sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_no_route", "查一下合同进度")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(db.messages) != 0 {
+		t.Fatalf("message should not be delivered without selected route: %+v", db.messages)
+	}
+	if len(api.sends) != 1 || !strings.Contains(api.sends[0].Text, "请先选择一个虚拟员工") {
+		t.Fatalf("send=%+v", api.sends)
+	}
+}
+
+func TestFeishuP2PBindingInheritsActivatedBaseBinding(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingPendingLogin,
+	}); err != nil {
+		t.Fatalf("seed base binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "oauth",
+	}); err != nil {
+		t.Fatalf("seed base route: %v", err)
+	}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_before_link", "查合同")
+	if len(db.messages) != 0 {
+		t.Fatalf("message should not deliver before CatsCo link: %+v", db.messages)
+	}
+	if len(api.sends) != 1 || !strings.Contains(api.sends[0].Text, "请先登录 CatsCo 账号") {
+		t.Fatalf("send=%+v", api.sends)
+	}
+
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("activate base binding: %v", err)
+	}
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_after_link", "查合同")
+	if len(db.messages) != 1 || db.messages[0].TopicID != "p2p_8_43" || db.messages[0].Content != "查合同" {
+		t.Fatalf("message should deliver after base link activation: %+v", db.messages)
+	}
+	sessionBinding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		AgentUID:                43,
+		ActorUID:                8,
+	})
+	if err != nil || sessionBinding == nil || sessionBinding.Status != types.ChannelAgentBindingActive || sessionBinding.CanonicalUID != 8 {
+		t.Fatalf("session binding should inherit active base binding, got %+v err=%v", sessionBinding, err)
+	}
+}
+
+func TestFeishuGatewaySwitchesCurrentAgentWithoutOverwritingBindings(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "finance-agent", DisplayName: "Finance Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	db.friends[friendKey(8, 44)] = types.FriendAccepted
+	db.friends[friendKey(44, 8)] = types.FriendAccepted
+	for _, seed := range []struct {
+		scene string
+		agent int64
+	}{
+		{"scene-contract", 43},
+		{"scene-finance", 44},
+	} {
+		if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+			SceneKey:     seed.scene,
+			Channel:      "feishu",
+			ChannelAppID: "cli_app",
+			AccessMode:   types.ChannelAgentAccessApprovalRequired,
+			OwnerUID:     7,
+			AgentUID:     seed.agent,
+			Status:       "active",
+		}); err != nil {
+			t.Fatalf("seed entry: %v", err)
+		}
+		if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+			Channel:                 "feishu",
+			ChannelAppID:            "cli_app",
+			ChannelUserID:           "ou_user",
+			ChannelConversationID:   "oc_chat_1",
+			ChannelConversationType: "p2p",
+			ActorUID:                8,
+			CanonicalUID:            8,
+			OwnerUID:                7,
+			AgentUID:                seed.agent,
+			Status:                  "active",
+		}); err != nil {
+			t.Fatalf("seed binding: %v", err)
+		}
+	}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_switch_a", "切换到 Contract Agent")
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_msg_a", "查合同")
+	if len(db.messages) != 1 || db.messages[0].TopicID != "p2p_8_43" || db.messages[0].Content != "查合同" {
+		t.Fatalf("contract delivery=%+v", db.messages)
+	}
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_switch_b", "切换到 Finance Agent")
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_msg_b", "查报销")
+	if len(db.messages) != 2 || db.messages[1].TopicID != "p2p_8_44" || db.messages[1].Content != "查报销" {
+		t.Fatalf("finance delivery=%+v", db.messages)
+	}
+	for _, agentUID := range []int64{43, 44} {
+		binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+			Channel:                 "feishu",
+			ChannelAppID:            "cli_app",
+			ChannelUserID:           "ou_user",
+			ChannelConversationID:   "oc_chat_1",
+			ChannelConversationType: "p2p",
+			AgentUID:                agentUID,
+		})
+		if err != nil || binding == nil || binding.AgentUID != agentUID {
+			t.Fatalf("binding for agent %d = %+v err=%v", agentUID, binding, err)
+		}
+	}
+}
+
+func TestFeishuGroupMessageIgnoredWithoutMentionOrCommand(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	rec := sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_group_1", "group", "om_group_1", "大家看一下这个合同")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(api.sends) != 0 || len(db.messages) != 0 {
+		t.Fatalf("group message should be ignored, sends=%+v messages=%+v", api.sends, db.messages)
+	}
+}
+
+func TestFeishuGroupMentionToOtherUserDoesNotTrigger(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	rec := sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_group_1", "group", "om_group_other", "@张三 帮我看合同")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(api.sends) != 0 || len(db.messages) != 0 {
+		t.Fatalf("mentioning another user should not trigger CatsCo, sends=%+v messages=%+v", api.sends, db.messages)
+	}
+}
+
+func TestFeishuGroupBindingLinksAreSentPrivately(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_group_1",
+		ChannelConversationType: "group",
+		ActorUID:                8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingPendingLogin,
+	}); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_group_1",
+		ChannelConversationType: "group",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "manual",
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_group_1", "group", "om_group_bind", "绑定账号")
+	if len(api.sends) != 2 {
+		t.Fatalf("expected private detail and group ack, sends=%+v", api.sends)
+	}
+	if api.sends[0].ReceiveIDType != "open_id" || api.sends[0].ReceiveID != "ou_user" || !strings.Contains(api.sends[0].Text, "请先登录 CatsCo 账号") {
+		t.Fatalf("private send=%+v", api.sends[0])
+	}
+	if api.sends[1].ReceiveIDType != "chat_id" || api.sends[1].ReceiveID != "oc_group_1" || strings.Contains(api.sends[1].Text, "channel-device-link") {
+		t.Fatalf("group ack should not contain binding link, send=%+v", api.sends[1])
+	}
+	if len(db.messages) != 0 {
+		t.Fatalf("group bind command should not deliver to model: %+v", db.messages)
+	}
+}
+
 func TestFeishuOutboundForwardsBotReply(t *testing.T) {
 	db := newChannelAgentTestStore()
-	db.users[8] = &types.User{ID: 8, Username: "feishu-alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
 	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
 	_, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:       "feishu",
 		ChannelAppID:  "cli_app",
 		ChannelUserID: "ou_user",
 		ActorUID:      8,
+		CanonicalUID:  8,
 		OwnerUID:      7,
 		AgentUID:      43,
 		Status:        "active",
@@ -281,4 +670,36 @@ func TestFeishuOutboundForwardsBotReply(t *testing.T) {
 	if api.sends[0].ReceiveIDType != "open_id" || api.sends[0].ReceiveID != "ou_user" || api.sends[0].Text != "合同进度正常。" {
 		t.Fatalf("send=%+v", api.sends[0])
 	}
+}
+
+func sendFeishuTextEvent(t *testing.T, handler *FeishuChannelHandler, appID, openID, chatID, chatType, messageID, text string) *httptest.ResponseRecorder {
+	t.Helper()
+	content, _ := json.Marshal(map[string]string{"text": text})
+	eventBody := map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{
+			"event_type": "im.message.receive_v1",
+			"app_id":     appID,
+		},
+		"event": map[string]interface{}{
+			"sender": map[string]interface{}{
+				"sender_type": "user",
+				"sender_id": map[string]interface{}{
+					"open_id": openID,
+				},
+			},
+			"message": map[string]interface{}{
+				"message_id":   messageID,
+				"chat_id":      chatID,
+				"chat_type":    chatType,
+				"message_type": "text",
+				"content":      string(content),
+			},
+		},
+	}
+	body, _ := json.Marshal(eventBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/channels/feishu/events", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleEvents(rec, req)
+	return rec
 }

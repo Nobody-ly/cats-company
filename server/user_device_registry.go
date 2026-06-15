@@ -376,7 +376,7 @@ func (r *userDeviceRegistry) turnContextForOwnerDevices(actorUID int64, ownerUID
 		return DeviceTurnContext{}
 	}
 	if ownerUID <= 0 {
-		ownerUID = actorUID
+		return DeviceTurnContext{}
 	}
 	if len(devices) == 0 && len(unavailableCandidates) > 0 {
 		return DeviceTurnContext{
@@ -437,7 +437,7 @@ func (r *userDeviceRegistry) grantsForOwnerDevices(actorUID int64, ownerUID int6
 		return nil
 	}
 	if ownerUID <= 0 {
-		ownerUID = actorUID
+		return nil
 	}
 	createdAt := unixMillis(r.now())
 	expiresAt := unixMillis(r.now().Add(r.grantTT))
@@ -762,8 +762,7 @@ func isAllowedDeviceGrantRuntimeOperation(operation DeviceGrantOperation) bool {
 		DeviceGrantGrep,
 		DeviceGrantWriteFile,
 		DeviceGrantEditFile,
-		DeviceGrantSendFile,
-		DeviceGrantExecuteShell:
+		DeviceGrantSendFile:
 		return true
 	default:
 		return false

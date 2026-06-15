@@ -115,17 +115,24 @@ type AuthServiceStore interface {
 type ChannelAgentBindingStore interface {
 	EnsureChannelAgentEntry(entry *types.ChannelAgentEntry) (*types.ChannelAgentEntry, error)
 	ListChannelAgentEntries(ownerUID, agentUID int64) ([]*types.ChannelAgentEntry, error)
-	RegenerateChannelAgentEntry(id, ownerUID int64, sceneKey string) (*types.ChannelAgentEntry, error)
+	ListChannelAgentEntriesByChannelApp(channel, channelAppID string) ([]*types.ChannelAgentEntry, error)
+	RegenerateChannelAgentEntry(id, ownerUID int64, sceneKey, channelAppID string) (*types.ChannelAgentEntry, error)
+	GetChannelAgentEntryByID(id int64) (*types.ChannelAgentEntry, error)
 	GetChannelAgentEntryBySceneKey(sceneKey string) (*types.ChannelAgentEntry, error)
+	ListChannelAgentBindingsForAgent(ownerUID, agentUID int64) ([]*types.ChannelAgentBinding, error)
 	RequestChannelAgentAccess(request *types.ChannelAgentAccessRequest) (*types.ChannelAgentAccessRequest, error)
 	ResolveChannelAgentAccessRequest(query types.ChannelAgentBindingQuery) (*types.ChannelAgentAccessRequest, error)
 	ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) ([]*types.ChannelAgentBinding, error)
 	RejectChannelAgentAccessRequestsForActor(actorUID, agentUID, reviewerUID int64) error
+	ActivateChannelAgentBindingsForCanonicalUser(canonicalUID, agentUID, reviewerUID int64) ([]*types.ChannelAgentBinding, error)
+	RejectChannelAgentBindingsForCanonicalUser(canonicalUID, agentUID, reviewerUID int64) error
 	UpsertChannelAgentBinding(binding *types.ChannelAgentBinding) (*types.ChannelAgentBinding, error)
 	ResolveChannelAgentBinding(query types.ChannelAgentBindingQuery) (*types.ChannelAgentBinding, error)
 	ResolveChannelAgentBindingForActor(channel, channelAppID string, actorUID, agentUID int64) (*types.ChannelAgentBinding, error)
 	ResolveChannelAgentBindingForActorAny(actorUID, agentUID int64) (*types.ChannelAgentBinding, error)
 	LinkChannelAgentBindingCanonicalUser(bindingID, actorUID, agentUID, canonicalUID int64) (*types.ChannelAgentBinding, error)
+	UpsertChannelAgentRoute(route *types.ChannelAgentRoute) (*types.ChannelAgentRoute, error)
+	ResolveChannelAgentRoute(query types.ChannelAgentRouteQuery) (*types.ChannelAgentRoute, error)
 }
 
 // Store is the complete persistence boundary required by the current server.
