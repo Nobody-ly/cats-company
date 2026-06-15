@@ -1498,6 +1498,7 @@ body {
 }
 
 .v3-tool {
+  position: relative;
   width: 28px;
   height: 28px;
   border-radius: 4px;
@@ -1512,6 +1513,31 @@ body {
 
 .v3-tool:hover {
   background: rgba(255,255,255,0.08);
+}
+
+.v3-tool-with-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: #fff;
+  color: #111827;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  z-index: 30;
+}
+
+.v3-tool-with-tooltip:hover::after,
+.v3-tool-with-tooltip:focus-visible::after {
+  opacity: 1;
 }
 
 .v3-tool:disabled {
@@ -2428,6 +2454,178 @@ button.catsco-download-action:disabled {
 
 .oc-upload-btn:hover {
   background: var(--oc-bg);
+}
+
+.v3-phone-upload-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.v3-phone-upload-modal {
+  width: min(380px, 100%);
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.38);
+  color: var(--v3-text-main);
+}
+
+.v3-phone-upload-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 16px 10px;
+  border-bottom: 1px solid var(--v3-border);
+}
+
+.v3-phone-upload-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.v3-phone-upload-subtitle {
+  margin-top: 4px;
+  color: var(--v3-text-muted);
+  font-size: 13px;
+}
+
+.v3-phone-upload-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 16px 20px;
+}
+
+.v3-phone-upload-link {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--v3-border);
+  border-radius: 6px;
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.v3-phone-upload-loading,
+.v3-phone-upload-error {
+  width: 100%;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.v3-phone-upload-loading {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--v3-text-muted);
+}
+
+.v3-phone-upload-error {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fecaca;
+}
+
+.mobile-upload-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--v3-bg-app);
+  color: var(--v3-text-main);
+}
+
+.mobile-upload-card {
+  width: min(460px, 100%);
+  padding: 22px;
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+}
+
+.mobile-upload-card h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.mobile-upload-card p {
+  margin: 0 0 18px;
+  color: var(--v3-text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.mobile-upload-counter {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--v3-text-muted);
+}
+
+.mobile-upload-counter strong {
+  color: #86efac;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.mobile-upload-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  background: var(--v3-primary);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.mobile-upload-picker.is-disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.mobile-upload-picker input {
+  display: none;
+}
+
+.mobile-upload-status {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--v3-text-muted);
+  font-size: 13px;
+}
+
+.mobile-upload-hint {
+  margin-top: 10px;
+  color: var(--v3-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mobile-upload-list {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--v3-text-muted);
+  font-size: 13px;
 }
 
 /* Group Chat Styles */

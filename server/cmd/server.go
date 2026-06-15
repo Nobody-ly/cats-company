@@ -460,6 +460,8 @@ func main() {
 
 	// File upload (accepts both JWT and API Key for bot uploads)
 	mux.HandleFunc("/api/upload", chainHTTP(uploadHandler.HandleUpload, uploadIPLimit, authWithDB, uploadUserLimit))
+	mux.HandleFunc("/api/mobile-upload/sessions", chainHTTP(uploadHandler.HandleMobileUploadSession, uploadIPLimit, authWithDB, uploadUserLimit))
+	mux.HandleFunc("/api/mobile-upload/sessions/", uploadIPLimit(uploadHandler.HandleMobileUploadSession))
 	mux.HandleFunc("/api/reader/analyze", chainHTTP(readerHandler.HandleAnalyze, readerIPLimit, authWithDB, readerUserLimit))
 	mux.HandleFunc("/uploads/", uploadHandler.HandleServeFile)
 
@@ -479,13 +481,15 @@ func main() {
 	// Static files
 	if cfg.Static.Dir != "" {
 		fs := http.FileServer(http.Dir(cfg.Static.Dir))
-		mux.HandleFunc("/e/", func(w http.ResponseWriter, r *http.Request) {
+		serveSPAIndex := func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				server.WriteJSONPublic(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 				return
 			}
 			http.ServeFile(w, r, filepath.Join(cfg.Static.Dir, "index.html"))
-		})
+		}
+		mux.HandleFunc("/e/", serveSPAIndex)
+		mux.HandleFunc("/mobile-upload/", serveSPAIndex)
 		mux.Handle("/", fs)
 	}
 

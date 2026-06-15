@@ -6,6 +6,7 @@ import FriendsView from './friends-view';
 import MessagesView from './messages-view';
 import AgentEntryBindView from './agent-entry-bind-view';
 import ChannelDeviceLinkView from './channel-device-link-view';
+import MobileUploadView from './mobile-upload-view';
 import ProfileEditor from '../widgets/profile-editor';
 import FeedbackModal from '../widgets/feedback-modal';
 import CatsCoDownloadModal from '../widgets/catsco-download-modal';
@@ -135,6 +136,11 @@ function findConnectedLocalAgent(agents) {
 }
 
 export default function TinodeWeb() {
+  const mobileUploadMatch = window.location.pathname.match(/^\/mobile-upload\/([^/]+)$/);
+  if (mobileUploadMatch) {
+    return <MobileUploadView sessionId={decodeURIComponent(mobileUploadMatch[1])} />;
+  }
+
   const demoParams = new URLSearchParams(window.location.search);
   const showWorkflowDemo = demoParams.get('workflow_demo') === '1';
   if (showWorkflowDemo) {

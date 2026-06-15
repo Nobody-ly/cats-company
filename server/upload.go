@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -69,8 +70,27 @@ var allowedFileExts = map[string]bool{
 
 // UploadHandler handles file upload requests.
 type UploadHandler struct {
-	baseDir string
-	baseURL string
+	baseDir        string
+	baseURL        string
+	mobileSessions map[string]*mobileUploadSession
+	mobileMu       sync.Mutex
+}
+
+type mobileUploadSession struct {
+	ID        string          `json:"session_id"`
+	Topic     string          `json:"topic"`
+	CreatedAt time.Time       `json:"created_at"`
+	ExpiresAt time.Time       `json:"expires_at"`
+	Files     []uploadPayload `json:"files"`
+}
+
+type uploadPayload struct {
+	FileKey  string `json:"file_key"`
+	URL      string `json:"url"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Type     string `json:"type"`
+	MimeType string `json:"mime_type"`
 }
 
 // NewUploadHandler creates a new UploadHandler.
@@ -78,7 +98,11 @@ func NewUploadHandler(baseDir, baseURL string) *UploadHandler {
 	os.MkdirAll(filepath.Join(baseDir, "images"), 0755)
 	os.MkdirAll(filepath.Join(baseDir, "files"), 0755)
 	os.MkdirAll(filepath.Join(baseDir, "feedback"), 0755)
-	return &UploadHandler{baseDir: baseDir, baseURL: baseURL}
+	return &UploadHandler{
+		baseDir:        baseDir,
+		baseURL:        baseURL,
+		mobileSessions: make(map[string]*mobileUploadSession),
+	}
 }
 
 // HandleUpload handles POST /api/upload
@@ -160,14 +184,238 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	url := fmt.Sprintf("%s/%s/%s", h.baseURL, subDir, fileKey)
 
-	writeUploadJSON(w, http.StatusOK, map[string]interface{}{
-		"file_key":  fileKey,
-		"url":       url,
-		"name":      header.Filename,
-		"size":      written,
-		"type":      uploadType,
-		"mime_type": normalizedUploadMimeType(ext, header.Header.Get("Content-Type")),
+	writeUploadJSON(w, http.StatusOK, uploadPayload{
+		FileKey:  fileKey,
+		URL:      url,
+		Name:     header.Filename,
+		Size:     written,
+		Type:     uploadType,
+		MimeType: normalizedUploadMimeType(ext, header.Header.Get("Content-Type")),
 	})
+}
+
+// HandleMobileUploadSession handles short-lived QR upload sessions.
+func (h *UploadHandler) HandleMobileUploadSession(w http.ResponseWriter, r *http.Request) {
+	basePath := "/api/mobile-upload/sessions"
+	if r.URL.Path == basePath {
+		if r.Method != http.MethodPost {
+			writeUploadJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		h.handleCreateMobileUploadSession(w, r)
+		return
+	}
+
+	if !strings.HasPrefix(r.URL.Path, basePath+"/") {
+		writeUploadJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, basePath+"/")
+	sessionID := rest
+	isFileUpload := false
+	if strings.HasSuffix(rest, "/files") {
+		sessionID = strings.TrimSuffix(rest, "/files")
+		isFileUpload = true
+	}
+	if sessionID == "" {
+		writeUploadJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	if isFileUpload {
+		if r.Method != http.MethodPost {
+			writeUploadJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		h.handleMobileUploadFile(w, r, sessionID)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeUploadJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	h.handleGetMobileUploadSession(w, r, sessionID)
+}
+
+func (h *UploadHandler) handleCreateMobileUploadSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Topic string `json:"topic"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	sessionID := generateSessionID()
+	now := time.Now().UTC()
+	session := &mobileUploadSession{
+		ID:        sessionID,
+		Topic:     strings.TrimSpace(req.Topic),
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+		Files:     []uploadPayload{},
+	}
+
+	h.mobileMu.Lock()
+	h.mobileSessions[sessionID] = session
+	h.mobileMu.Unlock()
+
+	uploadPath := "/mobile-upload/" + sessionID
+	apiUploadPath := "/api/mobile-upload/sessions/" + sessionID + "/files"
+	uploadURL := uploadPath
+	if baseURL := mobileUploadBaseURL(r); baseURL != "" {
+		uploadURL = strings.TrimRight(baseURL, "/") + uploadPath
+	}
+
+	writeUploadJSON(w, http.StatusOK, map[string]interface{}{
+		"session_id":              sessionID,
+		"topic":                   session.Topic,
+		"upload_url":              uploadURL,
+		"relative_upload_url":     uploadPath,
+		"api_upload_url":          apiUploadPath,
+		"relative_api_upload_url": apiUploadPath,
+		"expires_at":              session.ExpiresAt,
+	})
+}
+
+func mobileUploadBaseURL(r *http.Request) string {
+	if configured := strings.TrimSpace(os.Getenv("CATSCO_MOBILE_UPLOAD_BASE_URL")); configured != "" {
+		return strings.TrimRight(configured, "/")
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwardedProto := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); forwardedProto != "" {
+		scheme = forwardedProto
+	}
+	host := strings.TrimSpace(r.Host)
+	if forwardedHost := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = forwardedHost
+	}
+	if host == "" {
+		return ""
+	}
+	return scheme + "://" + host
+}
+
+func firstForwardedValue(value string) string {
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, ",")
+	return strings.TrimSpace(parts[0])
+}
+
+func (h *UploadHandler) handleGetMobileUploadSession(w http.ResponseWriter, r *http.Request, sessionID string) {
+	session := h.getMobileSession(sessionID)
+	if session == nil {
+		writeUploadJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	writeUploadJSON(w, http.StatusOK, session)
+}
+
+func (h *UploadHandler) handleMobileUploadFile(w http.ResponseWriter, r *http.Request, sessionID string) {
+	session := h.getMobileSession(sessionID)
+	if session == nil {
+		writeUploadJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+
+	uploadType := r.URL.Query().Get("type")
+	if uploadType == "" {
+		uploadType = "file"
+	}
+	maxSize := maxFileSize
+	isImageUpload := uploadType == "image"
+	if isImageUpload {
+		maxSize = maxImageSize
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, int64(maxSize))
+	if err := r.ParseMultipartForm(int64(maxSize)); err != nil {
+		writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("file too large; maximum supported size is %dMB", maxUploadSizeMB)})
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": "no file provided"})
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if isImageUpload && !allowedImageExts[ext] {
+		writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image type"})
+		return
+	}
+	if !isImageUpload && !allowedFileExts[ext] {
+		writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": "file type not allowed"})
+		return
+	}
+	if isImageUpload {
+		contentType := header.Header.Get("Content-Type")
+		if !isAllowedImageContentType(contentType) {
+			writeUploadJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image type"})
+			return
+		}
+	}
+
+	fileKey := generateFileKey(ext)
+	subDir := "files"
+	if uploadType == "image" {
+		subDir = "images"
+	}
+	destPath := filepath.Join(h.baseDir, subDir, fileKey)
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		writeUploadJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload failed"})
+		return
+	}
+	dest, err := os.Create(destPath)
+	if err != nil {
+		writeUploadJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload failed"})
+		return
+	}
+	defer dest.Close()
+	written, err := io.Copy(dest, file)
+	if err != nil {
+		os.Remove(destPath)
+		writeUploadJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload failed"})
+		return
+	}
+
+	payload := uploadPayload{
+		FileKey:  fileKey,
+		URL:      fmt.Sprintf("%s/%s/%s", h.baseURL, subDir, fileKey),
+		Name:     header.Filename,
+		Size:     written,
+		Type:     uploadType,
+		MimeType: normalizedUploadMimeType(ext, header.Header.Get("Content-Type")),
+	}
+
+	h.mobileMu.Lock()
+	if current := h.mobileSessions[sessionID]; current != nil {
+		current.Files = append(current.Files, payload)
+	}
+	h.mobileMu.Unlock()
+
+	writeUploadJSON(w, http.StatusOK, payload)
+}
+
+func (h *UploadHandler) getMobileSession(sessionID string) *mobileUploadSession {
+	h.mobileMu.Lock()
+	defer h.mobileMu.Unlock()
+	session := h.mobileSessions[sessionID]
+	if session == nil {
+		return nil
+	}
+	if time.Now().UTC().After(session.ExpiresAt) {
+		delete(h.mobileSessions, sessionID)
+		return nil
+	}
+	copySession := *session
+	copySession.Files = append([]uploadPayload(nil), session.Files...)
+	return &copySession
 }
 
 // HandleServeFile handles GET /uploads/* - serves uploaded files.
@@ -266,6 +514,12 @@ func generateFileKey(ext string) string {
 	rand.Read(b)
 	ts := time.Now().Format("20060102")
 	return fmt.Sprintf("%s_%s%s", ts, hex.EncodeToString(b), ext)
+}
+
+func generateSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // writeUploadJSON writes a JSON response (local to upload to avoid conflict with friends.go writeJSON).
