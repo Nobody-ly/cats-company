@@ -124,6 +124,46 @@ func TestUserDeviceRegistrySelectsMentionedDeviceAndRemembersPreference(t *testi
 	}
 }
 
+func TestUserDeviceRegistryGroupSessionKeyScopesActor(t *testing.T) {
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	registry := newUserDeviceRegistry(10 * time.Minute)
+	registry.now = func() time.Time { return now }
+	if _, err := registry.register(7, RegisterUserDeviceRequest{
+		DeviceID:     "alice-laptop",
+		DisplayName:  "Alice Laptop",
+		BodyID:       "body-laptop",
+		Capabilities: []string{"read_file"},
+	}); err != nil {
+		t.Fatalf("register alice device: %v", err)
+	}
+	if _, err := registry.register(8, RegisterUserDeviceRequest{
+		DeviceID:     "bob-laptop",
+		DisplayName:  "Bob Laptop",
+		BodyID:       "body-bob",
+		Capabilities: []string{"read_file"},
+	}); err != nil {
+		t.Fatalf("register bob device: %v", err)
+	}
+
+	alice := registry.turnContext(7, "grp_80", "group", 42, "body-agent", "看文件")
+	bob := registry.turnContext(8, "grp_80", "group", 42, "body-agent", "看文件")
+	if len(alice.Grants) != 1 || len(bob.Grants) != 1 {
+		t.Fatalf("expected one grant each, alice=%#v bob=%#v", alice.Grants, bob.Grants)
+	}
+	if alice.Grants[0].SessionKey != "session:v2:catscompany:group:grp_80%3Aactor%3Ausr7:agent:usr42" {
+		t.Fatalf("unexpected alice group session key: %s", alice.Grants[0].SessionKey)
+	}
+	if bob.Grants[0].SessionKey != "session:v2:catscompany:group:grp_80%3Aactor%3Ausr8:agent:usr42" {
+		t.Fatalf("unexpected bob group session key: %s", bob.Grants[0].SessionKey)
+	}
+	if alice.Grants[0].SessionKey == bob.Grants[0].SessionKey {
+		t.Fatalf("group grants should be scoped by actor")
+	}
+	if alice.Selection == nil || alice.Selection.SessionKey != alice.Grants[0].SessionKey {
+		t.Fatalf("alice selection should use the same scoped key as grant: %#v", alice.Selection)
+	}
+}
+
 func TestDeviceHandlerRegistersHumanAndBotOwnerDevices(t *testing.T) {
 	store := &deviceHandlerStore{
 		users: map[int64]*types.User{
@@ -583,6 +623,33 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	selection := deviceSelectionMap(t, identity)
 	if selection["ownerUserId"] != "usr9" || selection["actorUserId"] != "usr100" {
 		t.Fatalf("unexpected delegated selection: %#v", selection)
+	}
+
+	canonicalPayload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_9_42",
+		Content: json.RawMessage(`"移动端继续操作我的电脑"`),
+		Metadata: withChannelBindingDeliveryMetadata(map[string]interface{}{
+			"source_channel":            "weixin",
+			"channel_app_id":            "wx_app",
+			"channel_user_id":           "openid-100",
+			"channel_conversation_type": "p2p",
+		}, binding),
+	})
+	if err != nil {
+		t.Fatalf("normalize canonical request: %v", err)
+	}
+	hub.fanoutNormalizedMessage(9, "p2p_9_42", 0, canonicalPayload, 202, nil)
+
+	var canonicalMsg ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &canonicalMsg)
+	canonicalIdentity := metadataMapFromServerMessage(t, &canonicalMsg, "catsco_identity")
+	canonicalPermissions, ok := canonicalIdentity["permissions"].(map[string]interface{})
+	if !ok || canonicalPermissions["device_owner_user_id"] != "usr9" || canonicalPermissions["device_owner_source"] != "actor" {
+		t.Fatalf("canonical mobile actor should use own device permissions: %#v", canonicalIdentity["permissions"])
+	}
+	canonicalGrant := firstDeviceGrantMap(t, canonicalIdentity)
+	if canonicalGrant["ownerUserId"] != "usr9" || canonicalGrant["actorUserId"] != "usr9" || canonicalGrant["deviceId"] != "bob-laptop" {
+		t.Fatalf("canonical mobile grant should target Bob's own device: %#v", canonicalGrant)
 	}
 }
 

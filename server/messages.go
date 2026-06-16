@@ -419,6 +419,9 @@ func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...m
 					return 0, "channel_identity_unapproved"
 				}
 				if binding.CanonicalUID > 0 && binding.DeviceAccessEnabled {
+					if binding.CanonicalUID == actorUID {
+						return actorUID, "actor"
+					}
 					return binding.CanonicalUID, "channel_identity_link"
 				}
 				return 0, "channel_identity_unlinked"
@@ -435,6 +438,14 @@ func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}
 	if !trustedChannelBindingDeliveryMetadata(metadata) {
 		return types.ChannelAgentBindingQuery{}, false
 	}
+	return channelAgentBindingQueryFromMetadata(metadata, actorUID, agentUID)
+}
+
+func channelAgentBindingQueryFromInboundMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
+	return channelAgentBindingQueryFromMetadata(metadata, actorUID, agentUID)
+}
+
+func channelAgentBindingQueryFromMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
 	channel := normalizeChannel(firstMetadataString(metadata, "source_channel", "channel"))
 	channelUserID := firstMetadataString(metadata, "channel_user_id")
 	if channel == "" || channelUserID == "" {

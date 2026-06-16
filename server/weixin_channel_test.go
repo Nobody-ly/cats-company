@@ -840,19 +840,36 @@ func TestWeixinInboundCanonicalDeliveryRecordsReplyRoute(t *testing.T) {
 	db.friends[friendKey(8, 43)] = types.FriendAccepted
 	db.friends[friendKey(43, 8)] = types.FriendAccepted
 	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:       "weixin",
-		ChannelAppID:  "wx_app",
-		ChannelUserID: "openid-mobile",
-		ActorUID:      100,
-		CanonicalUID:  8,
-		OwnerUID:      7,
-		AgentUID:      43,
-		Status:        types.ChannelAgentBindingActive,
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-mobile",
+		ActorUID:            100,
+		CanonicalUID:        8,
+		OwnerUID:            7,
+		AgentUID:            43,
+		DeviceAccessEnabled: true,
+		Status:              types.ChannelAgentBindingActive,
 	}); err != nil {
 		t.Fatalf("seed binding: %v", err)
 	}
 	api := &fakeWeixinAPI{appID: "wx_app"}
 	hub := NewHub(db, nil)
+	hub.userDevices.now = func() time.Time { return time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC) }
+	device, err := hub.userDevices.register(8, RegisterUserDeviceRequest{
+		DeviceID:       "alice-phone-linked-laptop",
+		DisplayName:    "Alice Laptop",
+		BodyID:         "body-alice",
+		InstallationID: "install-alice",
+		Capabilities:   []string{"read_file", "write_file"},
+	})
+	if err != nil {
+		t.Fatalf("register canonical user device: %v", err)
+	}
+	deviceClient := &Client{uid: 8, accountType: types.AccountHuman, deviceOwnerUID: 8, deviceID: "alice-phone-linked-laptop", deviceBodyID: "body-alice", deviceInstallationID: "install-alice", send: make(chan []byte, 1)}
+	botClient := &Client{uid: 43, accountType: types.AccountBot, bodyID: "body-agent", send: make(chan []byte, 1)}
+	hub.addClient(deviceClient)
+	hub.addClient(botClient)
+	hub.bindDeviceClient(8, device, deviceClient)
 	dispatcher := NewChannelOutboundDispatcher(db, nil, "").WithWeixin(api, "wx_app")
 	hub.SetChannelOutboundDispatcher(dispatcher)
 	topicID := p2pTopicID(8, 43)
@@ -867,6 +884,17 @@ func TestWeixinInboundCanonicalDeliveryRecordsReplyRoute(t *testing.T) {
 	}
 	if len(db.messages) != 1 || db.messages[0].FromUID != 8 || db.messages[0].TopicID != topicID {
 		t.Fatalf("mobile message should persist in canonical topic, messages=%+v", db.messages)
+	}
+	var inbound ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &inbound)
+	identity := metadataMapFromServerMessage(t, &inbound, "catsco_identity")
+	permissions, ok := identity["permissions"].(map[string]interface{})
+	if !ok || permissions["device_owner_user_id"] != "usr8" || permissions["device_owner_source"] != "actor" {
+		t.Fatalf("canonical mobile inbound should use the CatsCo user's own device context: %#v", identity["permissions"])
+	}
+	grant := firstDeviceGrantMap(t, identity)
+	if grant["ownerUserId"] != "usr8" || grant["actorUserId"] != "usr8" || grant["deviceId"] != "alice-phone-linked-laptop" {
+		t.Fatalf("canonical mobile inbound should issue self-owner device grant: %#v", grant)
 	}
 
 	if err := dispatcher.ForwardBotReply(context.Background(), 8, 43, topicID, "继续处理"); err != nil {

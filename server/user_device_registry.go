@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -411,7 +412,7 @@ func (r *userDeviceRegistry) unavailableDeviceSelectionForOwner(actorUID int64, 
 	if agentUID > 0 {
 		agentID = formatUID(agentUID)
 	}
-	sessionKey := buildCatsCoSessionKey(topicID, topicType, agentID)
+	sessionKey := buildCatsCoSessionKey(topicID, topicType, agentID, actorUID)
 	return &DeviceSelection{
 		Kind:            "user_device_selection",
 		Source:          "catscompany",
@@ -453,7 +454,7 @@ func (r *userDeviceRegistry) grantsForOwnerDevices(actorUID int64, ownerUID int6
 	if agentUID > 0 {
 		agentID = formatUID(agentUID)
 	}
-	sessionKey := buildCatsCoSessionKey(topicID, topicType, agentID)
+	sessionKey := buildCatsCoSessionKey(topicID, topicType, agentID, actorUID)
 
 	grants := make([]ScopedDeviceGrant, 0, len(devices))
 	for _, device := range devices {
@@ -569,7 +570,7 @@ func (r *userDeviceRegistry) selectDeviceForTurn(
 	if agentUID > 0 {
 		agentID = formatUID(agentUID)
 	}
-	sessionKey := buildCatsCoSessionKey(topicID, topicType, agentID)
+	sessionKey := buildCatsCoSessionKey(topicID, topicType, agentID, actorUID)
 	base := DeviceSelection{
 		Kind:           "user_device_selection",
 		Source:         "catscompany",
@@ -855,12 +856,31 @@ func isAllowedDeviceGrantOperation(operation DeviceGrantOperation) bool {
 	}
 }
 
-func buildCatsCoSessionKey(topicID string, topicType string, agentID string) string {
-	parts := []string{"session", "v2", "catscompany", normalizeTopicTypeForSessionKey(topicType), topicID}
+func buildCatsCoSessionKey(topicID string, topicType string, agentID string, actorUID int64) string {
+	normalizedTopicType := normalizeTopicTypeForSessionKey(topicType)
+	sessionTopicID := strings.TrimSpace(topicID)
+	if normalizedTopicType == "group" && actorUID > 0 {
+		sessionTopicID = sessionTopicID + ":actor:" + formatUID(actorUID)
+	}
+	parts := []string{
+		"session",
+		"v2",
+		"catscompany",
+		normalizedTopicType,
+		encodeSessionKeyPart(sessionTopicID),
+	}
 	if agentID != "" {
-		parts = append(parts, "agent", agentID)
+		parts = append(parts, "agent", encodeSessionKeyPart(agentID))
 	}
 	return strings.Join(parts, ":")
+}
+
+func encodeSessionKeyPart(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return "unknown_topic"
+	}
+	return strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
 }
 
 func normalizeTopicTypeForSessionKey(value string) string {
