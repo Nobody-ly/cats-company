@@ -785,7 +785,7 @@ export default function MessagesView({
   const phoneUploadLink = resolvePhoneUploadLink(phoneUploadSession?.upload_url);
 
   useEffect(() => {
-    if (!phoneUploadDialogOpen || !phoneUploadSession?.session_id) return undefined;
+    if (!phoneUploadSession?.session_id) return undefined;
     let stopped = false;
     const sessionId = phoneUploadSession.session_id;
 
@@ -821,8 +821,11 @@ export default function MessagesView({
           });
         }
         if (nextAttachments.length > 0) {
-          setPendingAttachments((prev) => [...prev, ...nextAttachments]);
-          setAttachmentStatus({ tone: 'success', message: `手机已上传 ${nextAttachments.length} 个附件，发送后对方可见。` });
+          setPendingAttachments((prev) => {
+            const updated = [...prev, ...nextAttachments];
+            setAttachmentStatus({ tone: 'success', message: `手机已上传 ${updated.length} 个附件，发送后对方可见。` });
+            return updated;
+          });
         }
       } catch (err) {
         if (!stopped) setPhoneUploadError(err.message || '读取手机上传结果失败');
@@ -835,7 +838,7 @@ export default function MessagesView({
       stopped = true;
       clearInterval(timer);
     };
-  }, [phoneUploadDialogOpen, phoneUploadSession?.session_id, topic]);
+  }, [phoneUploadSession?.session_id, topic]);
 
   const handleDragEnter = (e) => {
     if (!hasFileDrag(e.dataTransfer)) return;
@@ -1224,9 +1227,9 @@ export default function MessagesView({
             <button
               className="v3-tool v3-tool-with-tooltip"
               onClick={openPhoneUploadDialog}
-              title="手机上传"
-              aria-label="手机上传"
-              data-tooltip="手机上传"
+              title="微信扫码上传"
+              aria-label="微信扫码上传"
+              data-tooltip="微信扫码上传"
               disabled={isUploadingAttachment}
               type="button"
             >
