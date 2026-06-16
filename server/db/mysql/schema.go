@@ -23,6 +23,7 @@ func (a *Adapter) CreateSchema() error {
 		createChannelAgentAccessRequestsTable,
 		createChannelAgentBindingsTable,
 		createChannelAgentRoutesTable,
+		createChannelIdentityMobileLinksTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -54,6 +55,7 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentEntriesDefaultAccessMode,
 		migrateChannelAgentBindingsAddActorUID,
 		migrateChannelAgentBindingsAddCanonicalUID,
+		migrateChannelAgentBindingsAddDeviceAccessEnabled,
 		migrateChannelAgentEntriesOwnerAgentIndex,
 		migrateChannelAgentBindingsLookupIndex,
 		migrateChannelAgentBindingsActorAgentIndex,
@@ -346,6 +348,7 @@ CREATE TABLE IF NOT EXISTS channel_agent_bindings (
     channel_conversation_type VARCHAR(32) NOT NULL DEFAULT 'p2p',
     actor_uid BIGINT DEFAULT NULL,
     canonical_uid BIGINT DEFAULT NULL,
+    device_access_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     owner_uid BIGINT NOT NULL,
     agent_uid BIGINT NOT NULL,
     entry_id BIGINT DEFAULT NULL,
@@ -385,6 +388,26 @@ CREATE TABLE IF NOT EXISTS channel_agent_routes (
     INDEX idx_channel_agent_routes_actor (channel, channel_app_id, actor_uid, agent_uid),
     FOREIGN KEY (actor_uid) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (agent_uid) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createChannelIdentityMobileLinksTable = `
+CREATE TABLE IF NOT EXISTS channel_identity_mobile_links (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    scene_key VARCHAR(64) NOT NULL UNIQUE,
+    entry_id BIGINT NOT NULL,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    canonical_uid BIGINT NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_channel_mobile_links_entry (entry_id, status),
+    INDEX idx_channel_mobile_links_canonical (canonical_uid, status, expires_at),
+    FOREIGN KEY (entry_id) REFERENCES channel_agent_entries(id) ON DELETE CASCADE,
+    FOREIGN KEY (canonical_uid) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 
@@ -491,6 +514,10 @@ ALTER TABLE channel_agent_bindings ADD COLUMN actor_uid BIGINT DEFAULT NULL;
 
 const migrateChannelAgentBindingsAddCanonicalUID = `
 ALTER TABLE channel_agent_bindings ADD COLUMN canonical_uid BIGINT DEFAULT NULL;
+`
+
+const migrateChannelAgentBindingsAddDeviceAccessEnabled = `
+ALTER TABLE channel_agent_bindings ADD COLUMN device_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 `
 
 const migrateChannelAgentBindingsUniqueIncludesAgent = `

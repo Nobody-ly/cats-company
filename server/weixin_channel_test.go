@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openchat/openchat/server/store/types"
 )
@@ -133,6 +135,89 @@ func TestWeixinScanEventBindsActor(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "登录 CatsCo") || !strings.Contains(body, "/channel-device-link") || !strings.Contains(body, "binding_id=") || !strings.Contains(body, "link_token=") {
 		t.Fatalf("scan reply should require CatsCo account link, body=%s", body)
+	}
+}
+
+func TestWeixinMobileIdentityLinkReusesExistingCatsCoFriend(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-private-weixin",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	mobileLink, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.weixin-mobile",
+		EntryID:      entry.ID,
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		CanonicalUID: 9,
+		ExpiresAt:    time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create mobile link: %v", err)
+	}
+	sceneKey := mobileLink.SceneKey
+	api := &fakeWeixinAPI{appID: "wx_app"}
+	handler := NewWeixinChannelHandler(db, nil, WeixinChannelConfig{
+		AppID:      "wx_app",
+		EventToken: "token-1",
+	}, api)
+
+	qrReq := httptest.NewRequest(http.MethodGet, "/api/channel-agent-entry/weixin-qrcode?scene_key="+url.QueryEscape(sceneKey), nil)
+	qrRec := httptest.NewRecorder()
+	handler.HandleQRCode(qrRec, qrReq)
+	if qrRec.Code != http.StatusFound {
+		t.Fatalf("qr status=%d body=%s", qrRec.Code, qrRec.Body.String())
+	}
+	if len(api.qrs) != 1 || api.qrs[0] != sceneKey {
+		t.Fatalf("expected QR to use mobile scene, qrs=%+v scene=%s", api.qrs, sceneKey)
+	}
+
+	body := `<xml><ToUserName><![CDATA[gh_app]]></ToUserName><FromUserName><![CDATA[openid-mobile]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[subscribe]]></Event><EventKey><![CDATA[qrscene_` + sceneKey + `]]></EventKey></xml>`
+	req := httptest.NewRequest(http.MethodPost, "/api/channels/weixin/events?timestamp=1&nonce=2&signature="+weixinTestSignature("token-1", "1", "2"), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scan status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-mobile",
+	})
+	if err != nil || binding == nil {
+		t.Fatalf("binding=%+v err=%v", binding, err)
+	}
+	if binding.CanonicalUID != 9 || binding.OwnerUID != 7 || binding.AgentUID != 43 || binding.Status != types.ChannelAgentBindingActive {
+		t.Fatalf("unexpected binding: %+v", binding)
+	}
+	if len(db.accessRequests) != 0 {
+		t.Fatalf("mobile link should not create a new approval request: %+v", db.accessRequests)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "需要登录") || strings.Contains(body, "好友申请") || strings.Contains(body, "管理员通过") {
+		t.Fatalf("mobile link should bind directly, reply=%s", body)
+	}
+	reused, _, err := resolveChannelIdentityMobileLink(db, sceneKey, "weixin", "wx_app", true)
+	if err != nil {
+		t.Fatalf("reused mobile link should not error: %v", err)
+	}
+	if reused != nil {
+		t.Fatalf("mobile link should be consumed by scan event, reused=%+v", reused)
 	}
 }
 

@@ -185,6 +185,8 @@ export const api = {
     request('POST', '/api/channel-agent-bindings/confirm', payload),
   linkChannelAgentBindingUser: (payload) =>
     request('POST', '/api/channel-agent-bindings/link-user', payload),
+  createChannelIdentityMobileLink: (agentUid, channel) =>
+    request('POST', '/api/channel-agent-bindings/mobile-link', { agent_uid: agentUid, channel }),
 
   // Groups
   createGroup: (name, memberIds) => request('POST', '/api/groups/create', { name, member_ids: memberIds }),

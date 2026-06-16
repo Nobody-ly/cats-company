@@ -7,6 +7,7 @@ import GroupSettings from '../widgets/group-settings';
 import Avatar from '../widgets/avatar';
 import QRCode from '../widgets/qr-code';
 import { TutorialEmptyState, TutorialTaskModal, TutorialTaskPicker, TUTORIAL_TASKS } from '../widgets/tutorial-tasks';
+import MobileChannelBindModal from '../widgets/mobile-channel-bind-modal';
 import { IMAGE_UPLOAD_ACCEPT, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENT_SIZE_MB, inferAttachmentType, validateImageUpload } from '../utils/upload-rules';
 
 const PAGE_SIZE = 50;
@@ -90,6 +91,7 @@ export default function MessagesView({
   const [selectedTutorialTask, setSelectedTutorialTask] = useState(null);
   const [tutorialTasks, setTutorialTasks] = useState(TUTORIAL_TASKS);
   const [tutorialDismissed, setTutorialDismissed] = useState(() => localStorage.getItem(tutorialDismissStorageKey(user.uid, topic)) === '1');
+  const [showMobileLinkModal, setShowMobileLinkModal] = useState(false);
   const [showThinking, setShowThinking] = useState(() => {
     const saved = localStorage.getItem('cc_show_thinking');
     return saved === null ? true : saved === 'true';
@@ -255,6 +257,7 @@ export default function MessagesView({
     clearRuntimePlan();
     setReplyTo(null);
     setPreviewFile(null);
+    setShowMobileLinkModal(false);
     setMembers([]);
     setGroupInfo(null);
     setPeerProfile(null);
@@ -313,11 +316,17 @@ export default function MessagesView({
 
   const loadPeerProfile = async () => {
     try {
-      const res = await api.getFriends();
-      const friends = res.friends || [];
       const [left, right] = topic.replace('p2p_', '').split('_').map((n) => parseInt(n, 10));
       const peerId = left === user.uid ? right : left;
-      const peer = friends.find((friend) => friend.id === peerId);
+      const [friendsRes, agentsRes] = await Promise.all([
+        api.getFriends().catch(() => ({})),
+        api.getAgents ? api.getAgents().catch(() => ({})) : Promise.resolve({}),
+      ]);
+      const friends = friendsRes.friends || [];
+      const agents = agentsRes.agents || [];
+      const friendPeer = friends.find((friend) => friend.id === peerId);
+      const agentPeer = agents.find((agent) => agent.uid === peerId || agent.id === peerId);
+      const peer = agentPeer ? { ...friendPeer, ...agentPeer } : friendPeer;
       if (peer) setPeerProfile(peer);
     } catch (e) {
     }
@@ -903,6 +912,14 @@ export default function MessagesView({
     return name.includes(mentionFilter);
   });
 
+  const peerUID = useMemo(() => {
+    if (isGroup || !topic || !String(topic).startsWith('p2p_')) return 0;
+    const [left, right] = String(topic).replace('p2p_', '').split('_').map((n) => parseInt(n, 10));
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return 0;
+    return left === user.uid ? right : left;
+  }, [isGroup, topic, user.uid]);
+  const peerIsBot = peerProfile?.bot === true || peerProfile?.is_bot === true || peerProfile?.account_type === 'bot';
+  const canBindMobileChannel = !isGroup && peerUID > 0 && peerIsBot;
   const displayName = isGroup ? (groupInfo?.name || topicName || topic) : (peerProfile?.display_name || peerProfile?.username || topicName || topic);
   const displayAvatarUrl = isGroup ? (groupInfo?.avatar_url || topicAvatarUrl) : (peerProfile?.avatar_url || topicAvatarUrl);
 
@@ -942,7 +959,7 @@ export default function MessagesView({
     return {
       name: peerProfile?.display_name || peerProfile?.username || topicName || topic,
       avatarUrl: peerProfile?.avatar_url || topicAvatarUrl,
-      isBot: peerProfile?.account_type === 'bot',
+      isBot: peerIsBot,
     };
   };
 
@@ -1053,6 +1070,11 @@ export default function MessagesView({
               </div>
             </div>
             <div className="v3-header-actions">
+              {canBindMobileChannel && (
+                <button className="v3-action-btn" onClick={() => setShowMobileLinkModal(true)} title="移动端使用">
+                  <Smartphone size={16} />
+                </button>
+              )}
               {isGroup && (
                 <button className="v3-action-btn" onClick={() => setShowGroupSettings(true)} title={t('group_settings')}>
                   <MoreHorizontal size={16} />
@@ -1363,6 +1385,13 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
           }}
           onApplyPrompt={applyTutorialPrompt}
           onOpenDesktopConnect={onOpenDesktopConnect}
+        />
+      )}
+      {showMobileLinkModal && canBindMobileChannel && (
+        <MobileChannelBindModal
+          agentUid={peerUID}
+          agentName={displayName}
+          onClose={() => setShowMobileLinkModal(false)}
         />
       )}
     </>

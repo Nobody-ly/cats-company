@@ -66,6 +66,7 @@ describe('ChannelDeviceLinkView', () => {
     expect(api.linkChannelAgentBindingUser).toHaveBeenCalledWith({
       binding_id: 12,
       link_token: 'token-1',
+      device_access: true,
     });
     expect(container.textContent).toContain('设备授权已绑定');
   });

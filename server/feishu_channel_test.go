@@ -131,6 +131,93 @@ func TestFeishuOAuthCallbackBindsActor(t *testing.T) {
 	}
 }
 
+func TestFeishuOAuthCallbackMobileIdentityLinkReusesExistingCatsCoFriend(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-feishu",
+		Channel:      "feishu",
+		ChannelAppID: "cli_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	mobileLink, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.feishu-mobile",
+		EntryID:      entry.ID,
+		Channel:      "feishu",
+		ChannelAppID: "cli_app",
+		CanonicalUID: 9,
+		ExpiresAt:    time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create mobile link: %v", err)
+	}
+	api := &fakeFeishuAPI{
+		appID: "cli_app",
+		identity: &FeishuUserIdentity{
+			OpenID: "ou_mobile",
+			UserID: "user_mobile",
+			Name:   "Feishu Mobile Alice",
+		},
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{
+		AppID:            "cli_app",
+		AppSecret:        "secret",
+		OAuthRedirectURI: "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/callback",
+	}, api)
+	state, err := handler.signOAuthState(feishuOAuthState{
+		SceneKey:  mobileLink.SceneKey,
+		ExpiresAt: time.Now().Add(time.Minute).Unix(),
+		Nonce:     "nonce",
+	})
+	if err != nil {
+		t.Fatalf("sign state: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/channel-agent-bindings/oauth/feishu/callback?code=code-1&state="+state, nil)
+	rec := httptest.NewRecorder()
+	handler.HandleOAuthCallback(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, "需要登录") || strings.Contains(body, "好友申请") || strings.Contains(body, "管理员通过") {
+		t.Fatalf("mobile link should bind directly, body=%s", body)
+	}
+	binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:       "feishu",
+		ChannelAppID:  "cli_app",
+		ChannelUserID: "ou_mobile",
+	})
+	if err != nil || binding == nil {
+		t.Fatalf("binding=%+v err=%v", binding, err)
+	}
+	if binding.CanonicalUID != 9 || binding.OwnerUID != 7 || binding.AgentUID != 43 || binding.Status != types.ChannelAgentBindingActive {
+		t.Fatalf("unexpected binding: %+v", binding)
+	}
+	if len(db.accessRequests) != 0 {
+		t.Fatalf("mobile link should not create a new approval request: %+v", db.accessRequests)
+	}
+	reused, _, err := resolveChannelIdentityMobileLink(db, mobileLink.SceneKey, "feishu", "cli_app", true)
+	if err != nil {
+		t.Fatalf("reused mobile link should not error: %v", err)
+	}
+	if reused != nil {
+		t.Fatalf("mobile link should be consumed by callback, reused=%+v", reused)
+	}
+}
+
 func TestFeishuOAuthShortLinkRedirectsToStart(t *testing.T) {
 	handler := NewFeishuChannelHandler(newChannelAgentTestStore(), nil, FeishuChannelConfig{
 		AppID: "cli_app",

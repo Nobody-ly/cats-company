@@ -5,7 +5,8 @@ import CreateGroup from '../widgets/create-group';
 import AddFriend from '../widgets/add-friend';
 import FriendRequest from '../widgets/friend-request';
 import AgentStoreModal from '../widgets/agent-store-modal';
-import { Users, UserPlus, Zap, Bot, Trash2, Plus, MessageSquare } from 'lucide-react';
+import MobileChannelBindModal from '../widgets/mobile-channel-bind-modal';
+import { Users, Zap, Bot, Trash2, MessageSquare, Smartphone, Check, X } from 'lucide-react';
 
 const SIDEBAR_COLLAPSED_STORAGE_PREFIX = 'cc_sidebar_collapsed_v1';
 const DEFAULT_COLLAPSED_SECTIONS = { ai: false, friends: false, groups: false, agents: false };
@@ -62,6 +63,10 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const [collapsed, setCollapsed] = useState(() => loadCollapsedSections(user?.uid));
   const [namingAgent, setNamingAgent] = useState(null);
   const [newChatName, setNewChatName] = useState('');
+  const [mobileLinkAgent, setMobileLinkAgent] = useState(null);
+  const [agentActionId, setAgentActionId] = useState('');
+  const [agentPendingRequests, setAgentPendingRequests] = useState([]);
+  const [agentReviewingKey, setAgentReviewingKey] = useState('');
 
   useEffect(() => {
     setCollapsed(loadCollapsedSections(user?.uid));
@@ -73,6 +78,31 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
       saveCollapsedSections(user?.uid, next);
       return next;
     });
+  };
+
+  const loadAgentPendingRequests = async (nextAgents) => {
+    const ownedAgents = (nextAgents || []).filter(isOwnedAgent);
+    if (ownedAgents.length === 0) {
+      setAgentPendingRequests([]);
+      return;
+    }
+
+    try {
+      const results = await Promise.all(ownedAgents.map(async (agent) => {
+        const agentId = agent.uid || agent.id;
+        if (!agentId) return [];
+        const res = await api.getPendingRequests(agentId).catch(() => ({ requests: [] }));
+        return (res.requests || []).map((request) => ({
+          ...request,
+          agent_uid: agentId,
+          agent_name: agent.display_name || agent.username || `助手 ${agentId}`,
+        }));
+      }));
+      setAgentPendingRequests(results.flat());
+    } catch (error) {
+      console.warn('Failed to load agent friend requests:', error);
+      setAgentPendingRequests([]);
+    }
   };
 
   const loadAll = async () => {
@@ -98,7 +128,9 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
         console.error('Failed to load conversations, falling back to groups:', resC.error);
       }
       setPending(resP.requests || []);
-      setAgents(resA.agents || []);
+      const nextAgents = resA.agents || [];
+      setAgents(nextAgents);
+      await loadAgentPendingRequests(nextAgents);
     } catch (e) {
       console.error('Failed to load sidebar data:', e);
     }
@@ -184,6 +216,48 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const handleAccept = async (userId) => { await api.acceptFriend(userId); loadAll(); };
   const handleReject = async (userId) => { await api.rejectFriend(userId); loadAll(); };
   const groupOwnerById = new Map(groups.map((group) => [String(group.id), String(group.owner_id)]));
+
+  const handleReviewAgentRequest = async (request, action) => {
+    const agentId = request?.agent_uid;
+    const fromUID = request?.from_user_id;
+    if (!agentId || !fromUID) return;
+    const key = `${agentId}:${fromUID}`;
+    try {
+      setAgentReviewingKey(key);
+      if (action === 'accept') {
+        await api.acceptAgentFriend(agentId, fromUID);
+      } else {
+        await api.rejectAgentFriend(agentId, fromUID);
+      }
+      await loadAll();
+      window.dispatchEvent(new Event('cc:data-changed'));
+    } catch (err) {
+      window.alert(err.message || '处理助手好友申请失败');
+    } finally {
+      setAgentReviewingKey('');
+    }
+  };
+
+  const handleRemoveAgent = async (agent) => {
+    const agentId = agent?.uid || agent?.id;
+    if (!agentId || isOwnedAgent(agent)) return;
+    const confirmed = window.confirm(`确定从 AI 助手列表中移除“${agent.display_name || agent.username}”吗？\n\n这只会解除你的好友关系，不会删除对方创建的虚拟员工。`);
+    if (!confirmed) return;
+    try {
+      setAgentActionId(String(agentId));
+      await api.removeFriend(agentId);
+      const topicId = agent.topic_id || p2pTopicId(user.uid, agentId);
+      if (activeTopic === topicId) {
+        onSelectTopic(null);
+      }
+      await loadAll();
+      window.dispatchEvent(new Event('cc:data-changed'));
+    } catch (err) {
+      window.alert(err.message || '移除助手失败');
+    } finally {
+      setAgentActionId('');
+    }
+  };
 
   const handleDeleteGroup = async ({ groupId, topicId, name }) => {
     if (!groupId || !topicId) return;
@@ -405,29 +479,102 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
         {/* AI 助手 */}
         <div className="v3-chat-section" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12}}>
-          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => toggleCollapsed('agents')}><span style={{fontSize: 12, color: '#666'}}>{collapsed.agents ? '▶' : '▼'}</span><Zap size={20} fill="currentColor" style={{color: 'var(--v3-primary)'}} /> AI 助手</span>
+          <span style={{display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer'}} onClick={() => toggleCollapsed('agents')}>
+            <span style={{fontSize: 12, color: '#666'}}>{collapsed.agents ? '▶' : '▼'}</span>
+            <Zap size={20} fill="currentColor" style={{color: 'var(--v3-primary)'}} />
+            AI 助手
+            {agentPendingRequests.length > 0 && <span className="v3-agent-request-badge">{agentPendingRequests.length}</span>}
+          </span>
           <span onClick={() => setShowAgentStore(true)} style={{cursor: 'pointer', fontSize: 25, color: '#888', lineHeight: 1}} title="管理 AI 助手">+</span>
         </div>
+        {!isSearching && agentPendingRequests.length > 0 && (
+          <div className="v3-agent-request-panel">
+            <div className="v3-agent-request-panel-title">新的助手好友申请</div>
+            {agentPendingRequests.map((request) => {
+              const key = `${request.agent_uid}:${request.from_user_id}`;
+              const isReviewing = agentReviewingKey === key;
+              return (
+                <div key={`${key}:${request.created_at || ''}`} className="v3-agent-request-row">
+                  <div className="v3-agent-request-main">
+                    <span className="v3-agent-request-name">{request.display_name || request.from_username || `用户 ${request.from_user_id}`}</span>
+                    <span className="v3-agent-request-target">申请添加 {request.agent_name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="v3-agent-request-action"
+                    title="拒绝"
+                    aria-label="拒绝助手好友申请"
+                    disabled={isReviewing}
+                    onClick={() => handleReviewAgentRequest(request, 'reject')}
+                  >
+                    <X size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="v3-agent-request-action primary"
+                    title="通过"
+                    aria-label="通过助手好友申请"
+                    disabled={isReviewing}
+                    onClick={() => handleReviewAgentRequest(request, 'accept')}
+                  >
+                    <Check size={13} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
         {(isSearching || !collapsed.agents) && (filteredAgents.length === 0 ? (
           <div style={{ padding: '12px 20px', color: '#666', fontSize: '13px' }}>暂无 AI 助手，点击 + 创建</div>
         ) : (
           filteredAgents.map((agent) => {
             const agentId = agent.uid || agent.id;
             const isOnline = onlineStatusFor(onlineUsers, agentId, agent.is_online);
+            const topicId = agent.topic_id || p2pTopicId(user.uid, agentId);
+            const owned = isOwnedAgent(agent);
             return (
               <div
                 key={agentId}
-                className={`v3-chat-item ${activeTopic === agent.topic_id ? 'active' : ''}`}
+                className={`v3-chat-item ${activeTopic === topicId ? 'active' : ''}`}
+                style={{opacity: 0.85, cursor: 'pointer'}}
                 onClick={() => handleSelectAgent(agent)}
               >
                 <span className="prefix" style={{display: 'flex', alignItems: 'center'}}><Bot size={18} /></span>
                 <span className="v3-chat-item-label">{agent.display_name || agent.username}</span>
-                <span
-                  className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`}
-                  style={{marginLeft: 'auto'}}
-                  title={isOnline ? 'Online' : 'Offline'}
-                  aria-label={isOnline ? 'Online' : 'Offline'}
-                />
+                <div className="v3-agent-row-actions">
+                  <button
+                    type="button"
+                    className="v3-chat-item-action"
+                    title="移动端使用"
+                    aria-label={`${agent.display_name || agent.username} 移动端使用`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMobileLinkAgent(agent);
+                    }}
+                  >
+                    <Smartphone size={14} />
+                  </button>
+                  {!owned && (
+                    <button
+                      type="button"
+                      className="v3-chat-item-action danger"
+                      title="移除助手"
+                      aria-label={`移除 ${agent.display_name || agent.username}`}
+                      disabled={agentActionId === String(agentId)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveAgent(agent);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                  <span
+                    className={`v3-status-dot ${isOnline ? 'online' : 'offline'}`}
+                    title={isOnline ? 'Online' : 'Offline'}
+                    aria-label={isOnline ? 'Online' : 'Offline'}
+                  />
+                </div>
               </div>
             );
           })
@@ -490,6 +637,13 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
       {showCreateGroup && <CreateGroup onClose={() => setShowCreateGroup(false)} onCreated={handleGroupCreated} />}
       {showAddFriend && <AddFriend currentUser={user} onClose={() => setShowAddFriend(false)} onSent={() => loadAll()} />}
       {showAgentStore && <AgentStoreModal onClose={() => setShowAgentStore(false)} user={user} onBotsChanged={() => loadAll()} />}
+      {mobileLinkAgent && (
+        <MobileChannelBindModal
+          agentUid={mobileLinkAgent.uid || mobileLinkAgent.id}
+          agentName={mobileLinkAgent.display_name || mobileLinkAgent.username}
+          onClose={() => setMobileLinkAgent(null)}
+        />
+      )}
     </>
   );
 }
@@ -500,6 +654,10 @@ function onlineStatusFor(onlineUsers, uid, fallback = false) {
     return Boolean(onlineUsers[uid]);
   }
   return Boolean(fallback);
+}
+
+function isOwnedAgent(agent) {
+  return agent?.is_owner === true || agent?.relation === 'owner';
 }
 
 function conversationSummaryToChat(item) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"golang.org/x/crypto/bcrypt"
@@ -415,7 +416,7 @@ func (h *BotHandler) HandleDeployBot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// HandleListMyBots handles GET /api/bots — list bots owned by the authenticated user.
+// HandleListMyBots handles GET /api/bots — list bots owned by or added by the authenticated user.
 func (h *BotHandler) HandleListMyBots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -428,21 +429,88 @@ func (h *BotHandler) HandleListMyBots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bots, err := h.db.ListBotsByOwner(ownerUID)
+	ownedBots, err := h.db.ListBotsByOwner(ownerUID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list bots"})
 		return
 	}
-	if bots == nil {
-		bots = []map[string]interface{}{}
+	bots := make([]map[string]interface{}, 0, len(ownedBots))
+	seen := make(map[int64]struct{})
+	for _, bot := range ownedBots {
+		if bot == nil {
+			continue
+		}
+		botUID := mapInt64(bot["id"])
+		if botUID > 0 {
+			bot["uid"] = botUID
+			bot["owner_id"] = ownerUID
+			seen[botUID] = struct{}{}
+		}
+		bot["relation"] = "owner"
+		bot["is_owner"] = true
+		bot["is_bot"] = true
+		bots = append(bots, bot)
 	}
+
+	friends, err := h.db.GetFriends(ownerUID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list bot friends"})
+		return
+	}
+	for _, friend := range friends {
+		if friend == nil {
+			continue
+		}
+		if _, ok := seen[friend.ID]; ok {
+			continue
+		}
+		if friend.AccountType != types.AccountBot && !friend.BotDisclose {
+			continue
+		}
+		bot := map[string]interface{}{
+			"id":           friend.ID,
+			"uid":          friend.ID,
+			"username":     friend.Username,
+			"display_name": displayNameOrUsername(friend.DisplayName, friend.Username),
+			"avatar_url":   friend.AvatarURL,
+			"state":        friend.State,
+			"relation":     "friend",
+			"is_owner":     false,
+			"is_bot":       true,
+			"visibility":   "friend",
+		}
+		if botOwnerUID, err := h.db.GetBotOwner(friend.ID); err == nil && botOwnerUID > 0 {
+			bot["owner_id"] = botOwnerUID
+		}
+		seen[friend.ID] = struct{}{}
+		bots = append(bots, bot)
+	}
+
+	sort.SliceStable(bots, func(i, j int) bool {
+		leftRelation, _ := bots[i]["relation"].(string)
+		rightRelation, _ := bots[j]["relation"].(string)
+		if leftRelation != rightRelation {
+			return leftRelation == "owner"
+		}
+		leftName, _ := bots[i]["display_name"].(string)
+		rightName, _ := bots[j]["display_name"].(string)
+		if leftName == rightName {
+			return mapInt64(bots[i]["id"]) < mapInt64(bots[j]["id"])
+		}
+		return leftName < rightName
+	})
+
 	for _, bot := range bots {
+		relation, _ := bot["relation"].(string)
+		if relation != "owner" {
+			continue
+		}
 		tenantName, _ := bot["tenant_name"].(string)
 		if tenantName == "" {
 			continue
 		}
-		botUID, ok := bot["id"].(int64)
-		if !ok {
+		botUID := mapInt64(bot["id"])
+		if botUID <= 0 {
 			continue
 		}
 		status, deployErr := h.deploymentStatus(r.Context(), botUID, tenantName)
@@ -558,6 +626,24 @@ func (h *BotHandler) HandleSetBotVisibility(w http.ResponseWriter, r *http.Reque
 		"uid":        botUID,
 		"visibility": vis,
 	})
+}
+
+func mapInt64(value interface{}) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case json.Number:
+		parsed, _ := v.Int64()
+		return parsed
+	default:
+		return 0
+	}
 }
 
 // HandleGetBotAPIKey handles GET /api/bots/api-key?uid=xxx.

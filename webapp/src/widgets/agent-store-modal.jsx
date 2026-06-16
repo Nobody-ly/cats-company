@@ -32,6 +32,8 @@ const initialForm = {
   display_name: '',
 };
 
+const isOwnedBot = (bot) => bot?.is_owner === true || bot?.relation === 'owner';
+
 export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const [bots, setBots] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -54,8 +56,14 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const loadBots = async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
-      const botsRes = await api.getMyBots();
-      setBots(botsRes.bots || []);
+      const [botsRes, agentsRes, friendsRes] = await Promise.all([
+        api.getMyBots().catch((err) => {
+          throw err;
+        }),
+        api.getAgents ? api.getAgents().catch(() => ({})) : Promise.resolve({}),
+        api.getFriends ? api.getFriends().catch(() => ({})) : Promise.resolve({}),
+      ]);
+      setBots(mergeManageableBots(botsRes.bots || [], agentsRes.agents || [], friendsRes.friends || []).filter(isOwnedBot));
     } catch (e) {
       console.error('Load bots error:', e);
       setError(e.message || t('error_server'));
@@ -146,9 +154,19 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   };
 
   const handleDelete = async (bot) => {
-    if (!window.confirm(`确定要永久删除 ${bot.display_name} 吗？`)) return;
+    const botId = bot?.id || bot?.uid;
+    if (!botId) return;
+    const owned = isOwnedBot(bot);
+    const confirmed = owned
+      ? window.confirm(`确定要永久删除 ${bot.display_name} 吗？`)
+      : window.confirm(`确定从 AI 助手列表中移除 ${bot.display_name} 吗？\n\n这只会解除你的好友关系，不会删除对方创建的虚拟员工。`);
+    if (!confirmed) return;
     try {
-      await api.deleteBot(bot.id);
+      if (owned) {
+        await api.deleteBot(botId);
+      } else {
+        await api.removeFriend(botId);
+      }
       await loadBots({ silent: true });
       if (onBotsChanged) onBotsChanged();
       setTab('hub');
@@ -160,6 +178,10 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
   const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingBot) return;
+    if (!isOwnedBot(editingBot)) {
+      setError('只能管理自己创建的助手');
+      return;
+    }
     try {
       await api.updateBot(editingBot.id, {
         display_name: editingBot.newDisplayName,
@@ -191,7 +213,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                 style={{ background: 'none', border: 'none', color: tab === 'hub' ? 'var(--v3-text-name)' : 'var(--v3-text-muted)', fontWeight: tab === 'hub' ? 600 : 400, cursor: 'pointer', outline: 'none' }}
                 onClick={() => setTab('hub')}
               >
-                我的助手
+                我创建的助手
               </button>
               <button
                 style={{ background: 'none', border: 'none', color: tab === 'create' ? 'var(--v3-text-name)' : 'var(--v3-text-muted)', fontWeight: tab === 'create' ? 600 : 400, cursor: 'pointer', outline: 'none' }}
@@ -216,16 +238,22 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
               ) : bots.length === 0 ? (
                 <div style={{ padding: 60, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
                   <div style={{ color: 'var(--v3-text-muted)' }}><Bot size={48} strokeWidth={1.5} /></div>
-                  <div style={{ color: 'var(--v3-text-main)' }}>还没有 AI 助手</div>
+                  <div style={{ color: 'var(--v3-text-main)' }}>还没有你创建的 AI 助手</div>
+                  <div style={{ color: 'var(--v3-text-muted)', fontSize: 13, maxWidth: 280 }}>
+                    已添加的助手会保留在左侧 AI 助手列表，可直接移动端使用或移除。
+                  </div>
                   <button className="oc-btn oc-btn-primary" style={{ padding: '8px 16px', borderRadius: 8 }} onClick={() => setTab('create')}>创建第一个助手</button>
                 </div>
               ) : (
                 <div className="v3-agent-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-                  {bots.map(bot => (
-                    <div key={bot.id} className="v3-agent-card" style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', padding: 16, borderRadius: 12 }}>
+                  {bots.map(bot => {
+                    const botId = bot.id || bot.uid;
+                    const owned = isOwnedBot(bot);
+                    return (
+                    <div key={botId} className="v3-agent-card" style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', padding: 16, borderRadius: 12 }}>
                       <div className="v3-agent-header" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <div className="v3-agent-avatar" style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--v3-bg-sidebar)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: 'var(--v3-primary)' }}>
-                          {bot.display_name.charAt(0).toUpperCase()}
+                          {(bot.display_name || bot.username || '?').charAt(0).toUpperCase()}
                         </div>
                         <div className="v3-agent-info" style={{ flex: 1, minWidth: 0 }}>
                           <h4 style={{ margin: '0 0 4px 0', fontSize: 16, color: 'var(--v3-text-name)' }}>{bot.display_name}</h4>
@@ -233,15 +261,18 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                         </div>
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 16, marginTop: 12 }}>
-                        {bot.tenant_name ? '云托管' : '自托管 (API Key)'}
+                        {owned ? (bot.tenant_name ? '我创建的 · 云托管' : '我创建的 · 自托管') : '已添加的助手'}
                       </div>
                       <div className="v3-agent-actions" style={{ display: 'flex', gap: 8 }}>
+                        {owned && (
                         <button className="oc-btn oc-btn-default" style={{ flex: 1, padding: '8px 0', borderRadius: 8 }} onClick={() => {
                           setEditingBot({ ...bot, newDisplayName: bot.display_name, newAvatarUrl: bot.avatar_url || '' });
                           setTab('manage');
                         }}>
                           管理
                         </button>
+                        )}
+                        {owned && (
                         <button
                           className="oc-btn oc-btn-default"
                           style={{ padding: '8px 12px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6 }}
@@ -251,14 +282,15 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                           <QrCode size={14} />
                           入口码
                         </button>
-                        {!bot.tenant_name && (
+                        )}
+                        {owned && !bot.tenant_name && (
                           <button
                             className="oc-btn oc-btn-default"
                             style={{ padding: '8px 12px', borderRadius: 8 }}
-                            onClick={() => handleCopyBotAPIKey(bot, `api_${bot.id}`)}
-                            disabled={copyingBotKey === bot.id}
+                            onClick={() => handleCopyBotAPIKey(bot, `api_${botId}`)}
+                            disabled={copyingBotKey === botId}
                           >
-                            {copiedField === `api_${bot.id}` ? '已复制' : copyingBotKey === bot.id ? '加载中...' : '复制 Key'}
+                            {copiedField === `api_${botId}` ? '已复制' : copyingBotKey === botId ? '加载中...' : '复制 Key'}
                           </button>
                         )}
                         <button className="oc-btn oc-btn-default" style={{ padding: '8px 16px', borderRadius: 8, borderColor: 'rgba(250,81,81,0.3)' }} onClick={() => handleDelete(bot)}>
@@ -266,7 +298,8 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </>
@@ -479,7 +512,7 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
 
         </div>
       </div>
-      {entryBot && (
+      {entryBot && isOwnedBot(entryBot) && (
         <AgentEntryModal
           bot={entryBot}
           onClose={() => setEntryBot(null)}
@@ -489,6 +522,61 @@ export default function AgentStoreModal({ onClose, user, onBotsChanged }) {
       )}
     </div>
   );
+}
+
+function mergeManageableBots(rawBots, rawAgents, rawFriends = []) {
+  const byID = new Map();
+  const add = (item, fallback = {}) => {
+    const id = item?.id || item?.uid;
+    if (!id) return;
+    byID.set(String(id), {
+      ...fallback,
+      ...item,
+      id,
+      uid: item.uid || id,
+      display_name: item.display_name || item.username || fallback.display_name || fallback.username || '未命名助手',
+      username: item.username || fallback.username || `agent-${id}`,
+      is_bot: true,
+    });
+  };
+
+  rawBots.forEach((bot) => add(bot));
+  rawAgents
+    .filter((agent) => agent && (agent.is_bot === true || agent.relation === 'friend' || agent.relation === 'owner'))
+    .forEach((agent) => {
+      const id = agent.uid || agent.id;
+      if (!id || byID.has(String(id))) return;
+      add(agent, {
+        relation: agent.relation || 'friend',
+        is_owner: agent.relation === 'owner',
+        visibility: agent.visibility || 'friend',
+      });
+    });
+  rawFriends
+    .filter((friend) => friend && (friend.bot === true || friend.is_bot === true || friend.account_type === 'bot' || friend.accountType === 'bot'))
+    .forEach((friend) => {
+      const id = friend.uid || friend.id;
+      if (!id || byID.has(String(id))) return;
+      add({
+        id,
+        uid: id,
+        username: friend.username,
+        display_name: friend.display_name,
+        avatar_url: friend.avatar_url,
+        relation: 'friend',
+        is_owner: false,
+        visibility: 'friend',
+        is_bot: true,
+        is_online: friend.is_online || friend.online || false,
+      });
+    });
+
+  return Array.from(byID.values()).sort((a, b) => {
+    const leftOwned = isOwnedBot(a);
+    const rightOwned = isOwnedBot(b);
+    if (leftOwned !== rightOwned) return leftOwned ? -1 : 1;
+    return String(a.display_name || '').localeCompare(String(b.display_name || ''));
+  });
 }
 
 function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {

@@ -125,7 +125,7 @@ func (h *FeishuChannelHandler) HandleOAuthStart(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scene_key"})
 		return
 	}
-	entry, err := h.activeFeishuEntry(sceneKey)
+	entry, _, err := h.resolveFeishuEntryScene(sceneKey, false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
 		return
@@ -139,7 +139,7 @@ func (h *FeishuChannelHandler) HandleOAuthStart(w http.ResponseWriter, r *http.R
 		return
 	}
 	state, err := h.signOAuthState(feishuOAuthState{
-		SceneKey:  entry.SceneKey,
+		SceneKey:  sceneKey,
 		ExpiresAt: time.Now().Add(feishuOAuthStateTTL).Unix(),
 		Nonce:     mustGenerateSceneKey(),
 	})
@@ -192,7 +192,7 @@ func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter,
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "feishu app is not configured"})
 		return
 	}
-	entry, err := h.activeFeishuEntry(sceneKey)
+	entry, _, err := h.resolveFeishuEntryScene(sceneKey, false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
 		return
@@ -205,7 +205,7 @@ func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter,
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
 		return
 	}
-	configStatus := buildFeishuEntryConfigStatus(r, entry)
+	configStatus := buildFeishuEntryConfigStatusForScene(r, entry, sceneKey)
 	if configStatus == nil || !configStatus.Ready {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 			"error":  "feishu native entry is not ready",
@@ -237,7 +237,7 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 		writeHTML(w, http.StatusBadRequest, oauthResultHTML("绑定失败", "授权状态已失效，请重新扫码。"))
 		return
 	}
-	entry, err := h.activeFeishuEntry(state.SceneKey)
+	entry, canonicalUIDHint, err := h.resolveFeishuEntryScene(state.SceneKey, true)
 	if err != nil {
 		writeHTML(w, http.StatusInternalServerError, oauthResultHTML("绑定失败", "读取虚拟员工入口失败。"))
 		return
@@ -274,7 +274,7 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 		writeHTML(w, http.StatusInternalServerError, oauthResultHTML("绑定失败", "创建用户身份失败，请稍后重试。"))
 		return
 	}
-	binding, accessRequest, err := h.bindOrRequestFeishuIdentity(entry, actorUID, channelUserID, "", "p2p")
+	binding, accessRequest, err := h.bindOrRequestFeishuIdentityWithCanonical(entry, actorUID, channelUserID, "", "p2p", canonicalUIDHint)
 	if err != nil {
 		log.Printf("bind feishu identity failed: %v", err)
 		writeHTML(w, http.StatusInternalServerError, oauthResultHTML("绑定失败", "保存虚拟员工绑定失败，请稍后重试。"))
@@ -919,12 +919,30 @@ func (h *FeishuChannelHandler) activeFeishuEntry(sceneKey string) (*types.Channe
 	return entry, nil
 }
 
+func (h *FeishuChannelHandler) resolveFeishuEntryScene(sceneKey string, consumeMobileLink bool) (*types.ChannelAgentEntry, int64, error) {
+	entry, err := h.activeFeishuEntry(sceneKey)
+	if err != nil {
+		return nil, 0, err
+	}
+	if entry != nil {
+		return entry, 0, nil
+	}
+	if !strings.HasPrefix(strings.TrimSpace(sceneKey), "m.") {
+		return nil, 0, nil
+	}
+	return resolveChannelIdentityMobileLink(h.db, sceneKey, "feishu", h.effectiveAppID(""), consumeMobileLink)
+}
+
 func (h *FeishuChannelHandler) bindFeishuIdentity(entry *types.ChannelAgentEntry, actorUID int64, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, error) {
 	binding, _, err := h.bindOrRequestFeishuIdentity(entry, actorUID, channelUserID, conversationID, conversationType)
 	return binding, err
 }
 
 func (h *FeishuChannelHandler) bindOrRequestFeishuIdentity(entry *types.ChannelAgentEntry, actorUID int64, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
+	return h.bindOrRequestFeishuIdentityWithCanonical(entry, actorUID, channelUserID, conversationID, conversationType, 0)
+}
+
+func (h *FeishuChannelHandler) bindOrRequestFeishuIdentityWithCanonical(entry *types.ChannelAgentEntry, actorUID int64, channelUserID, conversationID, conversationType string, canonicalUIDHint int64) (*types.ChannelAgentBinding, *types.ChannelAgentAccessRequest, error) {
 	if entry == nil {
 		return nil, nil, errors.New("missing channel entry")
 	}
@@ -935,7 +953,7 @@ func (h *FeishuChannelHandler) bindOrRequestFeishuIdentity(entry *types.ChannelA
 	if conversationType == "" {
 		conversationType = "p2p"
 	}
-	return bindOrRequestChannelAgentAccess(h.db, bindings, entry, actorUID, "feishu", h.effectiveAppID(""), channelUserID, strings.TrimSpace(conversationID), conversationType)
+	return bindOrRequestChannelAgentAccessWithCanonical(h.db, bindings, entry, actorUID, "feishu", h.effectiveAppID(""), channelUserID, strings.TrimSpace(conversationID), conversationType, canonicalUIDHint)
 }
 
 func bindingAsEntry(binding *types.ChannelAgentBinding) *types.ChannelAgentEntry {

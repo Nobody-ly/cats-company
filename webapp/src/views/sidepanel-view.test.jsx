@@ -18,6 +18,16 @@ jest.mock('../widgets/agent-store-modal', () => function MockAgentStoreModal() {
   return null;
 });
 
+jest.mock('../widgets/mobile-channel-bind-modal', () => function MockMobileChannelBindModal({ agentName, onClose }) {
+  return (
+    <div data-testid="mobile-channel-modal">
+      <strong>移动端使用</strong>
+      <span>{agentName}</span>
+      <button type="button" onClick={onClose}>关闭移动端</button>
+    </div>
+  );
+});
+
 jest.mock('../api', () => ({
   api: {
     getConversations: jest.fn(),
@@ -26,8 +36,11 @@ jest.mock('../api', () => ({
     getPendingRequests: jest.fn(),
     getAgents: jest.fn(),
     openAgent: jest.fn(),
+    acceptAgentFriend: jest.fn(),
+    rejectAgentFriend: jest.fn(),
     acceptFriend: jest.fn(),
     rejectFriend: jest.fn(),
+    removeFriend: jest.fn(),
     disbandGroup: jest.fn(),
   },
   onWSMessage: jest.fn(() => jest.fn()),
@@ -65,6 +78,8 @@ describe('ChatListView sidebar sections', () => {
           avatar_url: '/uploads/dev.png',
           topic_id: 'p2p_7_42',
           is_online: true,
+          relation: 'owner',
+          is_owner: true,
         },
       ],
     });
@@ -77,6 +92,9 @@ describe('ChatListView sidebar sections', () => {
       },
       topic: 'p2p_7_42',
     });
+    api.acceptAgentFriend.mockResolvedValue({ ok: true });
+    api.rejectAgentFriend.mockResolvedValue({ ok: true });
+    api.removeFriend.mockResolvedValue({ ok: true });
     onWSMessage.mockImplementation(() => jest.fn());
     onSelectTopic = jest.fn();
 
@@ -128,9 +146,12 @@ describe('ChatListView sidebar sections', () => {
 
     expect(container.textContent).toContain('AI 助手');
     expect(container.textContent).toContain('Dev Agent');
+    const agentItem = Array.from(container.querySelectorAll('.v3-chat-item'))
+      .find((node) => node.textContent.includes('Dev Agent'));
+    expect(agentItem).toBeTruthy();
 
     await act(async () => {
-      Simulate.click(container.querySelector('.v3-chat-item'));
+      Simulate.click(agentItem);
       await Promise.resolve();
     });
 
@@ -141,6 +162,113 @@ describe('ChatListView sidebar sections', () => {
       friendId: 42,
       isBot: true,
     }));
+  });
+
+  it('opens mobile binding from an assistant row without opening the conversation', async () => {
+    await mount();
+
+    const mobileButton = container.querySelector('[aria-label="Dev Agent 移动端使用"]');
+    expect(mobileButton).toBeTruthy();
+    expect(container.querySelector('[aria-label="移除 Dev Agent"]')).toBeFalsy();
+
+    await act(async () => {
+      Simulate.click(mobileButton);
+      await Promise.resolve();
+    });
+
+    expect(api.openAgent).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('移动端使用');
+    expect(container.textContent).toContain('Dev Agent');
+  });
+
+  it('removes friend agents directly from the assistant row', async () => {
+    api.getAgents.mockResolvedValue({
+      agents: [
+        {
+          id: 43,
+          uid: 43,
+          username: 'shared-agent',
+          display_name: '共享助手',
+          topic_id: 'p2p_7_43',
+          relation: 'friend',
+          is_owner: false,
+        },
+      ],
+    });
+    window.confirm = jest.fn(() => true);
+
+    await mount();
+
+    const removeButton = container.querySelector('[aria-label="移除 共享助手"]');
+    expect(removeButton).toBeTruthy();
+    expect(container.querySelector('[aria-label="共享助手 移动端使用"]')).toBeTruthy();
+
+    await act(async () => {
+      Simulate.click(removeButton);
+      await Promise.resolve();
+    });
+
+    expect(api.openAgent).not.toHaveBeenCalled();
+    expect(api.removeFriend).toHaveBeenCalledWith(43);
+  });
+
+  it('surfaces owned agent friend requests in the assistant section', async () => {
+    api.getAgents.mockResolvedValue({
+      agents: [
+        {
+          id: 42,
+          uid: 42,
+          username: 'dev-agent',
+          display_name: 'Dev Agent',
+          topic_id: 'p2p_7_42',
+          relation: 'owner',
+          is_owner: true,
+        },
+        {
+          id: 43,
+          uid: 43,
+          username: 'shared-agent',
+          display_name: '共享助手',
+          topic_id: 'p2p_7_43',
+          relation: 'friend',
+          is_owner: false,
+        },
+      ],
+    });
+    api.getPendingRequests.mockImplementation((agentUid = '') => {
+      if (String(agentUid) === '42') {
+        return Promise.resolve({
+          requests: [{ id: 9, from_user_id: 88, from_username: 'alice', display_name: 'Alice' }],
+        });
+      }
+      return Promise.resolve({ requests: [] });
+    });
+
+    await mount();
+
+    expect(api.getPendingRequests).toHaveBeenCalledWith(42);
+    expect(api.getPendingRequests).not.toHaveBeenCalledWith(43);
+    expect(container.textContent).toContain('新的助手好友申请');
+    expect(container.textContent).toContain('Alice');
+    expect(container.textContent).toContain('申请添加 Dev Agent');
+
+    const rejectButton = container.querySelector('[aria-label="拒绝助手好友申请"]');
+    await act(async () => {
+      Simulate.click(rejectButton);
+      await Promise.resolve();
+    });
+
+    expect(api.rejectAgentFriend).toHaveBeenCalledWith(42, 88);
+
+    api.rejectAgentFriend.mockClear();
+
+    const acceptButton = container.querySelector('[aria-label="通过助手好友申请"]');
+    await act(async () => {
+      Simulate.click(acceptButton);
+      await Promise.resolve();
+    });
+
+    expect(api.acceptAgentFriend).toHaveBeenCalledWith(42, 88);
   });
 
   it('keeps server-confirmed bot groups in the groups section', async () => {

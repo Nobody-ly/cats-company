@@ -34,7 +34,9 @@ jest.mock('../api', () => ({
   api: {
     getMessages: jest.fn(),
     getFriends: jest.fn(),
+    getAgents: jest.fn(),
     getGroupInfo: jest.fn(),
+    createChannelIdentityMobileLink: jest.fn(),
     sendMessage: jest.fn(),
     uploadFile: jest.fn(),
     createMobileUploadSession: jest.fn(),
@@ -103,6 +105,8 @@ describe('MessagesView composer draft isolation', () => {
     localStorage.clear();
     api.getMessages.mockResolvedValue({ messages: [] });
     api.getFriends.mockResolvedValue({ friends: [] });
+    api.getAgents.mockResolvedValue({ agents: [] });
+    api.createChannelIdentityMobileLink.mockResolvedValue({ qr_value: 'https://app.catsco.cc/mobile-link' });
     api.getGroupInfo.mockResolvedValue({ members: [], group: null });
     api.sendMessage.mockResolvedValue({ seq_id: 100 });
     api.getTutorialTasks.mockResolvedValue({ tasks: [], limit: 6 });
@@ -405,6 +409,50 @@ describe('MessagesView composer draft isolation', () => {
 
     expect(container.textContent).toContain('选择示例任务');
     expect(container.textContent).toContain('选择一个任务，下载示例文件');
+  });
+
+  it('shows mobile binding action for bot friends identified by bot flag', async () => {
+    api.getFriends.mockResolvedValueOnce({
+      friends: [
+        {
+          id: 2,
+          username: 'dev-agent',
+          display_name: 'Dev Agent',
+          bot: true,
+        },
+      ],
+    });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    expect(container.querySelector('button[title="移动端使用"]')).toBeTruthy();
+  });
+
+  it('shows mobile binding action when agent roster identifies the peer as bot', async () => {
+    api.getFriends.mockResolvedValueOnce({
+      friends: [
+        {
+          id: 2,
+          username: 'friend-agent',
+          display_name: 'Friend Agent',
+        },
+      ],
+    });
+    api.getAgents.mockResolvedValueOnce({
+      agents: [
+        {
+          uid: 2,
+          username: 'friend-agent',
+          display_name: 'Friend Agent',
+          relation: 'friend',
+          is_bot: true,
+        },
+      ],
+    });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    expect(container.querySelector('button[title="移动端使用"]')).toBeTruthy();
   });
 
   it('clears peer typing immediately when a peer final reply arrives', async () => {
