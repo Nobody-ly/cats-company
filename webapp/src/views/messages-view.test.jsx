@@ -306,9 +306,9 @@ describe('MessagesView composer draft isolation', () => {
   it('opens a phone upload QR dialog from the composer', async () => {
     await mountTopic(root, 'p2p_1_2');
 
-    const phoneUploadButton = container.querySelector('button[aria-label="手机上传"]');
+    const phoneUploadButton = container.querySelector('button[aria-label="微信扫码上传"]');
     expect(phoneUploadButton).not.toBeNull();
-    expect(phoneUploadButton.getAttribute('data-tooltip')).toBe('手机上传');
+    expect(phoneUploadButton.getAttribute('data-tooltip')).toBe('微信扫码上传');
 
     await act(async () => {
       Simulate.click(phoneUploadButton);
@@ -328,11 +328,69 @@ describe('MessagesView composer draft isolation', () => {
     await mountTopic(root, 'p2p_1_2');
 
     await act(async () => {
-      Simulate.click(container.querySelector('button[aria-label="手机上传"]'));
+      Simulate.click(container.querySelector('button[aria-label="微信扫码上传"]'));
     });
 
     expect(container.textContent).toContain('https://app.example.test/mobile-upload/lan123');
     expect(container.textContent).not.toContain('localhost:6061https://app.example.test');
+  });
+
+  it('keeps syncing phone uploads after the QR dialog is closed', async () => {
+    jest.useFakeTimers();
+    api.createMobileUploadSession.mockResolvedValueOnce({
+      session_id: 'sync-after-close',
+      upload_url: '/mobile-upload/sync-after-close',
+      api_upload_url: '/api/mobile-upload/sessions/sync-after-close/files',
+    });
+    api.getMobileUploadSession
+      .mockResolvedValueOnce({ session_id: 'sync-after-close', files: [] })
+      .mockResolvedValueOnce({
+        session_id: 'sync-after-close',
+        files: Array.from({ length: 8 }, (_, index) => ({
+          file_key: `image-${index + 1}.jpg`,
+          url: `/uploads/images/image-${index + 1}.jpg`,
+          name: `image-${index + 1}.jpg`,
+          size: 1024,
+          type: 'image',
+          mime_type: 'image/jpeg',
+        })),
+      })
+      .mockResolvedValueOnce({
+        session_id: 'sync-after-close',
+        files: Array.from({ length: 9 }, (_, index) => ({
+          file_key: `image-${index + 1}.jpg`,
+          url: `/uploads/images/image-${index + 1}.jpg`,
+          name: `image-${index + 1}.jpg`,
+          size: 1024,
+          type: 'image',
+          mime_type: 'image/jpeg',
+        })),
+      });
+
+    await mountTopic(root, 'p2p_1_2');
+
+    await act(async () => {
+      Simulate.click(container.querySelector('button[aria-label="微信扫码上传"]'));
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('8 个附件待发送');
+
+    await act(async () => {
+      Simulate.click(container.querySelector('button[aria-label="关闭手机上传"]'));
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('9 个附件待发送');
+    jest.useRealTimers();
   });
 
   it('shows tutorial task cards on an empty topic', async () => {
