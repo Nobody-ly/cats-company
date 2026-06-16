@@ -1603,6 +1603,10 @@ func channelBindingConversationActorUID(binding *types.ChannelAgentBinding, fall
 	return 0
 }
 
+const channelBindingDeliveryTrustMetadataKey = "__catsco_channel_binding_delivery_trust"
+
+type channelBindingDeliveryTrustToken struct{}
+
 func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding *types.ChannelAgentBinding) map[string]interface{} {
 	if binding == nil {
 		return metadata
@@ -1636,6 +1640,7 @@ func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding
 		next["channel_canonical_uid"] = binding.CanonicalUID
 	}
 	next["channel_device_access_enabled"] = binding.DeviceAccessEnabled
+	next[channelBindingDeliveryTrustMetadataKey] = channelBindingDeliveryTrustToken{}
 	return next
 }
 

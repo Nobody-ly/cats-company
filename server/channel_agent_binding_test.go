@@ -398,12 +398,12 @@ func TestMobileChannelBindingDeviceAccessFollowsAgentOwnership(t *testing.T) {
 		t.Fatalf("friend mobile binding should chat without device access: %+v", friendBinding)
 	}
 	hub := NewHub(db, nil)
-	friendMetadata := map[string]interface{}{
+	friendMetadata := withChannelBindingDeliveryMetadata(map[string]interface{}{
 		"source_channel":            "weixin",
 		"channel_app_id":            "wx_app",
 		"channel_user_id":           "openid-friend",
 		"channel_conversation_type": "p2p",
-	}
+	}, friendBinding)
 	if ownerUID, source := hub.deviceAccessOwnerUID(100, 43, friendMetadata); ownerUID != 0 || source != "channel_identity_unlinked" {
 		t.Fatalf("friend mobile binding should not expose device access, owner=%d source=%s", ownerUID, source)
 	}
@@ -415,14 +415,17 @@ func TestMobileChannelBindingDeviceAccessFollowsAgentOwnership(t *testing.T) {
 	if ownerBinding == nil || ownerBinding.Status != types.ChannelAgentBindingActive || !ownerBinding.DeviceAccessEnabled {
 		t.Fatalf("owner mobile binding should inherit own device access: %+v", ownerBinding)
 	}
-	ownerMetadata := map[string]interface{}{
+	ownerMetadata := withChannelBindingDeliveryMetadata(map[string]interface{}{
 		"source_channel":            "weixin",
 		"channel_app_id":            "wx_app",
 		"channel_user_id":           "openid-owner",
 		"channel_conversation_type": "p2p",
-	}
+	}, ownerBinding)
 	if ownerUID, source := hub.deviceAccessOwnerUID(101, 43, ownerMetadata); ownerUID != 7 || source != "channel_identity_link" {
 		t.Fatalf("owner mobile binding should expose owner device access, owner=%d source=%s", ownerUID, source)
+	}
+	if ownerUID, source := hub.deviceAccessOwnerUID(7, 43, ownerMetadata); ownerUID != 7 || source != "channel_identity_link" {
+		t.Fatalf("canonical actor should still resolve through original channel actor metadata, owner=%d source=%s", ownerUID, source)
 	}
 }
 
@@ -436,7 +439,7 @@ func TestChannelDeviceAccessDoesNotLeakAcrossConversations(t *testing.T) {
 	db.friends[friendKey(8, 43)] = types.FriendAccepted
 	db.friends[friendKey(43, 8)] = types.FriendAccepted
 
-	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+	p2pBinding, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:                 "weixin",
 		ChannelAppID:            "wx_app",
 		ChannelUserID:           "openid-shared",
@@ -447,10 +450,11 @@ func TestChannelDeviceAccessDoesNotLeakAcrossConversations(t *testing.T) {
 		OwnerUID:                7,
 		AgentUID:                43,
 		Status:                  types.ChannelAgentBindingActive,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed p2p binding: %v", err)
 	}
-	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+	groupBinding, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:                 "weixin",
 		ChannelAppID:            "wx_app",
 		ChannelUserID:           "openid-shared",
@@ -462,27 +466,28 @@ func TestChannelDeviceAccessDoesNotLeakAcrossConversations(t *testing.T) {
 		OwnerUID:                7,
 		AgentUID:                43,
 		Status:                  types.ChannelAgentBindingActive,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed group binding: %v", err)
 	}
 
 	hub := NewHub(db, nil)
-	p2pMetadata := map[string]interface{}{
+	p2pMetadata := withChannelBindingDeliveryMetadata(map[string]interface{}{
 		"source_channel":            "weixin",
 		"channel_app_id":            "wx_app",
 		"channel_user_id":           "openid-shared",
 		"channel_conversation_type": "p2p",
-	}
+	}, p2pBinding)
 	if ownerUID, source := hub.deviceAccessOwnerUID(100, 43, p2pMetadata); ownerUID != 8 || source != "channel_identity_link" {
 		t.Fatalf("p2p binding should keep explicit device access, owner=%d source=%s", ownerUID, source)
 	}
-	groupMetadata := map[string]interface{}{
+	groupMetadata := withChannelBindingDeliveryMetadata(map[string]interface{}{
 		"source_channel":            "weixin",
 		"channel_app_id":            "wx_app",
 		"channel_user_id":           "openid-shared",
 		"channel_conversation_id":   "chat-group",
 		"channel_conversation_type": "group",
-	}
+	}, groupBinding)
 	if ownerUID, source := hub.deviceAccessOwnerUID(100, 43, groupMetadata); ownerUID != 0 || source != "channel_identity_unlinked" {
 		t.Fatalf("group binding must not inherit p2p device access, owner=%d source=%s", ownerUID, source)
 	}
@@ -1136,12 +1141,12 @@ func TestChannelAgentFriendCanExplicitlyEnableOwnDeviceAccess(t *testing.T) {
 	if !linked.DeviceLinked || linked.DeviceOwnerUID != 8 || !linked.Binding.DeviceAccessEnabled {
 		t.Fatalf("friend explicit device authorization should target friend device owner: %+v", linked)
 	}
-	deviceOwnerUID, reason := NewHub(db, nil).deviceAccessOwnerUID(8, 43, map[string]interface{}{
+	trustedMetadata := withChannelBindingDeliveryMetadata(map[string]interface{}{
 		"source_channel":            "weixin",
 		"channel_user_id":           "openid-friend",
 		"channel_conversation_type": "p2p",
-		"channel_actor_uid":         int64(100),
-	})
+	}, &linked.Binding)
+	deviceOwnerUID, reason := NewHub(db, nil).deviceAccessOwnerUID(100, 43, trustedMetadata)
 	if deviceOwnerUID != 8 || reason != "channel_identity_link" {
 		t.Fatalf("device access owner should be friend after explicit authorization, owner=%d reason=%q", deviceOwnerUID, reason)
 	}

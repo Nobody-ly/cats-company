@@ -378,6 +378,8 @@ func (r *userDeviceRegistry) turnContextForOwnerDevices(actorUID int64, ownerUID
 	if ownerUID <= 0 {
 		return DeviceTurnContext{}
 	}
+	devices = devicesForOwner(ownerUID, devices)
+	unavailableCandidates = devicesForOwner(ownerUID, unavailableCandidates)
 	if len(devices) == 0 && len(unavailableCandidates) > 0 {
 		return DeviceTurnContext{
 			Selection: r.unavailableDeviceSelectionForOwner(actorUID, ownerUID, topicID, topicType, agentUID, "no_routable_devices", unavailableCandidates),
@@ -455,6 +457,9 @@ func (r *userDeviceRegistry) grantsForOwnerDevices(actorUID int64, ownerUID int6
 
 	grants := make([]ScopedDeviceGrant, 0, len(devices))
 	for _, device := range devices {
+		if device.OwnerUID != ownerUID {
+			continue
+		}
 		ops := deviceGrantOperations(device.Capabilities)
 		if len(ops) == 0 {
 			continue
@@ -486,6 +491,19 @@ func (r *userDeviceRegistry) grantsForOwnerDevices(actorUID int64, ownerUID int6
 	}
 	r.rememberGrants(grants)
 	return grants
+}
+
+func devicesForOwner(ownerUID int64, devices []UserDevice) []UserDevice {
+	if ownerUID <= 0 || len(devices) == 0 {
+		return nil
+	}
+	filtered := make([]UserDevice, 0, len(devices))
+	for _, device := range devices {
+		if device.OwnerUID == ownerUID {
+			filtered = append(filtered, device)
+		}
+	}
+	return filtered
 }
 
 func (r *userDeviceRegistry) rememberGrants(grants []ScopedDeviceGrant) {
