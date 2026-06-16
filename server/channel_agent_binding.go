@@ -1590,6 +1590,63 @@ func channelBindingRejected(binding *types.ChannelAgentBinding) bool {
 	return binding != nil && binding.Status == types.ChannelAgentBindingRejected
 }
 
+func channelBindingConversationActorUID(binding *types.ChannelAgentBinding, fallbackUID int64) int64 {
+	if binding != nil && binding.CanonicalUID > 0 {
+		return binding.CanonicalUID
+	}
+	if fallbackUID > 0 {
+		return fallbackUID
+	}
+	if binding != nil {
+		return binding.ActorUID
+	}
+	return 0
+}
+
+func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding *types.ChannelAgentBinding) map[string]interface{} {
+	if binding == nil {
+		return metadata
+	}
+	next := make(map[string]interface{}, len(metadata)+10)
+	for key, value := range metadata {
+		next[key] = value
+	}
+	if binding.Channel != "" {
+		next["source_channel"] = binding.Channel
+	}
+	if binding.ChannelAppID != "" {
+		next["channel_app_id"] = binding.ChannelAppID
+	}
+	if binding.ChannelUserID != "" {
+		next["channel_user_id"] = binding.ChannelUserID
+	}
+	if binding.ChannelConversationID != "" {
+		next["channel_conversation_id"] = binding.ChannelConversationID
+	}
+	if binding.ChannelConversationType != "" {
+		next["channel_conversation_type"] = binding.ChannelConversationType
+	}
+	if binding.ID > 0 {
+		next["channel_agent_binding_id"] = binding.ID
+	}
+	if binding.ActorUID > 0 {
+		next["channel_actor_uid"] = binding.ActorUID
+	}
+	if binding.CanonicalUID > 0 {
+		next["channel_canonical_uid"] = binding.CanonicalUID
+	}
+	next["channel_device_access_enabled"] = binding.DeviceAccessEnabled
+	return next
+}
+
+func channelMetadataHasSource(metadata map[string]interface{}) bool {
+	if metadata == nil {
+		return false
+	}
+	return normalizeChannel(firstMetadataString(metadata, "source_channel", "channel")) != "" &&
+		firstMetadataString(metadata, "channel_user_id") != ""
+}
+
 func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64, sourceMetadata ...map[string]interface{}) (*types.ChannelAgentBinding, error) {
 	if db == nil || actorUID <= 0 || agentUID <= 0 {
 		return nil, errors.New("invalid channel binding scope")

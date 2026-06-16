@@ -314,7 +314,8 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 		writeHTML(w, http.StatusOK, oauthResultHTML("申请已提交", fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以回到飞书聊天框提问。", name)))
 		return
 	}
-	if err := h.db.CreateTopic(p2pTopicID(actorUID, entry.AgentUID), "p2p", actorUID); err != nil {
+	conversationUID := channelBindingConversationActorUID(binding, actorUID)
+	if err := h.db.CreateTopic(p2pTopicID(conversationUID, entry.AgentUID), "p2p", conversationUID); err != nil {
 		log.Printf("create feishu agent topic failed: %v", err)
 	}
 	message := fmt.Sprintf("你已进入「%s」，可以回到飞书聊天框直接提问。", name)
@@ -455,6 +456,10 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 		"channel_gateway_mode":           "feishu_agent_gateway",
 		"channel_selected_agent_id":      binding.AgentUID,
 		"channel_agent_binding_entry_id": binding.EntryID,
+		"channel_actor_uid":              binding.ActorUID,
+		"channel_canonical_uid":          binding.CanonicalUID,
+		"channel_agent_binding_id":       binding.ID,
+		"channel_device_access_enabled":  binding.DeviceAccessEnabled,
 	})
 }
 
@@ -743,6 +748,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 				AgentUID:                baseBinding.AgentUID,
 				EntryID:                 baseBinding.EntryID,
 				Status:                  baseBinding.Status,
+				DeviceAccessEnabled:     baseBinding.DeviceAccessEnabled,
 			})
 		}
 		return binding, nil
@@ -762,6 +768,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		AgentUID:                baseBinding.AgentUID,
 		EntryID:                 baseBinding.EntryID,
 		Status:                  baseBinding.Status,
+		DeviceAccessEnabled:     baseBinding.DeviceAccessEnabled,
 	})
 }
 
@@ -887,6 +894,7 @@ func (h *FeishuChannelHandler) resolveFeishuBinding(appID, channelUserID, conver
 		AgentUID:                baseBinding.AgentUID,
 		EntryID:                 baseBinding.EntryID,
 		Status:                  baseBinding.Status,
+		DeviceAccessEnabled:     baseBinding.DeviceAccessEnabled,
 	})
 }
 
@@ -1405,10 +1413,20 @@ type ChannelOutboundDispatcher struct {
 	feishuAppID string
 	weixin      weixinAPI
 	weixinAppID string
+	mu          sync.Mutex
+	replyRoutes map[string]channelOutboundReplyRoute
+}
+
+type channelOutboundReplyRoute struct {
+	Query     types.ChannelAgentBindingQuery
+	ExpiresAt time.Time
 }
 
 func NewChannelOutboundDispatcher(db store.Store, feishu feishuAPI, appID string) *ChannelOutboundDispatcher {
-	return (&ChannelOutboundDispatcher{db: db}).WithFeishu(feishu, appID)
+	return (&ChannelOutboundDispatcher{
+		db:          db,
+		replyRoutes: map[string]channelOutboundReplyRoute{},
+	}).WithFeishu(feishu, appID)
 }
 
 func (d *ChannelOutboundDispatcher) WithFeishu(feishu feishuAPI, appID string) *ChannelOutboundDispatcher {
@@ -1436,6 +1454,73 @@ func (h *Hub) SetChannelOutboundDispatcher(dispatcher *ChannelOutboundDispatcher
 	h.mu.Lock()
 	h.channelOut = dispatcher
 	h.mu.Unlock()
+}
+
+func (h *Hub) recordChannelInboundReplyRoute(topicID string, canonicalUID int64, binding *types.ChannelAgentBinding) {
+	if h == nil || binding == nil || canonicalUID <= 0 {
+		return
+	}
+	h.mu.RLock()
+	dispatcher := h.channelOut
+	h.mu.RUnlock()
+	if dispatcher == nil {
+		return
+	}
+	dispatcher.RecordInboundReplyRoute(topicID, canonicalUID, binding)
+}
+
+func (h *Hub) clearChannelInboundReplyRoute(topicID string, canonicalUID int64, agentUID int64) {
+	if h == nil || canonicalUID <= 0 || agentUID <= 0 {
+		return
+	}
+	h.mu.RLock()
+	dispatcher := h.channelOut
+	h.mu.RUnlock()
+	if dispatcher == nil {
+		return
+	}
+	dispatcher.ClearInboundReplyRoute(topicID, canonicalUID, agentUID)
+}
+
+func channelOutboundReplyRouteKey(topicID string, canonicalUID int64, agentUID int64) string {
+	return fmt.Sprintf("%s:%d:%d", strings.TrimSpace(topicID), canonicalUID, agentUID)
+}
+
+func (d *ChannelOutboundDispatcher) RecordInboundReplyRoute(topicID string, canonicalUID int64, binding *types.ChannelAgentBinding) {
+	if d == nil || binding == nil || canonicalUID <= 0 || binding.AgentUID <= 0 || binding.ActorUID <= 0 {
+		return
+	}
+	key := channelOutboundReplyRouteKey(topicID, canonicalUID, binding.AgentUID)
+	if key == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.replyRoutes == nil {
+		d.replyRoutes = map[string]channelOutboundReplyRoute{}
+	}
+	d.replyRoutes[key] = channelOutboundReplyRoute{
+		Query: types.ChannelAgentBindingQuery{
+			Channel:                 binding.Channel,
+			ChannelAppID:            binding.ChannelAppID,
+			ChannelUserID:           binding.ChannelUserID,
+			ChannelConversationID:   binding.ChannelConversationID,
+			ChannelConversationType: binding.ChannelConversationType,
+			AgentUID:                binding.AgentUID,
+			ActorUID:                binding.ActorUID,
+		},
+		ExpiresAt: time.Now().Add(2 * time.Hour),
+	}
+}
+
+func (d *ChannelOutboundDispatcher) ClearInboundReplyRoute(topicID string, canonicalUID int64, agentUID int64) {
+	if d == nil || canonicalUID <= 0 || agentUID <= 0 {
+		return
+	}
+	key := channelOutboundReplyRouteKey(topicID, canonicalUID, agentUID)
+	d.mu.Lock()
+	delete(d.replyRoutes, key)
+	d.mu.Unlock()
 }
 
 func (h *Hub) forwardChannelBotReply(senderUID int64, peerUID int64, topicID string, payload *normalizedMessagePayload, msgID int64) {
@@ -1470,29 +1555,23 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 	if !ok {
 		return nil
 	}
+	if binding, ok, err := d.lookupRecordedReplyBinding(bindings, topicID, actorUID, agentUID); err != nil {
+		return err
+	} else if ok {
+		sent, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
+		if sent || err != nil {
+			return err
+		}
+	}
 	if d.feishu != nil {
 		binding, err := bindings.ResolveChannelAgentBindingForActor("feishu", d.feishuAppID, actorUID, agentUID)
 		if err != nil {
 			return err
 		}
 		if binding != nil {
-			if err := validateDeliverableChannelBinding(d.db, binding); err != nil {
-				return nil
-			}
-			receiveIDType := "open_id"
-			receiveID := binding.ChannelUserID
-			if binding.ChannelConversationType == "group" && binding.ChannelConversationID != "" {
-				receiveIDType = "chat_id"
-				receiveID = binding.ChannelConversationID
-			}
-			if receiveID == "" {
-				return nil
-			}
-			if err := d.feishu.SendTextMessage(ctx, receiveIDType, receiveID, text); err != nil {
-				log.Printf("feishu outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
+			if sent, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text); sent || err != nil {
 				return err
 			}
-			return nil
 		}
 	}
 	if d.weixin != nil {
@@ -1500,17 +1579,75 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 		if err != nil {
 			return err
 		}
-		if binding != nil && binding.ChannelUserID != "" {
-			if err := validateDeliverableChannelBinding(d.db, binding); err != nil {
-				return nil
-			}
-			if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
-				log.Printf("weixin outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
-				return err
-			}
+		if binding != nil {
+			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
+			return err
 		}
 	}
 	return nil
+}
+
+func (d *ChannelOutboundDispatcher) lookupRecordedReplyBinding(bindings store.ChannelAgentBindingStore, topicID string, canonicalUID int64, agentUID int64) (*types.ChannelAgentBinding, bool, error) {
+	if d == nil || bindings == nil || canonicalUID <= 0 || agentUID <= 0 {
+		return nil, false, nil
+	}
+	key := channelOutboundReplyRouteKey(topicID, canonicalUID, agentUID)
+	now := time.Now()
+	d.mu.Lock()
+	route, ok := d.replyRoutes[key]
+	if ok && !route.ExpiresAt.IsZero() && now.After(route.ExpiresAt) {
+		delete(d.replyRoutes, key)
+		ok = false
+	}
+	d.mu.Unlock()
+	if !ok {
+		return nil, false, nil
+	}
+	binding, err := bindings.ResolveChannelAgentBinding(route.Query)
+	if err != nil || binding == nil {
+		return binding, false, err
+	}
+	return binding, true, nil
+}
+
+func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context, binding *types.ChannelAgentBinding, topicID string, actorUID int64, agentUID int64, text string) (bool, error) {
+	if d == nil || binding == nil {
+		return false, nil
+	}
+	if err := validateDeliverableChannelBinding(d.db, binding); err != nil {
+		return false, nil
+	}
+	switch normalizeChannel(binding.Channel) {
+	case "feishu":
+		if d.feishu == nil {
+			return false, nil
+		}
+		receiveIDType := "open_id"
+		receiveID := binding.ChannelUserID
+		if binding.ChannelConversationType == "group" && binding.ChannelConversationID != "" {
+			receiveIDType = "chat_id"
+			receiveID = binding.ChannelConversationID
+		}
+		if receiveID == "" {
+			return false, nil
+		}
+		if err := d.feishu.SendTextMessage(ctx, receiveIDType, receiveID, text); err != nil {
+			log.Printf("feishu outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
+			return true, err
+		}
+		return true, nil
+	case "weixin":
+		if d.weixin == nil || binding.ChannelUserID == "" {
+			return false, nil
+		}
+		if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
+			log.Printf("weixin outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
+			return true, err
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func writeHTML(w http.ResponseWriter, status int, body string) {

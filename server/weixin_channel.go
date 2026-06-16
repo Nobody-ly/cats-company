@@ -271,7 +271,8 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, fmt.Sprintf("已向「%s」发送好友申请。管理员通过后，你就可以在这里直接提问。", name))
 		return
 	}
-	if err := h.db.CreateTopic(p2pTopicID(actorUID, entry.AgentUID), "p2p", actorUID); err != nil {
+	conversationUID := channelBindingConversationActorUID(binding, actorUID)
+	if err := h.db.CreateTopic(p2pTopicID(conversationUID, entry.AgentUID), "p2p", conversationUID); err != nil {
 		log.Printf("create weixin agent topic failed: %v", err)
 	}
 	reply := fmt.Sprintf("已绑定「%s」。你现在可以直接在公众号聊天框里提问。", name)
@@ -353,6 +354,10 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		"channel_identity_source":        "weixin.event",
 		"channel_identity_trust":         "weixin_official_account_callback",
 		"channel_agent_binding_entry_id": binding.EntryID,
+		"channel_actor_uid":              binding.ActorUID,
+		"channel_canonical_uid":          binding.CanonicalUID,
+		"channel_agent_binding_id":       binding.ID,
+		"channel_device_access_enabled":  binding.DeviceAccessEnabled,
 	}); err != nil {
 		log.Printf("deliver weixin message failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "虚拟员工暂时不可用，请稍后再试。")
