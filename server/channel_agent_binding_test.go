@@ -1143,6 +1143,73 @@ func TestChannelAgentFriendCanExplicitlyEnableOwnDeviceAccess(t *testing.T) {
 	}
 }
 
+func TestChannelAgentBindingLinkUserRefreshesCurrentAgentBinding(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: "visitor", DisplayName: "Visitor", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "target-agent", DisplayName: "Target Agent", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "other-agent", DisplayName: "Other Agent", AccountType: types.AccountBot}
+	db.users[100] = &types.User{ID: 100, Username: "ch_weixin_user", DisplayName: "Weixin User", AccountType: types.AccountHuman}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	target, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "weixin",
+		ChannelUserID:           "openid-shared",
+		ChannelConversationID:   "chat-1",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		CanonicalUID:            8,
+		DeviceAccessEnabled:     false,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	})
+	if err != nil {
+		t.Fatalf("seed target binding: %v", err)
+	}
+	other, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "weixin",
+		ChannelUserID:           "openid-shared",
+		ChannelConversationID:   "chat-1",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		CanonicalUID:            8,
+		DeviceAccessEnabled:     false,
+		OwnerUID:                7,
+		AgentUID:                44,
+		Status:                  types.ChannelAgentBindingActive,
+	})
+	if err != nil {
+		t.Fatalf("seed other binding: %v", err)
+	}
+	otherKey := bindingKey(other.Channel, other.ChannelAppID, other.ChannelUserID, other.ChannelConversationID, other.AgentUID)
+	db.bindings[otherKey].UpdatedAt = target.UpdatedAt.Add(time.Hour)
+
+	body := `{"binding_id":` + strconv.FormatInt(target.ID, 10) + `,"link_token":"` + validChannelAgentLinkToken(t, target) + `","device_access":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/link-user", strings.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(8)))
+	rec := httptest.NewRecorder()
+	handler.HandleLinkChannelAgentBindingUser(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("link status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var linked struct {
+		Binding        types.ChannelAgentBinding `json:"binding"`
+		DeviceLinked   bool                      `json:"device_linked"`
+		DeviceOwnerUID int64                     `json:"device_owner_uid"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &linked); err != nil {
+		t.Fatalf("decode link response: %v", err)
+	}
+	if linked.Binding.AgentUID != 43 || linked.Binding.ID != target.ID || !linked.DeviceLinked || linked.DeviceOwnerUID != 8 {
+		t.Fatalf("link response should refresh target agent binding only: %+v", linked)
+	}
+}
+
 func TestChannelAgentBindingLinkUserRejectsInvalidTokensBeforeStoreUpdate(t *testing.T) {
 	db, handler, binding := newChannelAgentLinkHarness(t)
 

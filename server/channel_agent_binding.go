@@ -640,6 +640,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 				ChannelUserID:           binding.ChannelUserID,
 				ChannelConversationID:   binding.ChannelConversationID,
 				ChannelConversationType: binding.ChannelConversationType,
+				AgentUID:                binding.AgentUID,
 			}); err == nil && refreshed != nil {
 				binding = refreshed
 			}
