@@ -14,15 +14,21 @@ func deliverInboundChannelTextToAgent(db store.Store, hub *Hub, actorUID, agentU
 	if actorUID <= 0 || agentUID <= 0 {
 		return errors.New("invalid actor or agent")
 	}
-	if _, err := resolveDeliverableChannelBinding(db, actorUID, agentUID, metadata); err != nil {
+	binding, err := resolveDeliverableChannelBinding(db, actorUID, agentUID, metadata)
+	if err != nil {
 		return err
 	}
 	agent, err := db.GetUser(agentUID)
 	if err != nil || agent == nil || agent.AccountType != types.AccountBot || agent.State != 0 {
 		return errors.New("agent unavailable")
 	}
-	topicID := p2pTopicID(actorUID, agentUID)
-	if err := db.CreateTopic(topicID, "p2p", actorUID); err != nil {
+	conversationUID := channelBindingConversationActorUID(binding, actorUID)
+	if conversationUID <= 0 {
+		return errors.New("invalid channel conversation actor")
+	}
+	metadata = withChannelBindingDeliveryMetadata(metadata, binding)
+	topicID := p2pTopicID(conversationUID, agentUID)
+	if err := db.CreateTopic(topicID, "p2p", conversationUID); err != nil {
 		return fmt.Errorf("create agent topic: %w", err)
 	}
 	rawContent, _ := json.Marshal(text)
@@ -36,7 +42,7 @@ func deliverInboundChannelTextToAgent(db store.Store, hub *Hub, actorUID, agentU
 	if err != nil {
 		return err
 	}
-	result, err := saveNormalizedMessage(db, topicID, actorUID, 0, payload)
+	result, err := saveNormalizedMessage(db, topicID, conversationUID, 0, payload)
 	if err != nil {
 		if source == "" {
 			source = "channel"
@@ -44,7 +50,8 @@ func deliverInboundChannelTextToAgent(db store.Store, hub *Hub, actorUID, agentU
 		return fmt.Errorf("save inbound %s message: %w", source, err)
 	}
 	if !result.Duplicate && hub != nil {
-		hub.fanoutNormalizedMessage(actorUID, topicID, 0, payload, result.ID, nil)
+		hub.recordChannelInboundReplyRoute(topicID, conversationUID, binding)
+		hub.fanoutNormalizedMessage(conversationUID, topicID, 0, payload, result.ID, nil)
 	}
 	return nil
 }

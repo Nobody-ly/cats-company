@@ -208,6 +208,9 @@ func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, pa
 	if peerUID == 0 {
 		return
 	}
+	if !channelMetadataHasSource(payload.Metadata) {
+		h.clearChannelInboundReplyRoute(topicID, uid, peerUID)
+	}
 
 	h.SendToUserExcept(uid, dataMsg, exclude)
 	h.SendToUser(peerUID, h.messageForRecipient(uid, peerUID, topicID, replyTo, payload, msgID))
@@ -225,7 +228,9 @@ func (h *Hub) messageForRecipient(uid int64, recipientUID int64, topicID string,
 	if payload == nil {
 		return nil
 	}
-	metadata := withCatscoIdentityMetadata(payload.Metadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent), catscoIdentityMetadataOptions{SourceMetadata: payload.Metadata}))
+	sourceMetadata := payload.Metadata
+	publicMetadata := withoutInternalChannelBindingDeliveryMetadata(payload.Metadata)
+	metadata := withCatscoIdentityMetadata(publicMetadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent), catscoIdentityMetadataOptions{SourceMetadata: sourceMetadata}))
 	return &ServerMessage{
 		Data: &MsgServerData{
 			Topic:         topicID,
@@ -415,6 +420,9 @@ func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...m
 					return 0, "channel_identity_unapproved"
 				}
 				if binding.CanonicalUID > 0 && binding.DeviceAccessEnabled {
+					if binding.CanonicalUID == actorUID {
+						return actorUID, "actor"
+					}
 					return binding.CanonicalUID, "channel_identity_link"
 				}
 				return 0, "channel_identity_unlinked"
@@ -428,10 +436,25 @@ func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...m
 }
 
 func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
+	if !trustedChannelBindingDeliveryMetadata(metadata) {
+		return types.ChannelAgentBindingQuery{}, false
+	}
+	return channelAgentBindingQueryFromMetadata(metadata, actorUID, agentUID)
+}
+
+func channelAgentBindingQueryFromInboundMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
+	return channelAgentBindingQueryFromMetadata(metadata, actorUID, agentUID)
+}
+
+func channelAgentBindingQueryFromMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
 	channel := normalizeChannel(firstMetadataString(metadata, "source_channel", "channel"))
 	channelUserID := firstMetadataString(metadata, "channel_user_id")
 	if channel == "" || channelUserID == "" {
 		return types.ChannelAgentBindingQuery{}, false
+	}
+	bindingActorUID := firstMetadataInt64(metadata, "channel_actor_uid")
+	if bindingActorUID <= 0 {
+		bindingActorUID = actorUID
 	}
 	return types.ChannelAgentBindingQuery{
 		Channel:                 channel,
@@ -440,8 +463,33 @@ func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}
 		ChannelConversationID:   firstMetadataString(metadata, "channel_conversation_id"),
 		ChannelConversationType: normalizeConversationType(firstMetadataString(metadata, "channel_conversation_type")),
 		AgentUID:                agentUID,
-		ActorUID:                actorUID,
+		ActorUID:                bindingActorUID,
 	}, true
+}
+
+func trustedChannelBindingDeliveryMetadata(metadata map[string]interface{}) bool {
+	if metadata == nil {
+		return false
+	}
+	_, ok := metadata[channelBindingDeliveryTrustMetadataKey].(channelBindingDeliveryTrustToken)
+	return ok
+}
+
+func withoutInternalChannelBindingDeliveryMetadata(metadata map[string]interface{}) map[string]interface{} {
+	if metadata == nil {
+		return nil
+	}
+	if _, ok := metadata[channelBindingDeliveryTrustMetadataKey]; !ok {
+		return metadata
+	}
+	next := make(map[string]interface{}, len(metadata)-1)
+	for key, value := range metadata {
+		if key == channelBindingDeliveryTrustMetadataKey {
+			continue
+		}
+		next[key] = value
+	}
+	return next
 }
 
 func topicTypeForID(topicID string) string {
@@ -761,6 +809,47 @@ func firstMetadataString(metadata map[string]interface{}, keys ...string) string
 		}
 	}
 	return ""
+}
+
+func firstMetadataInt64(metadata map[string]interface{}, keys ...string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	for _, key := range keys {
+		value, ok := metadata[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case int64:
+			if typed > 0 {
+				return typed
+			}
+		case int:
+			if typed > 0 {
+				return int64(typed)
+			}
+		case int32:
+			if typed > 0 {
+				return int64(typed)
+			}
+		case float64:
+			if typed > 0 {
+				return int64(typed)
+			}
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err == nil && parsed > 0 {
+				return parsed
+			}
+		case string:
+			parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+			if err == nil && parsed > 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 func metadataMap(metadata map[string]interface{}, key string) map[string]interface{} {

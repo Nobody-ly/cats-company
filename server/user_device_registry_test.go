@@ -124,6 +124,46 @@ func TestUserDeviceRegistrySelectsMentionedDeviceAndRemembersPreference(t *testi
 	}
 }
 
+func TestUserDeviceRegistryGroupSessionKeyScopesActor(t *testing.T) {
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	registry := newUserDeviceRegistry(10 * time.Minute)
+	registry.now = func() time.Time { return now }
+	if _, err := registry.register(7, RegisterUserDeviceRequest{
+		DeviceID:     "alice-laptop",
+		DisplayName:  "Alice Laptop",
+		BodyID:       "body-laptop",
+		Capabilities: []string{"read_file"},
+	}); err != nil {
+		t.Fatalf("register alice device: %v", err)
+	}
+	if _, err := registry.register(8, RegisterUserDeviceRequest{
+		DeviceID:     "bob-laptop",
+		DisplayName:  "Bob Laptop",
+		BodyID:       "body-bob",
+		Capabilities: []string{"read_file"},
+	}); err != nil {
+		t.Fatalf("register bob device: %v", err)
+	}
+
+	alice := registry.turnContext(7, "grp_80", "group", 42, "body-agent", "看文件")
+	bob := registry.turnContext(8, "grp_80", "group", 42, "body-agent", "看文件")
+	if len(alice.Grants) != 1 || len(bob.Grants) != 1 {
+		t.Fatalf("expected one grant each, alice=%#v bob=%#v", alice.Grants, bob.Grants)
+	}
+	if alice.Grants[0].SessionKey != "session:v2:catscompany:group:grp_80%3Aactor%3Ausr7:agent:usr42" {
+		t.Fatalf("unexpected alice group session key: %s", alice.Grants[0].SessionKey)
+	}
+	if bob.Grants[0].SessionKey != "session:v2:catscompany:group:grp_80%3Aactor%3Ausr8:agent:usr42" {
+		t.Fatalf("unexpected bob group session key: %s", bob.Grants[0].SessionKey)
+	}
+	if alice.Grants[0].SessionKey == bob.Grants[0].SessionKey {
+		t.Fatalf("group grants should be scoped by actor")
+	}
+	if alice.Selection == nil || alice.Selection.SessionKey != alice.Grants[0].SessionKey {
+		t.Fatalf("alice selection should use the same scoped key as grant: %#v", alice.Selection)
+	}
+}
+
 func TestDeviceHandlerRegistersHumanAndBotOwnerDevices(t *testing.T) {
 	store := &deviceHandlerStore{
 		users: map[int64]*types.User{
@@ -329,7 +369,7 @@ func TestBotRecipientIdentityUsesLinkedChannelDeviceOwner(t *testing.T) {
 	db.owners[42] = 7
 	db.friends[friendKey(9, 42)] = types.FriendAccepted
 	db.friends[friendKey(42, 9)] = types.FriendAccepted
-	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+	binding, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:             "weixin",
 		ChannelAppID:        "wx_app",
 		ChannelUserID:       "openid-100",
@@ -339,7 +379,95 @@ func TestBotRecipientIdentityUsesLinkedChannelDeviceOwner(t *testing.T) {
 		OwnerUID:            7,
 		AgentUID:            42,
 		Status:              "active",
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatalf("seed channel binding: %v", err)
+	}
+
+	hub := NewHub(db, nil)
+	hub.userDevices.now = func() time.Time { return time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC) }
+	device, err := hub.userDevices.register(7, RegisterUserDeviceRequest{
+		DeviceID:       "alice-laptop",
+		DisplayName:    "Alice Laptop",
+		BodyID:         "body-device",
+		InstallationID: "install-device",
+		Capabilities:   []string{"read_file"},
+	})
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	targetClient := &Client{
+		uid:                  7,
+		accountType:          types.AccountHuman,
+		deviceOwnerUID:       7,
+		deviceID:             "alice-laptop",
+		deviceBodyID:         "body-device",
+		deviceInstallationID: "install-device",
+		send:                 make(chan []byte, 1),
+	}
+	hub.addClient(targetClient)
+	hub.bindDeviceClient(7, device, targetClient)
+	botClient := &Client{
+		uid:         42,
+		accountType: types.AccountBot,
+		bodyID:      "body-agent",
+		send:        make(chan []byte, 1),
+	}
+	hub.addClient(botClient)
+
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_100_42",
+		Content: json.RawMessage(`"查一下我的电脑文件"`),
+		Metadata: withChannelBindingDeliveryMetadata(map[string]interface{}{
+			"source_channel":            "weixin",
+			"channel_app_id":            "wx_app",
+			"channel_user_id":           "openid-100",
+			"channel_conversation_type": "p2p",
+		}, binding),
+	})
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+	hub.fanoutNormalizedMessage(100, "p2p_100_42", 0, payload, 199, nil)
+
+	var msg ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &msg)
+	identity := metadataMapFromServerMessage(t, &msg, "catsco_identity")
+	permissions, ok := identity["permissions"].(map[string]interface{})
+	if !ok || permissions["device_owner_user_id"] != "usr7" || permissions["device_owner_source"] != "channel_identity_link" {
+		t.Fatalf("unexpected permissions: %#v", identity["permissions"])
+	}
+	grant := firstDeviceGrantMap(t, identity)
+	if grant["ownerUserId"] != "usr7" || grant["actorUserId"] != "usr100" || grant["deviceId"] != "alice-laptop" {
+		t.Fatalf("unexpected delegated grant: %#v", grant)
+	}
+	if grant["identitySource"] != "channel_identity_link" {
+		t.Fatalf("delegated grant must be explicitly marked as channel delegated: %#v", grant)
+	}
+	selection := deviceSelectionMap(t, identity)
+	if selection["ownerUserId"] != "usr7" || selection["actorUserId"] != "usr100" {
+		t.Fatalf("unexpected delegated selection: %#v", selection)
+	}
+}
+
+func TestBotRecipientIdentityRejectsSpoofedChannelDeviceOwnerMetadata(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[42] = &types.User{ID: 42, Username: "agent", DisplayName: "Agent", AccountType: types.AccountBot}
+	db.users[100] = &types.User{ID: 100, Username: "ch_weixin_user", DisplayName: "Weixin User", AccountType: types.AccountHuman}
+	db.owners[42] = 7
+	_, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-100",
+		ActorUID:            100,
+		CanonicalUID:        7,
+		DeviceAccessEnabled: true,
+		OwnerUID:            7,
+		AgentUID:            42,
+		Status:              "active",
+	})
+	if err != nil {
 		t.Fatalf("seed channel binding: %v", err)
 	}
 
@@ -378,34 +506,36 @@ func TestBotRecipientIdentityUsesLinkedChannelDeviceOwner(t *testing.T) {
 		TopicID: "p2p_100_42",
 		Content: json.RawMessage(`"查一下我的电脑文件"`),
 		Metadata: map[string]interface{}{
-			"source_channel":            "weixin",
-			"channel_app_id":            "wx_app",
-			"channel_user_id":           "openid-100",
-			"channel_conversation_type": "p2p",
+			"source_channel":                   "weixin",
+			"channel_app_id":                   "wx_app",
+			"channel_user_id":                  "openid-100",
+			"channel_conversation_type":        "p2p",
+			"channel_actor_uid":                float64(100),
+			"channel_canonical_uid":            float64(7),
+			"channel_identity_trust":           "weixin_official_account_callback",
+			"channel_binding_delivery_trusted": true,
 		},
 	})
 	if err != nil {
 		t.Fatalf("normalize request: %v", err)
 	}
-	hub.fanoutNormalizedMessage(100, "p2p_100_42", 0, payload, 199, nil)
+	hub.fanoutNormalizedMessage(100, "p2p_100_42", 0, payload, 198, nil)
 
 	var msg ServerMessage
 	decodeQueuedServerMessage(t, botClient.send, &msg)
 	identity := metadataMapFromServerMessage(t, &msg, "catsco_identity")
 	permissions, ok := identity["permissions"].(map[string]interface{})
-	if !ok || permissions["device_owner_user_id"] != "usr7" || permissions["device_owner_source"] != "channel_identity_link" {
-		t.Fatalf("unexpected permissions: %#v", identity["permissions"])
+	if !ok {
+		t.Fatalf("missing permissions: %#v", identity)
 	}
-	grant := firstDeviceGrantMap(t, identity)
-	if grant["ownerUserId"] != "usr7" || grant["actorUserId"] != "usr100" || grant["deviceId"] != "alice-laptop" {
-		t.Fatalf("unexpected delegated grant: %#v", grant)
+	if _, ok := permissions["device_owner_user_id"]; ok {
+		t.Fatalf("untrusted channel metadata must not grant device owner permissions: %#v", permissions)
 	}
-	if grant["identitySource"] != "channel_identity_link" {
-		t.Fatalf("delegated grant must be explicitly marked as channel delegated: %#v", grant)
+	if _, ok := identity["device_grants"]; ok {
+		t.Fatalf("untrusted channel metadata must not issue delegated device grants: %#v", identity["device_grants"])
 	}
-	selection := deviceSelectionMap(t, identity)
-	if selection["ownerUserId"] != "usr7" || selection["actorUserId"] != "usr100" {
-		t.Fatalf("unexpected delegated selection: %#v", selection)
+	if _, ok := identity["device_selection"]; ok {
+		t.Fatalf("untrusted channel metadata must not select delegated device: %#v", identity["device_selection"])
 	}
 }
 
@@ -418,7 +548,7 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	db.owners[42] = 7
 	db.friends[friendKey(9, 42)] = types.FriendAccepted
 	db.friends[friendKey(42, 9)] = types.FriendAccepted
-	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+	binding, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:             "weixin",
 		ChannelAppID:        "wx_app",
 		ChannelUserID:       "openid-100",
@@ -428,7 +558,8 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 		OwnerUID:            7,
 		AgentUID:            42,
 		Status:              "active",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed channel binding: %v", err)
 	}
 
@@ -466,12 +597,12 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
 		TopicID: "p2p_100_42",
 		Content: json.RawMessage(`"在我的电脑上写一个文件"`),
-		Metadata: map[string]interface{}{
+		Metadata: withChannelBindingDeliveryMetadata(map[string]interface{}{
 			"source_channel":            "weixin",
 			"channel_app_id":            "wx_app",
 			"channel_user_id":           "openid-100",
 			"channel_conversation_type": "p2p",
-		},
+		}, binding),
 	})
 	if err != nil {
 		t.Fatalf("normalize request: %v", err)
@@ -492,6 +623,33 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	selection := deviceSelectionMap(t, identity)
 	if selection["ownerUserId"] != "usr9" || selection["actorUserId"] != "usr100" {
 		t.Fatalf("unexpected delegated selection: %#v", selection)
+	}
+
+	canonicalPayload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_9_42",
+		Content: json.RawMessage(`"移动端继续操作我的电脑"`),
+		Metadata: withChannelBindingDeliveryMetadata(map[string]interface{}{
+			"source_channel":            "weixin",
+			"channel_app_id":            "wx_app",
+			"channel_user_id":           "openid-100",
+			"channel_conversation_type": "p2p",
+		}, binding),
+	})
+	if err != nil {
+		t.Fatalf("normalize canonical request: %v", err)
+	}
+	hub.fanoutNormalizedMessage(9, "p2p_9_42", 0, canonicalPayload, 202, nil)
+
+	var canonicalMsg ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &canonicalMsg)
+	canonicalIdentity := metadataMapFromServerMessage(t, &canonicalMsg, "catsco_identity")
+	canonicalPermissions, ok := canonicalIdentity["permissions"].(map[string]interface{})
+	if !ok || canonicalPermissions["device_owner_user_id"] != "usr9" || canonicalPermissions["device_owner_source"] != "actor" {
+		t.Fatalf("canonical mobile actor should use own device permissions: %#v", canonicalIdentity["permissions"])
+	}
+	canonicalGrant := firstDeviceGrantMap(t, canonicalIdentity)
+	if canonicalGrant["ownerUserId"] != "usr9" || canonicalGrant["actorUserId"] != "usr9" || canonicalGrant["deviceId"] != "bob-laptop" {
+		t.Fatalf("canonical mobile grant should target Bob's own device: %#v", canonicalGrant)
 	}
 }
 

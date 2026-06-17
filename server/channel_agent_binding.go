@@ -641,6 +641,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 				AgentUID:                binding.AgentUID,
 				EntryID:                 binding.EntryID,
 				Status:                  types.ChannelAgentBindingActive,
+				DeviceAccessEnabled:     true,
 			}); err == nil && refreshed != nil {
 				binding = refreshed
 			} else if err != nil {
@@ -664,7 +665,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 			}
 		}
 	}
-	deviceLinked := binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
+	deviceLinked := binding.Status == types.ChannelAgentBindingActive && binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
 	deviceOwnerUID := int64(0)
 	if deviceLinked {
 		deviceOwnerUID = binding.CanonicalUID
@@ -1439,7 +1440,7 @@ func bindOrRequestChannelAgentAccessWithCanonical(
 			}
 		}
 	}
-	deviceAccessEnabled := canonicalUID > 0 && canonicalUID == entry.OwnerUID
+	deviceAccessEnabled := canonicalUID > 0 && status == types.ChannelAgentBindingActive
 	binding, err = bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:                 channel,
 		ChannelAppID:            strings.TrimSpace(channelAppID),
@@ -1818,6 +1819,71 @@ func channelBindingRejected(binding *types.ChannelAgentBinding) bool {
 	return binding != nil && binding.Status == types.ChannelAgentBindingRejected
 }
 
+func channelBindingConversationActorUID(binding *types.ChannelAgentBinding, fallbackUID int64) int64 {
+	if binding != nil && binding.CanonicalUID > 0 {
+		return binding.CanonicalUID
+	}
+	if fallbackUID > 0 {
+		return fallbackUID
+	}
+	if binding != nil {
+		return binding.ActorUID
+	}
+	return 0
+}
+
+const channelBindingDeliveryTrustMetadataKey = "__catsco_channel_binding_delivery_trust"
+
+type channelBindingDeliveryTrustToken struct{}
+
+func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding *types.ChannelAgentBinding) map[string]interface{} {
+	if binding == nil {
+		return metadata
+	}
+	next := make(map[string]interface{}, len(metadata)+10)
+	for key, value := range metadata {
+		next[key] = value
+	}
+	if binding.Channel != "" {
+		next["source_channel"] = binding.Channel
+	}
+	if binding.ChannelAppID != "" {
+		next["channel_app_id"] = binding.ChannelAppID
+	}
+	if binding.ChannelUserID != "" {
+		next["channel_user_id"] = binding.ChannelUserID
+	}
+	if binding.ChannelConversationID != "" {
+		next["channel_conversation_id"] = binding.ChannelConversationID
+	}
+	if binding.ChannelConversationType != "" {
+		next["channel_conversation_type"] = binding.ChannelConversationType
+	}
+	if binding.ID > 0 {
+		next["channel_agent_binding_id"] = binding.ID
+	}
+	if binding.ActorUID > 0 {
+		next["channel_actor_uid"] = binding.ActorUID
+	}
+	if binding.CanonicalUID > 0 {
+		next["channel_canonical_uid"] = binding.CanonicalUID
+	}
+	next["channel_device_access_enabled"] = binding.DeviceAccessEnabled
+	next[channelBindingDeliveryTrustMetadataKey] = channelBindingDeliveryTrustToken{}
+	return next
+}
+
+func channelMetadataHasSource(metadata map[string]interface{}) bool {
+	if metadata == nil {
+		return false
+	}
+	if !trustedChannelBindingDeliveryMetadata(metadata) {
+		return false
+	}
+	return normalizeChannel(firstMetadataString(metadata, "source_channel", "channel")) != "" &&
+		firstMetadataString(metadata, "channel_user_id") != ""
+}
+
 func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64, sourceMetadata ...map[string]interface{}) (*types.ChannelAgentBinding, error) {
 	if db == nil || actorUID <= 0 || agentUID <= 0 {
 		return nil, errors.New("invalid channel binding scope")
@@ -1832,7 +1898,7 @@ func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64, 
 	if len(sourceMetadata) > 0 {
 		metadata = sourceMetadata[0]
 	}
-	if query, scoped := channelAgentBindingQueryFromMessageMetadata(metadata, actorUID, agentUID); scoped {
+	if query, scoped := channelAgentBindingQueryFromInboundMetadata(metadata, actorUID, agentUID); scoped {
 		binding, err = bindings.ResolveChannelAgentBinding(query)
 	} else {
 		binding, err = bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)
