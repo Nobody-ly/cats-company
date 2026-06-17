@@ -623,6 +623,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 				AgentUID:                binding.AgentUID,
 				EntryID:                 binding.EntryID,
 				Status:                  types.ChannelAgentBindingActive,
+				DeviceAccessEnabled:     true,
 			}); err == nil && refreshed != nil {
 				binding = refreshed
 			} else if err != nil {
@@ -646,7 +647,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 			}
 		}
 	}
-	deviceLinked := binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
+	deviceLinked := binding.Status == types.ChannelAgentBindingActive && binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
 	deviceOwnerUID := int64(0)
 	if deviceLinked {
 		deviceOwnerUID = binding.CanonicalUID
@@ -1340,10 +1341,7 @@ func bindOrRequestChannelAgentAccessWithCanonical(
 			}
 		}
 	}
-	// Device access follows the canonical CatsCo speaker, not the virtual
-	// employee owner. The owner controls who may chat with the agent; tool
-	// execution stays scoped to the requesting user's own devices.
-	deviceAccessEnabled := canonicalUID > 0
+	deviceAccessEnabled := canonicalUID > 0 && status == types.ChannelAgentBindingActive
 	binding, err = bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:                 channel,
 		ChannelAppID:            strings.TrimSpace(channelAppID),
@@ -1606,6 +1604,10 @@ func channelBindingConversationActorUID(binding *types.ChannelAgentBinding, fall
 	return 0
 }
 
+const channelBindingDeliveryTrustMetadataKey = "__catsco_channel_binding_delivery_trust"
+
+type channelBindingDeliveryTrustToken struct{}
+
 func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding *types.ChannelAgentBinding) map[string]interface{} {
 	if binding == nil {
 		return metadata
@@ -1639,11 +1641,15 @@ func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding
 		next["channel_canonical_uid"] = binding.CanonicalUID
 	}
 	next["channel_device_access_enabled"] = binding.DeviceAccessEnabled
+	next[channelBindingDeliveryTrustMetadataKey] = channelBindingDeliveryTrustToken{}
 	return next
 }
 
 func channelMetadataHasSource(metadata map[string]interface{}) bool {
 	if metadata == nil {
+		return false
+	}
+	if !trustedChannelBindingDeliveryMetadata(metadata) {
 		return false
 	}
 	return normalizeChannel(firstMetadataString(metadata, "source_channel", "channel")) != "" &&
@@ -1664,7 +1670,7 @@ func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64, 
 	if len(sourceMetadata) > 0 {
 		metadata = sourceMetadata[0]
 	}
-	if query, scoped := channelAgentBindingQueryFromMessageMetadata(metadata, actorUID, agentUID); scoped {
+	if query, scoped := channelAgentBindingQueryFromInboundMetadata(metadata, actorUID, agentUID); scoped {
 		binding, err = bindings.ResolveChannelAgentBinding(query)
 	} else {
 		binding, err = bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)

@@ -291,9 +291,9 @@ func (a *Adapter) ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, 
 		if _, err := tx.Exec(
 			`INSERT INTO channel_agent_bindings (
 			     channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
-			     actor_uid, owner_uid, agent_uid, entry_id, status, bound_at, last_used_at
+			     actor_uid, owner_uid, agent_uid, entry_id, status, device_access_enabled, bound_at, last_used_at
 			 )
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), 'active', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 			 ON CONFLICT (channel, channel_app_id, channel_user_id, channel_conversation_id, agent_uid)
 			 DO UPDATE SET
 			     actor_uid = EXCLUDED.actor_uid,
@@ -301,6 +301,7 @@ func (a *Adapter) ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, 
 			     entry_id = COALESCE(EXCLUDED.entry_id, channel_agent_bindings.entry_id),
 			     channel_conversation_type = EXCLUDED.channel_conversation_type,
 			     status = 'active',
+			     device_access_enabled = TRUE,
 			     bound_at = CURRENT_TIMESTAMP,
 			     last_used_at = CURRENT_TIMESTAMP`,
 			request.Channel,
@@ -359,7 +360,7 @@ func (a *Adapter) ActivateChannelAgentBindingsForCanonicalUser(canonicalUID, age
 	}
 	rows, err := a.db.Query(
 		`UPDATE channel_agent_bindings
-		 SET status = 'active', bound_at = CURRENT_TIMESTAMP, last_used_at = CURRENT_TIMESTAMP
+		 SET status = 'active', device_access_enabled = TRUE, bound_at = CURRENT_TIMESTAMP, last_used_at = CURRENT_TIMESTAMP
 		 WHERE canonical_uid = $1 AND agent_uid = $2 AND status IN ('pending_approval', 'active')
 		 RETURNING id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
 		           COALESCE(actor_uid, 0), COALESCE(canonical_uid, 0), COALESCE(device_access_enabled, FALSE), owner_uid, agent_uid, COALESCE(entry_id, 0), status, bound_at, updated_at, last_used_at`,

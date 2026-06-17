@@ -300,15 +300,16 @@ func (a *Adapter) ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, 
 		if _, err := tx.Exec(
 			`INSERT INTO channel_agent_bindings (
 			     channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
-			     actor_uid, owner_uid, agent_uid, entry_id, status, bound_at, last_used_at
+			     actor_uid, owner_uid, agent_uid, entry_id, status, device_access_enabled, bound_at, last_used_at
 			 )
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 			 ON DUPLICATE KEY UPDATE
 			     actor_uid = VALUES(actor_uid),
 			     owner_uid = VALUES(owner_uid),
 			     entry_id = COALESCE(VALUES(entry_id), entry_id),
 			     channel_conversation_type = VALUES(channel_conversation_type),
 			     status = 'active',
+			     device_access_enabled = TRUE,
 			     bound_at = CURRENT_TIMESTAMP,
 			     last_used_at = CURRENT_TIMESTAMP,
 			     updated_at = CURRENT_TIMESTAMP`,
@@ -368,7 +369,7 @@ func (a *Adapter) ActivateChannelAgentBindingsForCanonicalUser(canonicalUID, age
 	}
 	if _, err := a.db.Exec(
 		`UPDATE channel_agent_bindings
-		 SET status = 'active', bound_at = CURRENT_TIMESTAMP, last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 SET status = 'active', device_access_enabled = TRUE, bound_at = CURRENT_TIMESTAMP, last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		 WHERE canonical_uid = ? AND agent_uid = ? AND status IN ('pending_approval', 'active')`,
 		canonicalUID, agentUID,
 	); err != nil {
