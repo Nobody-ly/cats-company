@@ -399,6 +399,7 @@ func main() {
 	mux.HandleFunc("/api/channel-agent-bindings/resolve", channelAgentBindingHandler.HandleResolveChannelAgentBinding)
 	mux.HandleFunc("/api/channel-agent-bindings/link-user", jwtAuthWithDB(channelAgentBindingHandler.HandleLinkChannelAgentBindingUser))
 	mux.HandleFunc("/api/channel-agent-bindings/mobile-link", jwtAuthWithDB(channelAgentBindingHandler.HandleCreateChannelIdentityMobileLink))
+	mux.HandleFunc("/api/channel-agent-bindings/group-mobile-link", jwtAuthWithDB(channelAgentBindingHandler.HandleCreateChannelGroupMobileLink))
 	mux.HandleFunc("/api/f/", feishuChannelHandler.HandleOAuthShortLink)
 	mux.HandleFunc("/api/fn/", feishuChannelHandler.HandleNativeEntryShortLink)
 	mux.HandleFunc("/api/channel-agent-bindings/oauth/feishu/start", feishuChannelHandler.HandleOAuthStart)

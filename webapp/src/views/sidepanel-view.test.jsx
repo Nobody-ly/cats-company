@@ -18,11 +18,14 @@ jest.mock('../widgets/agent-store-modal', () => function MockAgentStoreModal() {
   return null;
 });
 
-jest.mock('../widgets/mobile-channel-bind-modal', () => function MockMobileChannelBindModal({ agentName, onClose }) {
+jest.mock('../widgets/mobile-channel-bind-modal', () => function MockMobileChannelBindModal({ agentName, groupId, topicId, groupName, onClose }) {
   return (
     <div data-testid="mobile-channel-modal">
       <strong>移动端使用</strong>
       <span>{agentName}</span>
+      <span>{groupName}</span>
+      <span data-testid="mobile-channel-group-id">{groupId || ''}</span>
+      <span data-testid="mobile-channel-topic-id">{topicId || ''}</span>
       <button type="button" onClick={onClose}>关闭移动端</button>
     </div>
   );
@@ -179,6 +182,35 @@ describe('ChatListView sidebar sections', () => {
     expect(api.openAgent).not.toHaveBeenCalled();
     expect(container.textContent).toContain('移动端使用');
     expect(container.textContent).toContain('Dev Agent');
+  });
+
+  it('opens mobile binding from a group row without opening the group conversation', async () => {
+    api.getGroups.mockResolvedValue({
+      groups: [
+        {
+          id: 88,
+          name: 'Virtual Team',
+          topic_id: 'grp_88',
+          owner_id: 7,
+        },
+      ],
+    });
+
+    await mount();
+
+    const mobileButton = container.querySelector('[aria-label="Virtual Team 移动端使用"]');
+    expect(mobileButton).toBeTruthy();
+
+    await act(async () => {
+      Simulate.click(mobileButton);
+      await Promise.resolve();
+    });
+
+    expect(onSelectTopic).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('移动端使用');
+    expect(container.textContent).toContain('Virtual Team');
+    expect(container.querySelector('[data-testid="mobile-channel-group-id"]').textContent).toBe('88');
+    expect(container.querySelector('[data-testid="mobile-channel-topic-id"]').textContent).toBe('grp_88');
   });
 
   it('removes friend agents directly from the assistant row', async () => {

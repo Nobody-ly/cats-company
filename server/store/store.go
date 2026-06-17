@@ -136,6 +136,12 @@ type ChannelAgentBindingStore interface {
 	CreateChannelIdentityMobileLink(link *types.ChannelIdentityMobileLink) (*types.ChannelIdentityMobileLink, error)
 	GetChannelIdentityMobileLink(sceneKey string) (*types.ChannelIdentityMobileLink, error)
 	ConsumeChannelIdentityMobileLink(sceneKey, channel, channelAppID string) (*types.ChannelIdentityMobileLink, error)
+	CreateChannelGroupMobileLink(link *types.ChannelGroupMobileLink) (*types.ChannelGroupMobileLink, error)
+	GetChannelGroupMobileLink(sceneKey string) (*types.ChannelGroupMobileLink, error)
+	ConsumeChannelGroupMobileLink(sceneKey, channel, channelAppID string) (*types.ChannelGroupMobileLink, error)
+	UpsertChannelGroupBinding(binding *types.ChannelGroupBinding) (*types.ChannelGroupBinding, error)
+	ResolveChannelGroupBinding(query types.ChannelGroupBindingQuery) (*types.ChannelGroupBinding, error)
+	ListChannelGroupBindingsForTopic(topicID string) ([]*types.ChannelGroupBinding, error)
 	UpsertChannelAgentRoute(route *types.ChannelAgentRoute) (*types.ChannelAgentRoute, error)
 	ResolveChannelAgentRoute(query types.ChannelAgentRouteQuery) (*types.ChannelAgentRoute, error)
 }

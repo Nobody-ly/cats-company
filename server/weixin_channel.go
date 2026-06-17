@@ -122,14 +122,26 @@ func (h *WeixinChannelHandler) HandleQRCode(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	appID := h.effectiveAppID("")
-	entry, _, err := h.resolveWeixinEntryScene(sceneKey, appID, false)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
-		return
-	}
-	if entry == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
-		return
+	if strings.HasPrefix(sceneKey, "g.") {
+		link, _, err := resolveChannelGroupMobileLink(h.db, sceneKey, "weixin", appID, false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load group mobile link"})
+			return
+		}
+		if link == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "group mobile link not found or expired"})
+			return
+		}
+	} else {
+		entry, _, err := h.resolveWeixinEntryScene(sceneKey, appID, false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
+			return
+		}
+		if entry == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
 	}
 	if h.api == nil || strings.TrimSpace(h.api.AppID()) == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "weixin official account is not configured"})
@@ -220,6 +232,10 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		return
 	}
 	appID := h.effectiveAppID(msg.ToUserName)
+	if strings.HasPrefix(sceneKey, "g.") {
+		h.handleGroupMobileScanEvent(w, msg, appID, sceneKey)
+		return
+	}
 	entry, canonicalUIDHint, err := h.resolveWeixinEntryScene(sceneKey, appID, true)
 	if err != nil {
 		log.Printf("weixin scan entry lookup failed: %v", err)
@@ -293,6 +309,33 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		return
 	}
 	appID := h.effectiveAppID(msg.ToUserName)
+	groupBinding, err := h.resolveWeixinGroupBinding(appID, openID, "", "p2p")
+	if err != nil {
+		log.Printf("resolve weixin group binding failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取群聊移动端绑定失败，请稍后重试。")
+		return
+	}
+	if groupBinding != nil {
+		clientMsgID := weixinClientMsgID(msg)
+		if err := deliverInboundChannelTextToGroup(h.db, h.hub, groupBinding.CanonicalUID, groupBinding, text, clientMsgID, "weixin", map[string]interface{}{
+			"source_channel":                    "weixin",
+			"channel_app_id":                    appID,
+			"channel_user_id":                   openID,
+			"channel_conversation_type":         "p2p",
+			"channel_message_id":                strings.TrimSpace(msg.MsgID),
+			"channel_identity_source":           "weixin.event",
+			"channel_identity_trust":            "weixin_official_account_callback",
+			"channel_group_binding_id":          groupBinding.ID,
+			"channel_group_mobile_topic_id":     groupBinding.TopicID,
+			"channel_group_mobile_binding_user": groupBinding.CanonicalUID,
+		}); err != nil {
+			log.Printf("deliver weixin group message failed: %v", err)
+			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "群聊移动端入口暂时不可用，请稍后再试。")
+			return
+		}
+		writeWeixinSuccess(w)
+		return
+	}
 	binding, err := h.resolveWeixinBinding(appID, openID, "", "p2p")
 	if err != nil {
 		log.Printf("resolve weixin binding failed: %v", err)
@@ -371,6 +414,87 @@ func (h *WeixinChannelHandler) resolveWeixinBinding(appID, channelUserID, conver
 		ChannelAppID:            appID,
 		ChannelUserID:           channelUserID,
 		ChannelConversationID:   conversationID,
+		ChannelConversationType: normalizeConversationType(conversationType),
+	})
+}
+
+func (h *WeixinChannelHandler) handleGroupMobileScanEvent(w http.ResponseWriter, msg *weixinEventMessage, appID, sceneKey string) {
+	if msg == nil {
+		writeWeixinSuccess(w)
+		return
+	}
+	link, group, err := resolveChannelGroupMobileLink(h.db, sceneKey, "weixin", appID, false)
+	if err != nil {
+		log.Printf("weixin scan group mobile lookup failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取群聊移动端入口失败，请稍后重试。")
+		return
+	}
+	if link == nil {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "这个群聊移动端入口不存在或已失效，请在 CatsCo 里重新生成二维码。")
+		return
+	}
+	openID := strings.TrimSpace(msg.FromUserName)
+	actorUID, err := h.ensureWeixinActor(appID, openID)
+	if err != nil {
+		log.Printf("ensure weixin group actor failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "创建微信用户身份失败，请稍后重试。")
+		return
+	}
+	binding, err := h.bindWeixinGroupIdentity(link, actorUID, appID, openID, "", "p2p")
+	if err != nil {
+		log.Printf("bind weixin group identity failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "保存群聊移动端绑定失败，请稍后重试。")
+		return
+	}
+	if _, _, err := resolveChannelGroupMobileLink(h.db, sceneKey, "weixin", appID, true); err != nil {
+		log.Printf("consume weixin group mobile link failed: %v", err)
+	}
+	if err := h.db.CreateTopic(link.TopicID, "group", link.CanonicalUID); err != nil {
+		log.Printf("create weixin group mobile topic failed: %v", err)
+	}
+	groupName := "这个群聊"
+	if group != nil && strings.TrimSpace(group.Name) != "" {
+		groupName = strings.TrimSpace(group.Name)
+	}
+	if binding != nil && binding.ID > 0 {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, fmt.Sprintf("已进入群聊「%s」。你现在可以直接在公众号聊天框里发消息，CatsCo 会把消息同步到这个群。", groupName))
+		return
+	}
+	writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "群聊移动端入口已确认，请在公众号聊天框里继续发送消息。")
+}
+
+func (h *WeixinChannelHandler) bindWeixinGroupIdentity(link *types.ChannelGroupMobileLink, actorUID int64, appID, channelUserID, conversationID, conversationType string) (*types.ChannelGroupBinding, error) {
+	if link == nil {
+		return nil, errors.New("missing group mobile link")
+	}
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+		Channel:                 "weixin",
+		ChannelAppID:            strings.TrimSpace(appID),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationType: normalizeConversationType(conversationType),
+		ActorUID:                actorUID,
+		CanonicalUID:            link.CanonicalUID,
+		GroupID:                 link.GroupID,
+		TopicID:                 link.TopicID,
+		Status:                  types.ChannelAgentBindingActive,
+	})
+}
+
+func (h *WeixinChannelHandler) resolveWeixinGroupBinding(appID, channelUserID, conversationID, conversationType string) (*types.ChannelGroupBinding, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.ResolveChannelGroupBinding(types.ChannelGroupBindingQuery{
+		Channel:                 "weixin",
+		ChannelAppID:            strings.TrimSpace(appID),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   strings.TrimSpace(conversationID),
 		ChannelConversationType: normalizeConversationType(conversationType),
 	})
 }

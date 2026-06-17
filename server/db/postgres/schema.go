@@ -24,6 +24,8 @@ func (a *Adapter) CreateSchema() error {
 		createChannelAgentBindingsTable,
 		createChannelAgentRoutesTable,
 		createChannelIdentityMobileLinksTable,
+		createChannelGroupMobileLinksTable,
+		createChannelGroupBindingsTable,
 		migrateUsersAddBotDisclose,
 		migrateMessagesAddReplyTo,
 		migrateBotConfigAddAPIKey,
@@ -330,6 +332,43 @@ CREATE TABLE IF NOT EXISTS channel_identity_mobile_links (
 );
 `
 
+const createChannelGroupMobileLinksTable = `
+CREATE TABLE IF NOT EXISTS channel_group_mobile_links (
+    id BIGSERIAL PRIMARY KEY,
+    scene_key VARCHAR(64) NOT NULL UNIQUE,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    canonical_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id BIGINT NOT NULL REFERENCES "groups"(id) ON DELETE CASCADE,
+    topic_id VARCHAR(128) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ DEFAULT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`
+
+const createChannelGroupBindingsTable = `
+CREATE TABLE IF NOT EXISTS channel_group_bindings (
+    id BIGSERIAL PRIMARY KEY,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_user_id VARCHAR(128) NOT NULL,
+    channel_conversation_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_conversation_type VARCHAR(32) NOT NULL DEFAULT 'p2p',
+    actor_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
+    canonical_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id BIGINT NOT NULL REFERENCES "groups"(id) ON DELETE CASCADE,
+    topic_id VARCHAR(128) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    bound_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMPTZ DEFAULT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_channel_group_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type)
+);
+`
+
 const migrateUsersAddBotDisclose = `ALTER TABLE users ADD COLUMN IF NOT EXISTS bot_disclose BOOLEAN NOT NULL DEFAULT FALSE;`
 const migrateMessagesAddReplyTo = `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to BIGINT DEFAULT NULL;`
 const migrateBotConfigAddAPIKey = `ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS api_key VARCHAR(128) DEFAULT NULL;`
@@ -420,6 +459,9 @@ CREATE INDEX IF NOT EXISTS idx_channel_agent_access_actor_agent ON channel_agent
 CREATE INDEX IF NOT EXISTS idx_channel_agent_access_lookup ON channel_agent_access_requests (channel, channel_app_id, channel_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_channel_mobile_links_entry ON channel_identity_mobile_links (entry_id, status);
 CREATE INDEX IF NOT EXISTS idx_channel_mobile_links_canonical ON channel_identity_mobile_links (canonical_uid, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_channel_group_mobile_links_group ON channel_group_mobile_links (group_id, canonical_uid, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_channel_group_bindings_topic ON channel_group_bindings (topic_id, status);
+CREATE INDEX IF NOT EXISTS idx_channel_group_bindings_lookup ON channel_group_bindings (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type, status);
 `
 
 const createUpdatedAtTriggers = `
@@ -442,5 +484,9 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_agent_access_requests_updated_at BEFORE UPDATE ON channel_agent_access_requests
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_identity_mobile_links_updated_at BEFORE UPDATE ON channel_identity_mobile_links
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE TRIGGER trg_channel_group_mobile_links_updated_at BEFORE UPDATE ON channel_group_mobile_links
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE TRIGGER trg_channel_group_bindings_updated_at BEFORE UPDATE ON channel_group_bindings
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 `

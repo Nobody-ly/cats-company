@@ -200,6 +200,7 @@ func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, pa
 		dataMsg.Data.Mentions = mentions
 		h.SendToUserExcept(uid, dataMsg, exclude)
 		h.broadcastToGroupWithMentions(groupID, dataMsg, uid, mentions, uid)
+		h.forwardChannelGroupBotReply(uid, topicID, payload, msgID)
 		return
 	}
 
