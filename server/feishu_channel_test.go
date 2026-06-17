@@ -844,6 +844,50 @@ func TestFeishuOutboundForwardsBotReply(t *testing.T) {
 	}
 }
 
+func TestFeishuConversationBindingInheritsDeviceAccess(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[8] = &types.User{ID: 8, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Feishu Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		CanonicalUID:            8,
+		DeviceAccessEnabled:     true,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		AgentUID:                43,
+		Source:                  "oauth",
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, &fakeFeishuAPI{appID: "cli_app"})
+
+	binding, err := handler.resolveCurrentFeishuBinding("cli_app", "ou_user", "chat-1", "p2p", 100)
+	if err != nil {
+		t.Fatalf("resolve binding: %v", err)
+	}
+	if binding == nil || binding.ChannelConversationID != "chat-1" || binding.CanonicalUID != 8 || !binding.DeviceAccessEnabled {
+		t.Fatalf("conversation binding should inherit canonical device access: %+v", binding)
+	}
+}
+
 func sendFeishuTextEvent(t *testing.T, handler *FeishuChannelHandler, appID, openID, chatID, chatType, messageID, text string) *httptest.ResponseRecorder {
 	t.Helper()
 	content, _ := json.Marshal(map[string]string{"text": text})

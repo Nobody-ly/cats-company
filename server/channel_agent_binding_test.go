@@ -724,6 +724,9 @@ func TestChannelAgentPublicBindingDeliversWithoutFriendApproval(t *testing.T) {
 	if len(db.messages) != 1 || len(db.topics) != 1 {
 		t.Fatalf("public delivery should create one message/topic messages=%+v topics=%+v", db.messages, db.topics)
 	}
+	if db.messages[0].FromUID != 9 || db.messages[0].TopicID != p2pTopicID(9, 43) || db.topics[0] != p2pTopicID(9, 43) {
+		t.Fatalf("mobile delivery should continue canonical p2p topic, message=%+v topics=%+v", db.messages[0], db.topics)
+	}
 }
 
 func TestChannelAgentPublicBindingRejectsExplicitlyRejectedUser(t *testing.T) {
@@ -1133,10 +1136,11 @@ func TestChannelAgentFriendCanExplicitlyEnableOwnDeviceAccess(t *testing.T) {
 	if !linked.DeviceLinked || linked.DeviceOwnerUID != 8 || !linked.Binding.DeviceAccessEnabled {
 		t.Fatalf("friend explicit device authorization should target friend device owner: %+v", linked)
 	}
-	deviceOwnerUID, reason := NewHub(db, nil).deviceAccessOwnerUID(100, 43, map[string]interface{}{
+	deviceOwnerUID, reason := NewHub(db, nil).deviceAccessOwnerUID(8, 43, map[string]interface{}{
 		"source_channel":            "weixin",
 		"channel_user_id":           "openid-friend",
 		"channel_conversation_type": "p2p",
+		"channel_actor_uid":         int64(100),
 	})
 	if deviceOwnerUID != 8 || reason != "channel_identity_link" {
 		t.Fatalf("device access owner should be friend after explicit authorization, owner=%d reason=%q", deviceOwnerUID, reason)

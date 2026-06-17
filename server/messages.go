@@ -207,6 +207,9 @@ func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, pa
 	if peerUID == 0 {
 		return
 	}
+	if !channelMetadataHasSource(payload.Metadata) {
+		h.clearChannelInboundReplyRoute(topicID, uid, peerUID)
+	}
 
 	h.SendToUserExcept(uid, dataMsg, exclude)
 	h.SendToUser(peerUID, h.messageForRecipient(uid, peerUID, topicID, replyTo, payload, msgID))
@@ -432,6 +435,10 @@ func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}
 	if channel == "" || channelUserID == "" {
 		return types.ChannelAgentBindingQuery{}, false
 	}
+	bindingActorUID := firstMetadataInt64(metadata, "channel_actor_uid", "channelActorUid")
+	if bindingActorUID <= 0 {
+		bindingActorUID = actorUID
+	}
 	return types.ChannelAgentBindingQuery{
 		Channel:                 channel,
 		ChannelAppID:            firstMetadataString(metadata, "channel_app_id"),
@@ -439,7 +446,7 @@ func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}
 		ChannelConversationID:   firstMetadataString(metadata, "channel_conversation_id"),
 		ChannelConversationType: normalizeConversationType(firstMetadataString(metadata, "channel_conversation_type")),
 		AgentUID:                agentUID,
-		ActorUID:                actorUID,
+		ActorUID:                bindingActorUID,
 	}, true
 }
 
@@ -760,6 +767,47 @@ func firstMetadataString(metadata map[string]interface{}, keys ...string) string
 		}
 	}
 	return ""
+}
+
+func firstMetadataInt64(metadata map[string]interface{}, keys ...string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	for _, key := range keys {
+		value, ok := metadata[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case int64:
+			if typed > 0 {
+				return typed
+			}
+		case int:
+			if typed > 0 {
+				return int64(typed)
+			}
+		case int32:
+			if typed > 0 {
+				return int64(typed)
+			}
+		case float64:
+			if typed > 0 {
+				return int64(typed)
+			}
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err == nil && parsed > 0 {
+				return parsed
+			}
+		case string:
+			parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+			if err == nil && parsed > 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 func metadataMap(metadata map[string]interface{}, key string) map[string]interface{} {

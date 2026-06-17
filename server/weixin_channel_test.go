@@ -412,8 +412,8 @@ func TestWeixinApprovedPrivateBindingProvidesDeviceLinkOnRequest(t *testing.T) {
 	if strings.TrimSpace(textRec.Body.String()) != "success" {
 		t.Fatalf("approved text should be delivered, body=%s", textRec.Body.String())
 	}
-	if len(db.messages) != 1 || db.messages[0].FromUID != binding.ActorUID {
-		t.Fatalf("approved channel user should deliver as channel actor: %+v", db.messages)
+	if len(db.messages) != 1 || db.messages[0].FromUID != 9 || db.messages[0].TopicID != p2pTopicID(9, 43) {
+		t.Fatalf("approved channel user should continue canonical CatsCo conversation: %+v", db.messages)
 	}
 }
 
@@ -855,6 +855,94 @@ func TestWeixinOutboundForwardsBotReply(t *testing.T) {
 	}
 	if api.sends[0].OpenID != "openid-1" || api.sends[0].Text != "合同进度正常。" {
 		t.Fatalf("send=%+v", api.sends[0])
+	}
+}
+
+func TestWeixinOutboundUsesRecordedCanonicalReplyRoute(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[8] = &types.User{ID: 8, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("weixin", "wx_app", "openid-mobile"), DisplayName: "Weixin Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	binding, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-mobile",
+		ActorUID:      100,
+		CanonicalUID:  8,
+		OwnerUID:      7,
+		AgentUID:      43,
+		Status:        types.ChannelAgentBindingActive,
+	})
+	if err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	api := &fakeWeixinAPI{appID: "wx_app"}
+	dispatcher := NewChannelOutboundDispatcher(db, nil, "").WithWeixin(api, "wx_app")
+	topicID := p2pTopicID(8, 43)
+	dispatcher.RecordInboundReplyRoute(topicID, 8, binding)
+
+	if err := dispatcher.ForwardBotReply(context.Background(), 8, 43, topicID, "移动端回复"); err != nil {
+		t.Fatalf("forward recorded route: %v", err)
+	}
+	if len(api.sends) != 1 || api.sends[0].OpenID != "openid-mobile" || api.sends[0].Text != "移动端回复" {
+		t.Fatalf("recorded route send=%+v", api.sends)
+	}
+
+	dispatcher.ClearInboundReplyRoute(topicID, 8, 43)
+	if err := dispatcher.ForwardBotReply(context.Background(), 8, 43, topicID, "网页回复"); err != nil {
+		t.Fatalf("forward after clear: %v", err)
+	}
+	if len(api.sends) != 1 {
+		t.Fatalf("canonical web reply should not reuse mobile channel route, sends=%+v", api.sends)
+	}
+}
+
+func TestWeixinInboundCanonicalDeliveryRecordsReplyRoute(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[8] = &types.User{ID: 8, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("weixin", "wx_app", "openid-mobile"), DisplayName: "Weixin Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-mobile",
+		ActorUID:      100,
+		CanonicalUID:  8,
+		OwnerUID:      7,
+		AgentUID:      43,
+		Status:        types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	api := &fakeWeixinAPI{appID: "wx_app"}
+	hub := NewHub(db, nil)
+	dispatcher := NewChannelOutboundDispatcher(db, nil, "").WithWeixin(api, "wx_app")
+	hub.SetChannelOutboundDispatcher(dispatcher)
+	topicID := p2pTopicID(8, 43)
+
+	if err := deliverInboundChannelTextToAgent(db, hub, 100, 43, "移动端继续", "wx-msg-1", "weixin", map[string]interface{}{
+		"source_channel":            "weixin",
+		"channel_app_id":            "wx_app",
+		"channel_user_id":           "openid-mobile",
+		"channel_conversation_type": "p2p",
+	}); err != nil {
+		t.Fatalf("deliver inbound: %v", err)
+	}
+	if len(db.messages) != 1 || db.messages[0].FromUID != 8 || db.messages[0].TopicID != topicID {
+		t.Fatalf("mobile message should persist in canonical topic, messages=%+v", db.messages)
+	}
+
+	if err := dispatcher.ForwardBotReply(context.Background(), 8, 43, topicID, "继续处理"); err != nil {
+		t.Fatalf("forward recorded reply: %v", err)
+	}
+	if len(api.sends) != 1 || api.sends[0].OpenID != "openid-mobile" || api.sends[0].Text != "继续处理" {
+		t.Fatalf("mobile reply route sends=%+v", api.sends)
 	}
 }
 
