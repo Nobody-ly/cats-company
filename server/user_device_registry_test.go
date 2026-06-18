@@ -653,6 +653,110 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	}
 }
 
+func TestBotRecipientIdentityKeepsActorDeviceForDirectFriendChatWithExistingChannelBinding(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman}
+	db.users[42] = &types.User{ID: 42, Username: "shared-agent", DisplayName: "Shared Agent", AccountType: types.AccountBot}
+	db.owners[42] = 7
+	db.friends[friendKey(9, 42)] = types.FriendAccepted
+	db.friends[friendKey(42, 9)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-bob",
+		ActorUID:            9,
+		CanonicalUID:        9,
+		DeviceAccessEnabled: true,
+		OwnerUID:            7,
+		AgentUID:            42,
+		Status:              "active",
+	}); err != nil {
+		t.Fatalf("seed channel binding: %v", err)
+	}
+
+	hub := NewHub(db, nil)
+	hub.userDevices.now = func() time.Time { return time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC) }
+	ownerDevice, err := hub.userDevices.register(7, RegisterUserDeviceRequest{
+		DeviceID:       "owner-cloud",
+		DisplayName:    "Owner Cloud",
+		BodyID:         "body-owner-cloud",
+		InstallationID: "install-owner-cloud",
+		Capabilities:   []string{"read_file", "write_file"},
+	})
+	if err != nil {
+		t.Fatalf("register owner device: %v", err)
+	}
+	bobDevice, err := hub.userDevices.register(9, RegisterUserDeviceRequest{
+		DeviceID:       "bob-laptop",
+		DisplayName:    "Bob Laptop",
+		BodyID:         "body-bob",
+		InstallationID: "install-bob",
+		Capabilities:   []string{"read_file", "write_file", "edit_file"},
+	})
+	if err != nil {
+		t.Fatalf("register bob device: %v", err)
+	}
+	ownerClient := &Client{uid: 7, accountType: types.AccountHuman, deviceOwnerUID: 7, deviceID: "owner-cloud", deviceBodyID: "body-owner-cloud", deviceInstallationID: "install-owner-cloud", send: make(chan []byte, 1)}
+	bobClient := &Client{uid: 9, accountType: types.AccountHuman, deviceOwnerUID: 9, deviceID: "bob-laptop", deviceBodyID: "body-bob", deviceInstallationID: "install-bob", send: make(chan []byte, 1)}
+	botClient := &Client{uid: 42, accountType: types.AccountBot, bodyID: "body-agent", send: make(chan []byte, 1)}
+	hub.addClient(ownerClient)
+	hub.addClient(bobClient)
+	hub.addClient(botClient)
+	hub.bindDeviceClient(7, ownerDevice, ownerClient)
+	hub.bindDeviceClient(9, bobDevice, bobClient)
+
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_9_42",
+		Content: json.RawMessage(`"在我的电脑上创建一个文件"`),
+	})
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+	hub.fanoutNormalizedMessage(9, "p2p_9_42", 0, payload, 203, nil)
+
+	var msg ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &msg)
+	identity := metadataMapFromServerMessage(t, &msg, "catsco_identity")
+	permissions, ok := identity["permissions"].(map[string]interface{})
+	if !ok || permissions["device_owner_user_id"] != "usr9" || permissions["device_owner_source"] != "actor" {
+		t.Fatalf("direct friend chat should keep actor device permissions: %#v", identity["permissions"])
+	}
+	grant := firstDeviceGrantMap(t, identity)
+	if grant["ownerUserId"] != "usr9" || grant["actorUserId"] != "usr9" || grant["agentId"] != "usr42" {
+		t.Fatalf("direct friend chat grant should target actor identity: %#v", grant)
+	}
+	if grant["deviceId"] != "bob-laptop" || grant["deviceId"] == "owner-cloud" {
+		t.Fatalf("direct friend chat must target Bob's device, not owner cloud: %#v", grant)
+	}
+	selection := deviceSelectionMap(t, identity)
+	if selection["ownerUserId"] != "usr9" || selection["actorUserId"] != "usr9" || selection["status"] != string(DeviceSelectionSelected) {
+		t.Fatalf("unexpected direct friend selection: %#v", selection)
+	}
+	selectedDevice, ok := selection["selectedDevice"].(map[string]interface{})
+	if !ok || selectedDevice["deviceId"] != "bob-laptop" {
+		t.Fatalf("direct friend selection should choose Bob's device: %#v", selection["selectedDevice"])
+	}
+}
+
+func TestActorLooksLikeChannelIdentity(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[1] = &types.User{ID: 1, Username: "ch_weixin_openid", DisplayName: "Weixin Actor", AccountType: types.AccountHuman}
+	db.users[2] = &types.User{ID: 2, Username: "ch_feishu_openid", DisplayName: "Feishu Actor", AccountType: types.AccountHuman}
+	db.users[3] = &types.User{ID: 3, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman}
+	hub := NewHub(db, nil)
+
+	if !hub.actorLooksLikeChannelIdentity(1) {
+		t.Fatalf("weixin shadow actor should be treated as channel identity")
+	}
+	if !hub.actorLooksLikeChannelIdentity(2) {
+		t.Fatalf("feishu shadow actor should be treated as channel identity")
+	}
+	if hub.actorLooksLikeChannelIdentity(3) {
+		t.Fatalf("regular CatsCo user should not be treated as channel identity")
+	}
+}
+
 func TestBotRecipientIdentityDoesNotUseAgentOwnerDeviceWithoutChannelLink(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
