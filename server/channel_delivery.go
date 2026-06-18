@@ -11,6 +11,10 @@ import (
 )
 
 func deliverInboundChannelTextToAgent(db store.Store, hub *Hub, actorUID, agentUID int64, text, clientMsgID, source string, metadata map[string]interface{}) error {
+	return deliverInboundChannelMessageToAgent(db, hub, actorUID, agentUID, text, nil, clientMsgID, source, metadata)
+}
+
+func deliverInboundChannelMessageToAgent(db store.Store, hub *Hub, actorUID, agentUID int64, text string, files []uploadPayload, clientMsgID, source string, metadata map[string]interface{}) error {
 	if actorUID <= 0 || agentUID <= 0 {
 		return errors.New("invalid actor or agent")
 	}
@@ -31,13 +35,23 @@ func deliverInboundChannelTextToAgent(db store.Store, hub *Hub, actorUID, agentU
 	if err := db.CreateTopic(topicID, "p2p", conversationUID); err != nil {
 		return fmt.Errorf("create agent topic: %w", err)
 	}
-	rawContent, _ := json.Marshal(text)
+	displayText := strings.TrimSpace(text)
+	if displayText == "" {
+		displayText = channelMediaDisplaySummary(files)
+	}
+	rawContent, _ := json.Marshal(displayText)
+	contentBlocks := channelInboundContentBlocks(text, files)
+	messageType := "text"
+	if strings.TrimSpace(text) == "" && len(files) == 1 {
+		messageType = files[0].Type
+	}
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
-		TopicID:     topicID,
-		ClientMsgID: clientMsgID,
-		Content:     rawContent,
-		Type:        "text",
-		Metadata:    metadata,
+		TopicID:       topicID,
+		ClientMsgID:   clientMsgID,
+		Content:       rawContent,
+		Type:          messageType,
+		ContentBlocks: contentBlocks,
+		Metadata:      metadata,
 	})
 	if err != nil {
 		return err
@@ -129,4 +143,29 @@ func validateDeliverableChannelGroupBinding(db store.Store, binding *types.Chann
 		return nil, errors.New("channel group binding user is muted")
 	}
 	return group, nil
+}
+
+func channelInboundContentBlocks(text string, files []uploadPayload) []types.ContentBlock {
+	blocks := make([]types.ContentBlock, 0, len(files)+1)
+	if strings.TrimSpace(text) != "" {
+		blocks = append(blocks, types.ContentBlock{Type: "text", Text: text})
+	}
+	for _, file := range files {
+		blockType := file.Type
+		if blockType != "image" {
+			blockType = "file"
+		}
+		blocks = append(blocks, types.ContentBlock{
+			Type: blockType,
+			Payload: map[string]interface{}{
+				"file_key":  file.FileKey,
+				"url":       file.URL,
+				"name":      file.Name,
+				"file_name": file.Name,
+				"size":      file.Size,
+				"mime_type": file.MimeType,
+			},
+		})
+	}
+	return blocks
 }

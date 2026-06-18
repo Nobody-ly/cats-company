@@ -11,6 +11,8 @@ export declare class MessageContext {
     readonly from: string;
     readonly seq: number;
     readonly content: unknown;
+    readonly contentBlocks: unknown[];
+    readonly content_blocks: unknown[] | undefined;
     readonly metadata: Record<string, unknown> | undefined;
     readonly replyTo: number | undefined;
     constructor(bot: CatsBot, data: MsgServerData);

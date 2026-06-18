@@ -14,6 +14,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -55,6 +56,7 @@ type FeishuUserIdentity struct {
 type feishuAPI interface {
 	AppID() string
 	ExchangeOAuthCode(ctx context.Context, code string, redirectURI string) (*FeishuUserIdentity, error)
+	DownloadMessageResource(ctx context.Context, messageID, fileKey, resourceType string) (*channelMediaDownload, error)
 	SendTextMessage(ctx context.Context, receiveIDType string, receiveID string, text string) error
 }
 
@@ -471,11 +473,27 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 	}
 	chatType := normalizeFeishuChatType(event.Message.ChatType)
 	replyIDType, replyID := feishuReplyTarget(channelUserID, event.Message.ChatID, chatType)
-	if event.Message.MessageType != "" && event.Message.MessageType != "text" {
-		return h.replyToFeishu(ctx, replyIDType, replyID, "当前飞书云端入口先支持文本消息，文件和图片能力会在后续版本接入。")
+	messageType := strings.ToLower(strings.TrimSpace(event.Message.MessageType))
+	if messageType == "" {
+		messageType = "text"
 	}
-	text := extractFeishuText(event.Message.Content)
-	if strings.TrimSpace(text) == "" {
+	var text string
+	var media *feishuInboundMedia
+	switch messageType {
+	case "text":
+		text = extractFeishuText(event.Message.Content)
+	case "image", "file":
+		var err error
+		media, err = extractFeishuInboundMedia(messageType, event.Message.Content)
+		if err != nil {
+			log.Printf("decode feishu media content failed: %v", err)
+			return h.replyToFeishu(ctx, replyIDType, replyID, "未能读取飞书图片或文件，请稍后重试。")
+		}
+		text = media.Text
+	default:
+		return h.replyToFeishu(ctx, replyIDType, replyID, "当前飞书入口暂不支持这种消息类型，请发送文本、图片或文件。")
+	}
+	if strings.TrimSpace(text) == "" && media == nil {
 		return nil
 	}
 	appID := h.effectiveAppID(env.Header.AppID)
@@ -515,8 +533,11 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 		return nil
 	}
 	text = stripFeishuLeadingMentions(text)
-	if chatType == "group" && cmd.Kind == "" {
+	if chatType == "group" && cmd.Kind == "" && media == nil {
 		return h.replyToFeishu(ctx, replyIDType, replyID, "群聊里请使用「员工列表」「切换到 员工名」「当前员工」等命令；普通任务请在私聊中发送，避免回复或设备授权发到错误会话。")
+	}
+	if chatType == "group" && cmd.Kind == "" && media != nil {
+		return h.replyToFeishu(ctx, replyIDType, replyID, "群聊里的图片或文件请先切换到目标虚拟员工后，在私聊中发送，避免附件进入错误会话。")
 	}
 
 	switch cmd.Kind {
@@ -550,13 +571,39 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 	} else if !ok {
 		return h.replyToFeishu(ctx, replyIDType, replyID, msg)
 	}
-	return h.deliverInboundTextToAgent(actorUID, binding.AgentUID, text, "feishu:"+event.Message.MessageID, map[string]interface{}{
+	metadata := h.feishuInboundMetadata(appID, channelUserID, &event, binding, chatType, messageType)
+	if media != nil {
+		metadata["channel_media_key"] = media.ResourceKey
+		download, err := h.api.DownloadMessageResource(ctx, event.Message.MessageID, media.ResourceKey, media.ResourceType)
+		if err != nil {
+			log.Printf("download feishu media failed: %v", err)
+			return h.replyToFeishu(ctx, replyIDType, replyID, "读取飞书图片或文件失败，请稍后重试。")
+		}
+		if download.FileName == "" {
+			download.FileName = media.FileName
+		}
+		if download.ContentType == "" {
+			download.ContentType = media.ContentType
+		}
+		file, err := saveChannelMediaUpload(media.UploadType, download)
+		if err != nil {
+			log.Printf("save feishu media failed: %v", err)
+			return h.replyToFeishu(ctx, replyIDType, replyID, "保存飞书图片或文件失败，请稍后重试。")
+		}
+		return h.deliverInboundMessageToAgent(actorUID, binding.AgentUID, text, []uploadPayload{file}, "feishu:"+event.Message.MessageID, metadata)
+	}
+	return h.deliverInboundTextToAgent(actorUID, binding.AgentUID, text, "feishu:"+event.Message.MessageID, metadata)
+}
+
+func (h *FeishuChannelHandler) feishuInboundMetadata(appID, channelUserID string, event *feishuMessageEvent, binding *types.ChannelAgentBinding, chatType string, messageType string) map[string]interface{} {
+	return map[string]interface{}{
 		"source_channel":                 "feishu",
 		"channel_app_id":                 appID,
 		"channel_user_id":                channelUserID,
 		"channel_conversation_id":        event.Message.ChatID,
 		"channel_conversation_type":      chatType,
 		"channel_message_id":             event.Message.MessageID,
+		"channel_message_type":           messageType,
 		"channel_identity_source":        "feishu.event",
 		"channel_identity_trust":         "feishu_event_callback",
 		"channel_gateway_mode":           "feishu_agent_gateway",
@@ -566,11 +613,15 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 		"channel_canonical_uid":          binding.CanonicalUID,
 		"channel_agent_binding_id":       binding.ID,
 		"channel_device_access_enabled":  binding.DeviceAccessEnabled,
-	})
+	}
 }
 
 func (h *FeishuChannelHandler) deliverInboundTextToAgent(actorUID, agentUID int64, text, clientMsgID string, metadata map[string]interface{}) error {
 	return deliverInboundChannelTextToAgent(h.db, h.hub, actorUID, agentUID, text, clientMsgID, "feishu", metadata)
+}
+
+func (h *FeishuChannelHandler) deliverInboundMessageToAgent(actorUID, agentUID int64, text string, files []uploadPayload, clientMsgID string, metadata map[string]interface{}) error {
+	return deliverInboundChannelMessageToAgent(h.db, h.hub, actorUID, agentUID, text, files, clientMsgID, "feishu", metadata)
 }
 
 type feishuGatewayCommand struct {
@@ -1360,6 +1411,61 @@ func extractFeishuText(content string) string {
 	return strings.TrimSpace(content)
 }
 
+type feishuInboundMedia struct {
+	ResourceKey  string
+	ResourceType string
+	UploadType   string
+	FileName     string
+	ContentType  string
+	Text         string
+}
+
+func extractFeishuInboundMedia(messageType, content string) (*feishuInboundMedia, error) {
+	var parsed struct {
+		ImageKey    string `json:"image_key"`
+		FileKey     string `json:"file_key"`
+		FileName    string `json:"file_name"`
+		Name        string `json:"name"`
+		Text        string `json:"text"`
+		ContentType string `json:"content_type"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return nil, err
+	}
+	messageType = strings.ToLower(strings.TrimSpace(messageType))
+	switch messageType {
+	case "image":
+		key := strings.TrimSpace(parsed.ImageKey)
+		if key == "" {
+			return nil, errors.New("missing feishu image key")
+		}
+		return &feishuInboundMedia{
+			ResourceKey:  key,
+			ResourceType: "image",
+			UploadType:   "image",
+			FileName:     "feishu-image-" + key + ".jpg",
+			ContentType:  firstNonEmpty(parsed.ContentType, "image/jpeg"),
+			Text:         strings.TrimSpace(parsed.Text),
+		}, nil
+	case "file":
+		key := strings.TrimSpace(parsed.FileKey)
+		if key == "" {
+			return nil, errors.New("missing feishu file key")
+		}
+		fileName := firstNonEmpty(strings.TrimSpace(parsed.FileName), strings.TrimSpace(parsed.Name), "feishu-file-"+key)
+		return &feishuInboundMedia{
+			ResourceKey:  key,
+			ResourceType: "file",
+			UploadType:   "file",
+			FileName:     fileName,
+			ContentType:  strings.TrimSpace(parsed.ContentType),
+			Text:         strings.TrimSpace(parsed.Text),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported feishu media type %q", messageType)
+	}
+}
+
 type feishuAPIClient struct {
 	config FeishuChannelConfig
 	http   *http.Client
@@ -1464,6 +1570,62 @@ func (c *feishuAPIClient) SendTextMessage(ctx context.Context, receiveIDType str
 		return fmt.Errorf("feishu send message error: %s", resp.Msg)
 	}
 	return nil
+}
+
+func (c *feishuAPIClient) DownloadMessageResource(ctx context.Context, messageID, fileKey, resourceType string) (*channelMediaDownload, error) {
+	if c == nil || strings.TrimSpace(c.config.AppID) == "" || strings.TrimSpace(c.config.AppSecret) == "" {
+		return nil, errors.New("feishu app is not configured")
+	}
+	messageID = strings.TrimSpace(messageID)
+	fileKey = strings.TrimSpace(fileKey)
+	resourceType = strings.TrimSpace(resourceType)
+	if messageID == "" || fileKey == "" || resourceType == "" {
+		return nil, errors.New("missing feishu message resource key")
+	}
+	token, err := c.tenantAccessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(firstNonEmpty(c.config.APIBaseURL, defaultFeishuAPIBase), "/") +
+		"/open-apis/im/v1/messages/" + url.PathEscape(messageID) +
+		"/resources/" + url.PathEscape(fileKey) +
+		"?type=" + url.QueryEscape(resourceType)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		return nil, fmt.Errorf("feishu media http %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	contentType := res.Header.Get("Content-Type")
+	if mediaType, _, err := mime.ParseMediaType(contentType); err == nil && mediaType == "application/json" {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		var payload struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := json.Unmarshal(body, &payload); err == nil && payload.Code != 0 {
+			return nil, fmt.Errorf("feishu media error %d: %s", payload.Code, payload.Msg)
+		}
+		return nil, fmt.Errorf("feishu media response is not a file: %s", strings.TrimSpace(string(body)))
+	}
+	fileName := channelMediaFileNameFromDisposition(res.Header.Get("Content-Disposition"))
+	if fileName == "" {
+		fileName = "feishu-" + resourceType + "-" + fileKey
+	}
+	return &channelMediaDownload{
+		Body:        res.Body,
+		FileName:    fileName,
+		ContentType: contentType,
+	}, nil
 }
 
 func (c *feishuAPIClient) tenantAccessToken(ctx context.Context) (string, error) {
