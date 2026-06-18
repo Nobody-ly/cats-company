@@ -9,6 +9,8 @@ class MessageContext {
     from;
     seq;
     content;
+    contentBlocks;
+    content_blocks;
     metadata;
     replyTo;
     constructor(bot, data) {
@@ -17,6 +19,8 @@ class MessageContext {
         this.from = data.from ?? '';
         this.seq = data.seq;
         this.content = data.content;
+        this.contentBlocks = Array.isArray(data.content_blocks) ? data.content_blocks : [];
+        this.content_blocks = this.contentBlocks.length > 0 ? this.contentBlocks : undefined;
         this.metadata = data.metadata;
         this.replyTo = data.reply_to;
     }

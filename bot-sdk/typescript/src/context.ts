@@ -21,6 +21,8 @@ export class MessageContext {
   public readonly from: string;
   public readonly seq: number;
   public readonly content: unknown;
+  public readonly contentBlocks: unknown[];
+  public readonly content_blocks: unknown[] | undefined;
   public readonly metadata: Record<string, unknown> | undefined;
   public readonly replyTo: number | undefined;
 
@@ -30,6 +32,8 @@ export class MessageContext {
     this.from = data.from ?? '';
     this.seq = data.seq;
     this.content = data.content;
+    this.contentBlocks = Array.isArray(data.content_blocks) ? data.content_blocks : [];
+    this.content_blocks = this.contentBlocks.length > 0 ? this.contentBlocks : undefined;
     this.metadata = data.metadata;
     this.replyTo = data.reply_to;
   }

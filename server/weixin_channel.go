@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"sort"
@@ -48,6 +49,7 @@ type WeixinQRCode struct {
 type weixinAPI interface {
 	AppID() string
 	CreatePermanentQRCode(ctx context.Context, sceneKey string) (*WeixinQRCode, error)
+	DownloadMedia(ctx context.Context, mediaID string) (*channelMediaDownload, error)
 	SendTextMessage(ctx context.Context, openID string, text string) error
 }
 
@@ -206,6 +208,10 @@ func (h *WeixinChannelHandler) handleEventPost(w http.ResponseWriter, r *http.Re
 		h.handleScanEvent(w, r.Context(), &msg)
 	case "text":
 		h.handleTextMessage(w, r.Context(), &msg)
+	case "image":
+		h.handleMediaMessage(w, r.Context(), &msg, "image")
+	case "file":
+		h.handleMediaMessage(w, r.Context(), &msg, "file")
 	default:
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "当前微信入口先支持文本消息，图片和文件能力会在后续版本接入。")
 	}
@@ -343,25 +349,81 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		writeWeixinSuccess(w)
 		return
 	}
+	appID, binding, actorUID, ok := h.resolveDeliverableWeixinBinding(w, msg)
+	if !ok {
+		return
+	}
+	clientMsgID := weixinClientMsgID(msg)
+	if err := deliverInboundChannelTextToAgent(h.db, h.hub, actorUID, binding.AgentUID, text, clientMsgID, "weixin", h.weixinInboundMetadata(appID, openID, binding, msg)); err != nil {
+		log.Printf("deliver weixin message failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "虚拟员工暂时不可用，请稍后再试。")
+		return
+	}
+	writeWeixinSuccess(w)
+}
+
+func (h *WeixinChannelHandler) handleMediaMessage(w http.ResponseWriter, ctx context.Context, msg *weixinEventMessage, uploadType string) {
+	if msg == nil {
+		writeWeixinSuccess(w)
+		return
+	}
+	openID := strings.TrimSpace(msg.FromUserName)
+	mediaID := strings.TrimSpace(msg.MediaID)
+	if openID == "" || mediaID == "" {
+		writeWeixinSuccess(w)
+		return
+	}
+	appID, binding, actorUID, ok := h.resolveDeliverableWeixinBinding(w, msg)
+	if !ok {
+		return
+	}
+	media, err := h.api.DownloadMedia(ctx, mediaID)
+	if err != nil {
+		log.Printf("download weixin media failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取微信图片或文件失败，请稍后重试。")
+		return
+	}
+	if media.FileName == "" {
+		media.FileName = "weixin-" + strings.ToLower(strings.TrimSpace(msg.MsgType)) + "-" + mediaID
+	}
+	file, err := saveChannelMediaUpload(uploadType, media)
+	if err != nil {
+		log.Printf("save weixin media failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "保存微信图片或文件失败，请稍后重试。")
+		return
+	}
+	metadata := h.weixinInboundMetadata(appID, openID, binding, msg)
+	metadata["channel_media_id"] = mediaID
+	if err := deliverInboundChannelMessageToAgent(h.db, h.hub, actorUID, binding.AgentUID, "", []uploadPayload{file}, weixinClientMsgID(msg), "weixin", metadata); err != nil {
+		log.Printf("deliver weixin media failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "虚拟员工暂时不可用，请稍后再试。")
+		return
+	}
+	writeWeixinSuccess(w)
+}
+
+func (h *WeixinChannelHandler) resolveDeliverableWeixinBinding(w http.ResponseWriter, msg *weixinEventMessage) (string, *types.ChannelAgentBinding, int64, bool) {
+	openID := strings.TrimSpace(msg.FromUserName)
+	appID := h.effectiveAppID(msg.ToUserName)
 	binding, err := h.resolveWeixinBinding(appID, openID, "", "p2p")
 	if err != nil {
 		log.Printf("resolve weixin binding failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取虚拟员工绑定失败，请稍后重试。")
-		return
+		return appID, nil, 0, false
 	}
 	if binding == nil {
 		if access, lookupErr := h.resolveWeixinAccessRequest(appID, openID, "", "p2p"); lookupErr == nil && access != nil {
 			if access.Status == "pending" {
 				writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务；如果需要使用你的电脑文件，可以发送「设备授权」获取绑定链接。")
-				return
+				return appID, nil, 0, false
 			}
 			if access.Status == "rejected" {
 				writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请暂未通过，请联系虚拟员工管理员。")
-				return
+				return appID, nil, 0, false
 			}
 		}
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "请先扫描虚拟员工入口二维码完成绑定，然后再回到公众号聊天框提问。")
-		return
+		return appID, nil, 0, false
 	}
 	actorUID := binding.ActorUID
 	if actorUID <= 0 {
@@ -369,37 +431,41 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		if err != nil {
 			log.Printf("ensure legacy weixin actor failed: %v", err)
 			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "创建微信用户身份失败，请稍后重试。")
-			return
+			return appID, nil, 0, false
 		}
 		if _, err = h.bindWeixinIdentity(bindingAsEntry(binding), actorUID, appID, openID, binding.ChannelConversationID, binding.ChannelConversationType); err != nil {
 			log.Printf("upgrade legacy weixin binding failed: %v", err)
 			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "更新微信用户身份失败，请稍后重试。")
-			return
+			return appID, nil, 0, false
 		}
 	}
 	if channelBindingNeedsCatsCoLogin(binding) {
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, channelBindingDeviceLinkGuidance(h.db, nil, binding))
-		return
+		return appID, nil, 0, false
 	}
 	if channelBindingRejected(binding) {
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请暂未通过，请联系虚拟员工管理员。")
-		return
+		return appID, nil, 0, false
 	}
 	if pending, err := channelBindingPendingFriendApproval(h.db, binding); err != nil {
 		log.Printf("check weixin channel access failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "检查虚拟员工好友关系失败，请稍后重试。")
-		return
+		return appID, nil, 0, false
 	} else if pending {
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务。")
-		return
+		return appID, nil, 0, false
 	}
-	clientMsgID := weixinClientMsgID(msg)
-	if err := deliverInboundChannelTextToAgent(h.db, h.hub, actorUID, binding.AgentUID, text, clientMsgID, "weixin", map[string]interface{}{
+	return appID, binding, actorUID, true
+}
+
+func (h *WeixinChannelHandler) weixinInboundMetadata(appID, openID string, binding *types.ChannelAgentBinding, msg *weixinEventMessage) map[string]interface{} {
+	return map[string]interface{}{
 		"source_channel":                 "weixin",
 		"channel_app_id":                 appID,
 		"channel_user_id":                openID,
 		"channel_conversation_type":      "p2p",
 		"channel_message_id":             strings.TrimSpace(msg.MsgID),
+		"channel_message_type":           strings.ToLower(strings.TrimSpace(msg.MsgType)),
 		"channel_identity_source":        "weixin.event",
 		"channel_identity_trust":         "weixin_official_account_callback",
 		"channel_agent_binding_entry_id": binding.EntryID,
@@ -407,12 +473,7 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		"channel_canonical_uid":          binding.CanonicalUID,
 		"channel_agent_binding_id":       binding.ID,
 		"channel_device_access_enabled":  binding.DeviceAccessEnabled,
-	}); err != nil {
-		log.Printf("deliver weixin message failed: %v", err)
-		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "虚拟员工暂时不可用，请稍后再试。")
-		return
 	}
-	writeWeixinSuccess(w)
 }
 
 func (h *WeixinChannelHandler) resolveWeixinBinding(appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentBinding, error) {
@@ -671,6 +732,8 @@ type weixinEventMessage struct {
 	EventKey     string   `xml:"EventKey"`
 	Ticket       string   `xml:"Ticket"`
 	Content      string   `xml:"Content"`
+	PicURL       string   `xml:"PicUrl"`
+	MediaID      string   `xml:"MediaId"`
 	MsgID        string   `xml:"MsgId"`
 }
 
@@ -690,7 +753,7 @@ func weixinClientMsgID(msg *weixinEventMessage) string {
 	sum := sha1.Sum([]byte(strings.Join([]string{
 		msg.FromUserName,
 		msg.ToUserName,
-		strings.TrimSpace(msg.Content),
+		strings.TrimSpace(firstNonEmpty(msg.Content, msg.MediaID, msg.PicURL, msg.MsgType)),
 		fmt.Sprintf("%d", msg.CreateTime),
 	}, "\x00")))
 	return "weixin:" + hex.EncodeToString(sum[:])[:24]
@@ -836,6 +899,56 @@ func (c *weixinAPIClient) SendTextMessage(ctx context.Context, openID string, te
 		return fmt.Errorf("weixin send message error %d: %s", resp.ErrCode, resp.ErrMsg)
 	}
 	return nil
+}
+
+func (c *weixinAPIClient) DownloadMedia(ctx context.Context, mediaID string) (*channelMediaDownload, error) {
+	if c == nil || strings.TrimSpace(c.config.AppID) == "" || strings.TrimSpace(c.config.AppSecret) == "" {
+		return nil, errors.New("weixin official account is not configured")
+	}
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return nil, errors.New("missing weixin media id")
+	}
+	token, err := c.accessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	downloadURL := strings.TrimRight(firstNonEmpty(c.config.APIBaseURL, defaultWeixinAPIBase), "/") + "/cgi-bin/media/get?access_token=" + url.QueryEscape(token) + "&media_id=" + url.QueryEscape(mediaID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		return nil, fmt.Errorf("weixin media http %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	contentType := res.Header.Get("Content-Type")
+	if mediaType, _, err := mime.ParseMediaType(contentType); err == nil && mediaType == "application/json" {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		var payload struct {
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+		}
+		if err := json.Unmarshal(body, &payload); err == nil && payload.ErrCode != 0 {
+			return nil, fmt.Errorf("weixin media error %d: %s", payload.ErrCode, payload.ErrMsg)
+		}
+		return nil, fmt.Errorf("weixin media response is not a file: %s", strings.TrimSpace(string(body)))
+	}
+	fileName := channelMediaFileNameFromDisposition(res.Header.Get("Content-Disposition"))
+	if fileName == "" {
+		fileName = "weixin-media-" + mediaID
+	}
+	return &channelMediaDownload{
+		Body:        res.Body,
+		FileName:    fileName,
+		ContentType: contentType,
+	}, nil
 }
 
 func (c *weixinAPIClient) accessToken(ctx context.Context) (string, error) {

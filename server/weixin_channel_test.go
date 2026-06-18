@@ -5,9 +5,12 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,11 +24,18 @@ type fakeWeixinAPI struct {
 	appID string
 	qrs   []string
 	sends []fakeWeixinSend
+	media map[string]fakeWeixinMedia
 }
 
 type fakeWeixinSend struct {
 	OpenID string
 	Text   string
+}
+
+type fakeWeixinMedia struct {
+	FileName    string
+	ContentType string
+	Body        string
 }
 
 func (f *fakeWeixinAPI) AppID() string {
@@ -44,6 +54,21 @@ func (f *fakeWeixinAPI) CreatePermanentQRCode(ctx context.Context, sceneKey stri
 func (f *fakeWeixinAPI) SendTextMessage(ctx context.Context, openID string, text string) error {
 	f.sends = append(f.sends, fakeWeixinSend{OpenID: openID, Text: text})
 	return nil
+}
+
+func (f *fakeWeixinAPI) DownloadMedia(ctx context.Context, mediaID string) (*channelMediaDownload, error) {
+	if f.media == nil {
+		return nil, errors.New("missing media")
+	}
+	media, ok := f.media[mediaID]
+	if !ok {
+		return nil, errors.New("unknown media")
+	}
+	return &channelMediaDownload{
+		Body:        io.NopCloser(strings.NewReader(media.Body)),
+		FileName:    media.FileName,
+		ContentType: media.ContentType,
+	}, nil
 }
 
 func TestWeixinURLVerification(t *testing.T) {
@@ -576,6 +601,64 @@ func TestWeixinTextMessageDeliversToBoundAgent(t *testing.T) {
 	}
 	if db.messages[0].TopicID != "p2p_8_43" || db.messages[0].FromUID != 8 || db.messages[0].Content != "查一下合同进度" {
 		t.Fatalf("message=%+v", db.messages[0])
+	}
+}
+
+func TestWeixinImageMessageDeliversAttachmentBlocks(t *testing.T) {
+	t.Cleanup(func() { _ = os.RemoveAll("uploads") })
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: "weixin-alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-1",
+		ActorUID:      8,
+		CanonicalUID:  8,
+		OwnerUID:      7,
+		AgentUID:      43,
+		Status:        "active",
+	}); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	api := &fakeWeixinAPI{
+		appID: "wx_app",
+		media: map[string]fakeWeixinMedia{
+			"media-1": {FileName: "homework.jpg", ContentType: "image/jpeg", Body: "fake-jpeg"},
+		},
+	}
+	handler := NewWeixinChannelHandler(db, nil, WeixinChannelConfig{
+		AppID:      "wx_app",
+		EventToken: "token-1",
+	}, api)
+	body := `<xml><ToUserName><![CDATA[gh_app]]></ToUserName><FromUserName><![CDATA[openid-1]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[image]]></MsgType><PicUrl><![CDATA[https://wx.example/image.jpg]]></PicUrl><MediaId><![CDATA[media-1]]></MediaId><MsgId>msg-img-1</MsgId></xml>`
+	req := httptest.NewRequest(http.MethodPost, "/api/channels/weixin/events?timestamp=1&nonce=2&signature="+weixinTestSignature("token-1", "1", "2"), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleEvents(rec, req)
+
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "success" {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%d", len(db.messages))
+	}
+	msg := db.messages[0]
+	if msg.TopicID != "p2p_8_43" || msg.FromUID != 8 || msg.MsgType != "image" {
+		t.Fatalf("message=%+v", msg)
+	}
+	if len(msg.ContentBlocks) != 1 || msg.ContentBlocks[0].Type != "image" {
+		t.Fatalf("content blocks=%+v", msg.ContentBlocks)
+	}
+	payload := msg.ContentBlocks[0].Payload
+	if payload["name"] != "homework.jpg" || payload["mime_type"] != "image/jpeg" {
+		t.Fatalf("payload=%+v", payload)
+	}
+	if url, _ := payload["url"].(string); !strings.HasPrefix(url, "/uploads/images/") {
+		t.Fatalf("url=%+v", payload["url"])
 	}
 }
 
