@@ -64,6 +64,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const [namingAgent, setNamingAgent] = useState(null);
   const [newChatName, setNewChatName] = useState('');
   const [mobileLinkAgent, setMobileLinkAgent] = useState(null);
+  const [mobileLinkGroup, setMobileLinkGroup] = useState(null);
   const [agentActionId, setAgentActionId] = useState('');
   const [agentPendingRequests, setAgentPendingRequests] = useState([]);
   const [agentReviewingKey, setAgentReviewingKey] = useState('');
@@ -466,6 +467,18 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
                   {chat.preview && <div style={{fontSize: 12, color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{chat.preview}</div>}
                 </div>
                 {chat.time && <span style={{fontSize: 11, color: '#555', flexShrink: 0}}>{chat.time}</span>}
+                <button
+                  type="button"
+                  className="v3-chat-item-action"
+                  title="移动端使用"
+                  aria-label={`${chat.name} 移动端使用`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMobileLinkGroup({ groupId: chat.groupId, topicId: chat.id, name: chat.name });
+                  }}
+                >
+                  <Smartphone size={14} />
+                </button>
                 {canDelete && (
                   <button type="button" className="v3-chat-item-delete" disabled={deletingTopicId === chat.id}
                     onClick={(e) => { e.stopPropagation(); handleDeleteGroup({ groupId: chat.groupId, topicId: chat.id, name: chat.name }); }} title="删除">
@@ -642,6 +655,14 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
           agentUid={mobileLinkAgent.uid || mobileLinkAgent.id}
           agentName={mobileLinkAgent.display_name || mobileLinkAgent.username}
           onClose={() => setMobileLinkAgent(null)}
+        />
+      )}
+      {mobileLinkGroup && (
+        <MobileChannelBindModal
+          groupId={mobileLinkGroup.groupId}
+          topicId={mobileLinkGroup.topicId}
+          groupName={mobileLinkGroup.name}
+          onClose={() => setMobileLinkGroup(null)}
         />
       )}
     </>

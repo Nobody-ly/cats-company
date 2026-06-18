@@ -85,6 +85,24 @@ type channelAgentMobileLinkResponse struct {
 	QRKind       string                    `json:"qr_kind,omitempty"`
 }
 
+type channelGroupMobileLinkRequest struct {
+	GroupID int64  `json:"group_id"`
+	TopicID string `json:"topic_id,omitempty"`
+	Channel string `json:"channel"`
+}
+
+type channelGroupMobileLinkResponse struct {
+	GroupID           int64                    `json:"group_id"`
+	TopicID           string                   `json:"topic_id"`
+	GroupName         string                   `json:"group_name,omitempty"`
+	SceneKey          string                   `json:"scene_key"`
+	ExpiresAt         time.Time                `json:"expires_at"`
+	ChannelQRURL      string                   `json:"channel_qr_url,omitempty"`
+	QRValue           string                   `json:"qr_value,omitempty"`
+	QRKind            string                   `json:"qr_kind,omitempty"`
+	FeishuEntryStatus *feishuEntryConfigStatus `json:"feishu_entry_status,omitempty"`
+}
+
 type feishuEntryConfigStatus struct {
 	Ready                      bool     `json:"ready"`
 	Status                     string   `json:"status"`
@@ -623,6 +641,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 				AgentUID:                binding.AgentUID,
 				EntryID:                 binding.EntryID,
 				Status:                  types.ChannelAgentBindingActive,
+				DeviceAccessEnabled:     true,
 			}); err == nil && refreshed != nil {
 				binding = refreshed
 			} else if err != nil {
@@ -646,7 +665,7 @@ func (h *ChannelAgentBindingHandler) HandleLinkChannelAgentBindingUser(w http.Re
 			}
 		}
 	}
-	deviceLinked := binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
+	deviceLinked := binding.Status == types.ChannelAgentBindingActive && binding.CanonicalUID > 0 && binding.DeviceAccessEnabled
 	deviceOwnerUID := int64(0)
 	if deviceLinked {
 		deviceOwnerUID = binding.CanonicalUID
@@ -728,6 +747,87 @@ func (h *ChannelAgentBindingHandler) HandleCreateChannelIdentityMobileLink(w htt
 		QRKind:       entryResp.QRKind,
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// HandleCreateChannelGroupMobileLink creates a short-lived mobile-channel QR
+// for a CatsCo group. The QR only binds the current CatsCo user's Weixin/Feishu
+// identity to that group topic; it does not grant access to another member's
+// devices.
+func (h *ChannelAgentBindingHandler) HandleCreateChannelGroupMobileLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	bindings, ok := h.bindingStore(w)
+	if !ok {
+		return
+	}
+	canonicalUID := UIDFromContext(r.Context())
+	if canonicalUID <= 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
+	user, err := h.db.GetUser(canonicalUID)
+	if err != nil || user == nil || user.AccountType != types.AccountHuman || user.State != 0 {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only active human CatsCo users can create group mobile channel links"})
+		return
+	}
+	var req channelGroupMobileLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	channel := normalizeChannel(req.Channel)
+	if channel == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported channel"})
+		return
+	}
+	groupID := req.GroupID
+	if groupID <= 0 {
+		groupID = parseGroupIDFromTopicID(req.TopicID)
+	}
+	if groupID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid group_id"})
+		return
+	}
+	group, err := h.db.GetGroup(groupID)
+	if err != nil || group == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "group not found"})
+		return
+	}
+	isMember, err := h.db.IsGroupMember(groupID, canonicalUID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check group membership"})
+		return
+	}
+	if !isMember {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "you must be a member of this group"})
+		return
+	}
+	topicID := strings.TrimSpace(req.TopicID)
+	if topicID == "" {
+		topicID = fmt.Sprintf("grp_%d", groupID)
+	}
+	if parseGroupIDFromTopicID(topicID) != groupID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "topic_id does not match group_id"})
+		return
+	}
+	expiresAt := time.Now().Add(10 * time.Minute)
+	link, err := bindings.CreateChannelGroupMobileLink(&types.ChannelGroupMobileLink{
+		SceneKey:     mustGenerateGroupMobileSceneKey(),
+		Channel:      channel,
+		ChannelAppID: canonicalEntryChannelAppID(channel, ""),
+		CanonicalUID: canonicalUID,
+		GroupID:      groupID,
+		TopicID:      topicID,
+		Status:       "active",
+		ExpiresAt:    expiresAt,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create group mobile link"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.groupMobileLinkResponse(r, link, group))
 }
 
 func (h *ChannelAgentBindingHandler) findMobileIdentityEntry(bindings store.ChannelAgentBindingStore, canonicalUID, agentUID int64, channel string) (*types.ChannelAgentEntry, error) {
@@ -1340,10 +1440,7 @@ func bindOrRequestChannelAgentAccessWithCanonical(
 			}
 		}
 	}
-	// Device access follows the canonical CatsCo speaker, not the virtual
-	// employee owner. The owner controls who may chat with the agent; tool
-	// execution stays scoped to the requesting user's own devices.
-	deviceAccessEnabled := canonicalUID > 0
+	deviceAccessEnabled := canonicalUID > 0 && status == types.ChannelAgentBindingActive
 	binding, err = bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 		Channel:                 channel,
 		ChannelAppID:            strings.TrimSpace(channelAppID),
@@ -1469,6 +1566,77 @@ func mustGenerateMobileSceneKey() string {
 	return sceneKey
 }
 
+func mustGenerateGroupMobileSceneKey() string {
+	sceneKey := "g." + mustGenerateSceneKey()
+	if len(sceneKey) > 64 {
+		panic("group mobile channel link is too long")
+	}
+	return sceneKey
+}
+
+func parseGroupIDFromTopicID(topicID string) int64 {
+	topicID = strings.TrimSpace(topicID)
+	if !strings.HasPrefix(topicID, "grp_") {
+		return 0
+	}
+	groupID, _ := strconv.ParseInt(strings.TrimPrefix(topicID, "grp_"), 10, 64)
+	if groupID < 0 {
+		return 0
+	}
+	return groupID
+}
+
+func (h *ChannelAgentBindingHandler) groupMobileLinkResponse(r *http.Request, link *types.ChannelGroupMobileLink, group *types.Group) channelGroupMobileLinkResponse {
+	resp := channelGroupMobileLinkResponse{}
+	if link == nil {
+		return resp
+	}
+	groupName := ""
+	if group != nil {
+		groupName = strings.TrimSpace(group.Name)
+	}
+	resp = channelGroupMobileLinkResponse{
+		GroupID:   link.GroupID,
+		TopicID:   link.TopicID,
+		GroupName: groupName,
+		SceneKey:  link.SceneKey,
+		ExpiresAt: link.ExpiresAt,
+		QRValue:   entryURL(r, link.SceneKey),
+		QRKind:    "web_group_entry",
+	}
+	if link.Channel == "weixin" && weixinQRCodeConfiguredFromEnv() && link.ChannelAppID == configuredWeixinAppID() {
+		resp.ChannelQRURL = publicBaseURL(r) + weixinQRCodePath(link.SceneKey)
+		resp.QRValue = resp.ChannelQRURL
+		resp.QRKind = "weixin_official_qr"
+	}
+	if link.Channel == "feishu" {
+		resp.QRValue = ""
+		resp.QRKind = "feishu_native_unconfigured"
+		feishuStatus := buildFeishuEntryConfigStatusForScene(r, groupFeishuPseudoEntry(link), link.SceneKey)
+		resp.FeishuEntryStatus = feishuStatus
+		if feishuStatus.Ready {
+			resp.ChannelQRURL = feishuStatus.NativeShortURL
+			resp.QRValue = resp.ChannelQRURL
+			resp.QRKind = "feishu_native_entry"
+		}
+	}
+	return resp
+}
+
+func groupFeishuPseudoEntry(link *types.ChannelGroupMobileLink) *types.ChannelAgentEntry {
+	if link == nil {
+		return nil
+	}
+	return &types.ChannelAgentEntry{
+		SceneKey:     link.SceneKey,
+		Channel:      normalizeChannel(link.Channel),
+		ChannelAppID: strings.TrimSpace(link.ChannelAppID),
+		OwnerUID:     link.CanonicalUID,
+		AgentUID:     link.CanonicalUID,
+		Status:       "active",
+	}
+}
+
 func resolveChannelIdentityMobileLink(db store.Store, sceneKey, channel, channelAppID string, consume bool) (*types.ChannelAgentEntry, int64, error) {
 	bindings, ok := db.(store.ChannelAgentBindingStore)
 	if !ok {
@@ -1518,6 +1686,64 @@ func resolveChannelIdentityMobileLink(db store.Store, sceneKey, channel, channel
 		return nil, 0, fmt.Errorf("mobile link user can no longer access this agent")
 	}
 	return entry, link.CanonicalUID, nil
+}
+
+func resolveChannelGroupMobileLink(db store.Store, sceneKey, channel, channelAppID string, consume bool) (*types.ChannelGroupMobileLink, *types.Group, error) {
+	bindings, ok := db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, nil, errors.New("channel binding store not configured")
+	}
+	var link *types.ChannelGroupMobileLink
+	var err error
+	channel = normalizeChannel(channel)
+	channelAppID = strings.TrimSpace(channelAppID)
+	if consume {
+		link, err = bindings.ConsumeChannelGroupMobileLink(sceneKey, channel, channelAppID)
+	} else {
+		link, err = bindings.GetChannelGroupMobileLink(sceneKey)
+	}
+	if err != nil || link == nil {
+		return nil, nil, err
+	}
+	if link.Status != "active" && !(consume && link.Status == "consumed") {
+		return nil, nil, nil
+	}
+	if !link.ExpiresAt.After(time.Now()) || normalizeChannel(link.Channel) != channel {
+		return nil, nil, nil
+	}
+	if channelAppID != "" && strings.TrimSpace(link.ChannelAppID) != channelAppID {
+		return nil, nil, nil
+	}
+	group, err := validateChannelGroupMobileAccess(db, link)
+	if err != nil {
+		return nil, nil, err
+	}
+	return link, group, nil
+}
+
+func validateChannelGroupMobileAccess(db store.Store, link *types.ChannelGroupMobileLink) (*types.Group, error) {
+	if db == nil || link == nil || link.CanonicalUID <= 0 || link.GroupID <= 0 || strings.TrimSpace(link.TopicID) == "" {
+		return nil, errors.New("invalid group mobile link")
+	}
+	user, err := db.GetUser(link.CanonicalUID)
+	if err != nil || user == nil || user.AccountType != types.AccountHuman || user.State != 0 {
+		return nil, errors.New("group mobile link user is not available")
+	}
+	group, err := db.GetGroup(link.GroupID)
+	if err != nil || group == nil {
+		return nil, errors.New("group mobile link group is not available")
+	}
+	if parseGroupIDFromTopicID(link.TopicID) != link.GroupID {
+		return nil, errors.New("group mobile link topic mismatch")
+	}
+	isMember, err := db.IsGroupMember(link.GroupID, link.CanonicalUID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, errors.New("group mobile link user is no longer a group member")
+	}
+	return group, nil
 }
 
 func channelEntryAgentAvailable(db store.Store, entry *types.ChannelAgentEntry) bool {
@@ -1606,6 +1832,10 @@ func channelBindingConversationActorUID(binding *types.ChannelAgentBinding, fall
 	return 0
 }
 
+const channelBindingDeliveryTrustMetadataKey = "__catsco_channel_binding_delivery_trust"
+
+type channelBindingDeliveryTrustToken struct{}
+
 func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding *types.ChannelAgentBinding) map[string]interface{} {
 	if binding == nil {
 		return metadata
@@ -1639,11 +1869,15 @@ func withChannelBindingDeliveryMetadata(metadata map[string]interface{}, binding
 		next["channel_canonical_uid"] = binding.CanonicalUID
 	}
 	next["channel_device_access_enabled"] = binding.DeviceAccessEnabled
+	next[channelBindingDeliveryTrustMetadataKey] = channelBindingDeliveryTrustToken{}
 	return next
 }
 
 func channelMetadataHasSource(metadata map[string]interface{}) bool {
 	if metadata == nil {
+		return false
+	}
+	if !trustedChannelBindingDeliveryMetadata(metadata) {
 		return false
 	}
 	return normalizeChannel(firstMetadataString(metadata, "source_channel", "channel")) != "" &&
@@ -1664,7 +1898,7 @@ func resolveDeliverableChannelBinding(db store.Store, actorUID, agentUID int64, 
 	if len(sourceMetadata) > 0 {
 		metadata = sourceMetadata[0]
 	}
-	if query, scoped := channelAgentBindingQueryFromMessageMetadata(metadata, actorUID, agentUID); scoped {
+	if query, scoped := channelAgentBindingQueryFromInboundMetadata(metadata, actorUID, agentUID); scoped {
 		binding, err = bindings.ResolveChannelAgentBinding(query)
 	} else {
 		binding, err = bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)

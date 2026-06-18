@@ -300,15 +300,16 @@ func (a *Adapter) ApproveChannelAgentAccessRequestsForActor(actorUID, agentUID, 
 		if _, err := tx.Exec(
 			`INSERT INTO channel_agent_bindings (
 			     channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
-			     actor_uid, owner_uid, agent_uid, entry_id, status, bound_at, last_used_at
+			     actor_uid, owner_uid, agent_uid, entry_id, status, device_access_enabled, bound_at, last_used_at
 			 )
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 			 ON DUPLICATE KEY UPDATE
 			     actor_uid = VALUES(actor_uid),
 			     owner_uid = VALUES(owner_uid),
 			     entry_id = COALESCE(VALUES(entry_id), entry_id),
 			     channel_conversation_type = VALUES(channel_conversation_type),
 			     status = 'active',
+			     device_access_enabled = TRUE,
 			     bound_at = CURRENT_TIMESTAMP,
 			     last_used_at = CURRENT_TIMESTAMP,
 			     updated_at = CURRENT_TIMESTAMP`,
@@ -368,7 +369,7 @@ func (a *Adapter) ActivateChannelAgentBindingsForCanonicalUser(canonicalUID, age
 	}
 	if _, err := a.db.Exec(
 		`UPDATE channel_agent_bindings
-		 SET status = 'active', bound_at = CURRENT_TIMESTAMP, last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 SET status = 'active', device_access_enabled = TRUE, bound_at = CURRENT_TIMESTAMP, last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		 WHERE canonical_uid = ? AND agent_uid = ? AND status IN ('pending_approval', 'active')`,
 		canonicalUID, agentUID,
 	); err != nil {
@@ -770,6 +771,207 @@ func (a *Adapter) ConsumeChannelIdentityMobileLink(sceneKey, channel, channelApp
 	return link, nil
 }
 
+func (a *Adapter) CreateChannelGroupMobileLink(link *types.ChannelGroupMobileLink) (*types.ChannelGroupMobileLink, error) {
+	if link == nil || link.SceneKey == "" || link.Channel == "" || link.CanonicalUID <= 0 || link.GroupID <= 0 || link.TopicID == "" || link.ExpiresAt.IsZero() {
+		return nil, fmt.Errorf("invalid channel group mobile link")
+	}
+	res, err := a.db.Exec(
+		`INSERT INTO channel_group_mobile_links (
+		     scene_key, channel, channel_app_id, canonical_uid, group_id, topic_id, status, expires_at
+		 )
+		 VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+		link.SceneKey, link.Channel, link.ChannelAppID, link.CanonicalUID, link.GroupID, link.TopicID, link.ExpiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create channel group mobile link: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	row := a.db.QueryRow(
+		`SELECT id, scene_key, channel, channel_app_id, canonical_uid, group_id, topic_id, status, expires_at, consumed_at, created_at, updated_at
+		 FROM channel_group_mobile_links WHERE id = ?`,
+		id,
+	)
+	created, err := scanChannelGroupMobileLink(row)
+	if err != nil {
+		return nil, fmt.Errorf("get channel group mobile link: %w", err)
+	}
+	return created, nil
+}
+
+func (a *Adapter) GetChannelGroupMobileLink(sceneKey string) (*types.ChannelGroupMobileLink, error) {
+	sceneKey = strings.TrimSpace(sceneKey)
+	if sceneKey == "" {
+		return nil, fmt.Errorf("invalid channel group mobile link")
+	}
+	row := a.db.QueryRow(
+		`SELECT id, scene_key, channel, channel_app_id, canonical_uid, group_id, topic_id, status, expires_at, consumed_at, created_at, updated_at
+		 FROM channel_group_mobile_links
+		 WHERE scene_key = ?`,
+		sceneKey,
+	)
+	link, err := scanChannelGroupMobileLink(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get channel group mobile link: %w", err)
+	}
+	return link, nil
+}
+
+func (a *Adapter) ConsumeChannelGroupMobileLink(sceneKey, channel, channelAppID string) (*types.ChannelGroupMobileLink, error) {
+	sceneKey = strings.TrimSpace(sceneKey)
+	channel = strings.TrimSpace(channel)
+	channelAppID = strings.TrimSpace(channelAppID)
+	if sceneKey == "" || channel == "" {
+		return nil, fmt.Errorf("invalid channel group mobile link")
+	}
+	tx, err := a.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin channel group mobile link consume: %w", err)
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRow(
+		`SELECT id, scene_key, channel, channel_app_id, canonical_uid, group_id, topic_id, status, expires_at, consumed_at, created_at, updated_at
+		 FROM channel_group_mobile_links
+		 WHERE scene_key = ?
+		 FOR UPDATE`,
+		sceneKey,
+	)
+	link, err := scanChannelGroupMobileLink(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get channel group mobile link: %w", err)
+	}
+	if link.Status != "active" || !link.ExpiresAt.After(time.Now()) || link.Channel != channel || (channelAppID != "" && link.ChannelAppID != channelAppID) {
+		return nil, nil
+	}
+	if _, err := tx.Exec(
+		`UPDATE channel_group_mobile_links
+		 SET status = 'consumed', consumed_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND status = 'active'`,
+		link.ID,
+	); err != nil {
+		return nil, fmt.Errorf("consume channel group mobile link: %w", err)
+	}
+	consumedAt := time.Now()
+	link.Status = "consumed"
+	link.ConsumedAt = &consumedAt
+	link.UpdatedAt = consumedAt
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return link, nil
+}
+
+func (a *Adapter) UpsertChannelGroupBinding(binding *types.ChannelGroupBinding) (*types.ChannelGroupBinding, error) {
+	if binding == nil || binding.Channel == "" || binding.ChannelUserID == "" || binding.CanonicalUID <= 0 || binding.GroupID <= 0 || binding.TopicID == "" {
+		return nil, fmt.Errorf("invalid channel group binding")
+	}
+	conversationType := normalizeGroupBindingConversationType(binding.ChannelConversationType)
+	_, err := a.db.Exec(
+		`INSERT INTO channel_group_bindings (
+		     channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		     actor_uid, canonical_uid, group_id, topic_id, status, bound_at, last_used_at
+		 )
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		 ON DUPLICATE KEY UPDATE
+		     actor_uid = COALESCE(VALUES(actor_uid), actor_uid),
+		     canonical_uid = VALUES(canonical_uid),
+		     group_id = VALUES(group_id),
+		     topic_id = VALUES(topic_id),
+		     status = 'active',
+		     last_used_at = CURRENT_TIMESTAMP,
+		     updated_at = CURRENT_TIMESTAMP`,
+		binding.Channel,
+		binding.ChannelAppID,
+		binding.ChannelUserID,
+		binding.ChannelConversationID,
+		conversationType,
+		nullableInt64(binding.ActorUID),
+		binding.CanonicalUID,
+		binding.GroupID,
+		binding.TopicID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("upsert channel group binding: %w", err)
+	}
+	return a.ResolveChannelGroupBinding(types.ChannelGroupBindingQuery{
+		Channel:                 binding.Channel,
+		ChannelAppID:            binding.ChannelAppID,
+		ChannelUserID:           binding.ChannelUserID,
+		ChannelConversationID:   binding.ChannelConversationID,
+		ChannelConversationType: conversationType,
+	})
+}
+
+func (a *Adapter) ResolveChannelGroupBinding(query types.ChannelGroupBindingQuery) (*types.ChannelGroupBinding, error) {
+	if query.Channel == "" || query.ChannelUserID == "" {
+		return nil, fmt.Errorf("invalid channel group binding query")
+	}
+	conversationType := normalizeGroupBindingConversationType(query.ChannelConversationType)
+	row := a.db.QueryRow(
+		`SELECT id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		        COALESCE(actor_uid, 0), canonical_uid, group_id, topic_id, status, bound_at, updated_at, last_used_at
+		 FROM channel_group_bindings
+		 WHERE channel = ? AND channel_app_id = ? AND channel_user_id = ? AND channel_conversation_id = ?
+		   AND channel_conversation_type = ?
+		   AND (? = 0 OR actor_uid IS NULL OR actor_uid = ?)
+		   AND (? = 0 OR group_id = ?)
+		   AND (? = '' OR topic_id = ?)
+		   AND status IN ('active', 'revoked')
+		 ORDER BY updated_at DESC LIMIT 1`,
+		query.Channel, query.ChannelAppID, query.ChannelUserID, query.ChannelConversationID, conversationType,
+		query.ActorUID, query.ActorUID, query.GroupID, query.GroupID, strings.TrimSpace(query.TopicID), strings.TrimSpace(query.TopicID),
+	)
+	binding, err := scanChannelGroupBinding(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve channel group binding: %w", err)
+	}
+	if _, err := a.db.Exec(`UPDATE channel_group_bindings SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?`, binding.ID); err != nil {
+		return nil, fmt.Errorf("touch channel group binding: %w", err)
+	}
+	return binding, nil
+}
+
+func (a *Adapter) ListChannelGroupBindingsForTopic(topicID string) ([]*types.ChannelGroupBinding, error) {
+	topicID = strings.TrimSpace(topicID)
+	if topicID == "" {
+		return nil, fmt.Errorf("invalid channel group topic")
+	}
+	rows, err := a.db.Query(
+		`SELECT id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
+		        COALESCE(actor_uid, 0), canonical_uid, group_id, topic_id, status, bound_at, updated_at, last_used_at
+		 FROM channel_group_bindings
+		 WHERE topic_id = ? AND status = 'active'
+		 ORDER BY updated_at DESC`,
+		topicID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list channel group bindings: %w", err)
+	}
+	defer rows.Close()
+
+	var bindings []*types.ChannelGroupBinding
+	for rows.Next() {
+		binding, err := scanChannelGroupBinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
 func (a *Adapter) UpsertChannelAgentRoute(route *types.ChannelAgentRoute) (*types.ChannelAgentRoute, error) {
 	if route == nil || route.Channel == "" || route.ChannelUserID == "" || route.AgentUID <= 0 {
 		return nil, fmt.Errorf("invalid channel agent route")
@@ -961,6 +1163,66 @@ func scanChannelIdentityMobileLink(row channelIdentityMobileLinkScanner) (*types
 	return link, nil
 }
 
+type channelGroupMobileLinkScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanChannelGroupMobileLink(row channelGroupMobileLinkScanner) (*types.ChannelGroupMobileLink, error) {
+	link := &types.ChannelGroupMobileLink{}
+	var consumedAt sql.NullTime
+	if err := row.Scan(
+		&link.ID,
+		&link.SceneKey,
+		&link.Channel,
+		&link.ChannelAppID,
+		&link.CanonicalUID,
+		&link.GroupID,
+		&link.TopicID,
+		&link.Status,
+		&link.ExpiresAt,
+		&consumedAt,
+		&link.CreatedAt,
+		&link.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	if consumedAt.Valid {
+		link.ConsumedAt = &consumedAt.Time
+	}
+	return link, nil
+}
+
+type channelGroupBindingScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanChannelGroupBinding(row channelGroupBindingScanner) (*types.ChannelGroupBinding, error) {
+	binding := &types.ChannelGroupBinding{}
+	var lastUsedAt sql.NullTime
+	if err := row.Scan(
+		&binding.ID,
+		&binding.Channel,
+		&binding.ChannelAppID,
+		&binding.ChannelUserID,
+		&binding.ChannelConversationID,
+		&binding.ChannelConversationType,
+		&binding.ActorUID,
+		&binding.CanonicalUID,
+		&binding.GroupID,
+		&binding.TopicID,
+		&binding.Status,
+		&binding.BoundAt,
+		&binding.UpdatedAt,
+		&lastUsedAt,
+	); err != nil {
+		return nil, err
+	}
+	if lastUsedAt.Valid {
+		binding.LastUsedAt = &lastUsedAt.Time
+	}
+	return binding, nil
+}
+
 func scanChannelAgentRoute(row channelAgentRouteScanner) (*types.ChannelAgentRoute, error) {
 	route := &types.ChannelAgentRoute{}
 	var lastUsedAt sql.NullTime
@@ -1078,6 +1340,13 @@ func scanChannelAgentBinding(row channelAgentBindingScanner) (*types.ChannelAgen
 		binding.LastUsedAt = &lastUsedAt.Time
 	}
 	return binding, nil
+}
+
+func normalizeGroupBindingConversationType(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "group") {
+		return "group"
+	}
+	return "p2p"
 }
 
 func nullableInt64(value int64) interface{} {

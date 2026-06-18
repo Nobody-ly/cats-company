@@ -921,8 +921,14 @@ export default function MessagesView({
     if (!Number.isFinite(left) || !Number.isFinite(right)) return 0;
     return left === user.uid ? right : left;
   }, [isGroup, topic, user.uid]);
+  const effectiveGroupId = useMemo(() => {
+    if (!isGroup) return 0;
+    if (groupId) return groupId;
+    const match = String(topic || '').match(/^grp_(\d+)$/);
+    return match ? parseInt(match[1], 10) : 0;
+  }, [groupId, isGroup, topic]);
   const peerIsBot = peerProfile?.bot === true || peerProfile?.is_bot === true || peerProfile?.account_type === 'bot';
-  const canBindMobileChannel = !isGroup && peerUID > 0 && peerIsBot;
+  const canBindMobileChannel = (!isGroup && peerUID > 0 && peerIsBot) || (isGroup && effectiveGroupId > 0);
   const displayName = isGroup ? (groupInfo?.name || topicName || topic) : (peerProfile?.display_name || peerProfile?.username || topicName || topic);
   const displayAvatarUrl = isGroup ? (groupInfo?.avatar_url || topicAvatarUrl) : (peerProfile?.avatar_url || topicAvatarUrl);
 
@@ -1392,8 +1398,11 @@ className={`v3-send${showStopButton ? ' stop' : ''}`}
       )}
       {showMobileLinkModal && canBindMobileChannel && (
         <MobileChannelBindModal
-          agentUid={peerUID}
-          agentName={displayName}
+          agentUid={!isGroup ? peerUID : undefined}
+          agentName={!isGroup ? displayName : undefined}
+          groupId={isGroup ? effectiveGroupId : undefined}
+          topicId={isGroup ? topic : undefined}
+          groupName={isGroup ? displayName : undefined}
           onClose={() => setShowMobileLinkModal(false)}
         />
       )}

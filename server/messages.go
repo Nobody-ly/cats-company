@@ -200,6 +200,7 @@ func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, pa
 		dataMsg.Data.Mentions = mentions
 		h.SendToUserExcept(uid, dataMsg, exclude)
 		h.broadcastToGroupWithMentions(groupID, dataMsg, uid, mentions, uid)
+		h.forwardChannelGroupBotReply(uid, topicID, payload, msgID)
 		return
 	}
 
@@ -227,7 +228,9 @@ func (h *Hub) messageForRecipient(uid int64, recipientUID int64, topicID string,
 	if payload == nil {
 		return nil
 	}
-	metadata := withCatscoIdentityMetadata(payload.Metadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent), catscoIdentityMetadataOptions{SourceMetadata: payload.Metadata}))
+	sourceMetadata := payload.Metadata
+	publicMetadata := withoutInternalChannelBindingDeliveryMetadata(payload.Metadata)
+	metadata := withCatscoIdentityMetadata(publicMetadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent), catscoIdentityMetadataOptions{SourceMetadata: sourceMetadata}))
 	return &ServerMessage{
 		Data: &MsgServerData{
 			Topic:         topicID,
@@ -417,6 +420,9 @@ func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...m
 					return 0, "channel_identity_unapproved"
 				}
 				if binding.CanonicalUID > 0 && binding.DeviceAccessEnabled {
+					if binding.CanonicalUID == actorUID {
+						return actorUID, "actor"
+					}
 					return binding.CanonicalUID, "channel_identity_link"
 				}
 				return 0, "channel_identity_unlinked"
@@ -430,12 +436,23 @@ func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...m
 }
 
 func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
+	if !trustedChannelBindingDeliveryMetadata(metadata) {
+		return types.ChannelAgentBindingQuery{}, false
+	}
+	return channelAgentBindingQueryFromMetadata(metadata, actorUID, agentUID)
+}
+
+func channelAgentBindingQueryFromInboundMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
+	return channelAgentBindingQueryFromMetadata(metadata, actorUID, agentUID)
+}
+
+func channelAgentBindingQueryFromMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
 	channel := normalizeChannel(firstMetadataString(metadata, "source_channel", "channel"))
 	channelUserID := firstMetadataString(metadata, "channel_user_id")
 	if channel == "" || channelUserID == "" {
 		return types.ChannelAgentBindingQuery{}, false
 	}
-	bindingActorUID := firstMetadataInt64(metadata, "channel_actor_uid", "channelActorUid")
+	bindingActorUID := firstMetadataInt64(metadata, "channel_actor_uid")
 	if bindingActorUID <= 0 {
 		bindingActorUID = actorUID
 	}
@@ -448,6 +465,31 @@ func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}
 		AgentUID:                agentUID,
 		ActorUID:                bindingActorUID,
 	}, true
+}
+
+func trustedChannelBindingDeliveryMetadata(metadata map[string]interface{}) bool {
+	if metadata == nil {
+		return false
+	}
+	_, ok := metadata[channelBindingDeliveryTrustMetadataKey].(channelBindingDeliveryTrustToken)
+	return ok
+}
+
+func withoutInternalChannelBindingDeliveryMetadata(metadata map[string]interface{}) map[string]interface{} {
+	if metadata == nil {
+		return nil
+	}
+	if _, ok := metadata[channelBindingDeliveryTrustMetadataKey]; !ok {
+		return metadata
+	}
+	next := make(map[string]interface{}, len(metadata)-1)
+	for key, value := range metadata {
+		if key == channelBindingDeliveryTrustMetadataKey {
+			continue
+		}
+		next[key] = value
+	}
+	return next
 }
 
 func topicTypeForID(topicID string) string {

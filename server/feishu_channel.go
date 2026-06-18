@@ -125,18 +125,30 @@ func (h *FeishuChannelHandler) HandleOAuthStart(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scene_key"})
 		return
 	}
-	entry, _, err := h.resolveFeishuEntryScene(sceneKey, false)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
-		return
-	}
-	if entry == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
-		return
-	}
-	if !feishuEntryMatchesAppID(entry, h.effectiveAppID("")) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
-		return
+	if strings.HasPrefix(sceneKey, "g.") {
+		link, _, err := resolveChannelGroupMobileLink(h.db, sceneKey, "feishu", h.effectiveAppID(""), false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load group entry"})
+			return
+		}
+		if link == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
+	} else {
+		entry, _, err := h.resolveFeishuEntryScene(sceneKey, false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
+			return
+		}
+		if entry == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
+		if !feishuEntryMatchesAppID(entry, h.effectiveAppID("")) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
 	}
 	state, err := h.signOAuthState(feishuOAuthState{
 		SceneKey:  sceneKey,
@@ -192,18 +204,33 @@ func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter,
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "feishu app is not configured"})
 		return
 	}
-	entry, _, err := h.resolveFeishuEntryScene(sceneKey, false)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
-		return
-	}
-	if entry == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
-		return
-	}
-	if !feishuEntryMatchesAppID(entry, h.effectiveAppID("")) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
-		return
+	var entry *types.ChannelAgentEntry
+	if strings.HasPrefix(sceneKey, "g.") {
+		link, _, err := resolveChannelGroupMobileLink(h.db, sceneKey, "feishu", h.effectiveAppID(""), false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load group entry"})
+			return
+		}
+		if link == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
+		entry = groupFeishuPseudoEntry(link)
+	} else {
+		var err error
+		entry, _, err = h.resolveFeishuEntryScene(sceneKey, false)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load entry"})
+			return
+		}
+		if entry == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
+		if !feishuEntryMatchesAppID(entry, h.effectiveAppID("")) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found or expired"})
+			return
+		}
 	}
 	configStatus := buildFeishuEntryConfigStatusForScene(r, entry, sceneKey)
 	if configStatus == nil || !configStatus.Ready {
@@ -235,6 +262,10 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 	state, err := h.verifyOAuthState(rawState)
 	if err != nil {
 		writeHTML(w, http.StatusBadRequest, oauthResultHTML("绑定失败", "授权状态已失效，请重新扫码。"))
+		return
+	}
+	if strings.HasPrefix(strings.TrimSpace(state.SceneKey), "g.") {
+		h.handleGroupOAuthCallback(w, r, state, code)
 		return
 	}
 	isMobileIdentityLink := strings.HasPrefix(strings.TrimSpace(state.SceneKey), "m.")
@@ -331,6 +362,55 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 	writeHTML(w, http.StatusOK, oauthResultHTML("绑定完成", fmt.Sprintf("你已进入「%s」，可以回到飞书聊天框直接提问。", name)))
 }
 
+func (h *FeishuChannelHandler) handleGroupOAuthCallback(w http.ResponseWriter, r *http.Request, state *feishuOAuthState, code string) {
+	link, group, err := resolveChannelGroupMobileLink(h.db, state.SceneKey, "feishu", h.effectiveAppID(""), false)
+	if err != nil {
+		writeHTML(w, http.StatusInternalServerError, oauthResultHTML("绑定失败", "读取群聊移动端入口失败。"))
+		return
+	}
+	if link == nil {
+		writeHTML(w, http.StatusNotFound, oauthResultHTML("入口不可用", "这个群聊移动端入口不存在或已失效。"))
+		return
+	}
+	identity, err := h.api.ExchangeOAuthCode(r.Context(), code, h.oauthRedirectURI(r))
+	if err != nil {
+		log.Printf("feishu group oauth exchange failed: %v", err)
+		writeHTML(w, http.StatusBadGateway, oauthResultHTML("绑定失败", "飞书身份校验失败，请稍后重试。"))
+		return
+	}
+	if identity == nil {
+		writeHTML(w, http.StatusBadGateway, oauthResultHTML("绑定失败", "飞书没有返回可绑定的用户身份。"))
+		return
+	}
+	channelUserID := firstNonEmpty(strings.TrimSpace(identity.OpenID), strings.TrimSpace(identity.UserID))
+	if channelUserID == "" {
+		writeHTML(w, http.StatusBadGateway, oauthResultHTML("绑定失败", "飞书没有返回可绑定的用户身份。"))
+		return
+	}
+	actorUID, err := h.ensureChannelActor("feishu", h.effectiveAppID(""), channelUserID, identity)
+	if err != nil {
+		log.Printf("ensure feishu group actor failed: %v", err)
+		writeHTML(w, http.StatusInternalServerError, oauthResultHTML("绑定失败", "创建飞书用户身份失败，请稍后重试。"))
+		return
+	}
+	if _, err := h.upsertFeishuGroupBinding(link, actorUID, channelUserID, "", "p2p"); err != nil {
+		log.Printf("bind feishu group identity failed: %v", err)
+		writeHTML(w, http.StatusInternalServerError, oauthResultHTML("绑定失败", "保存群聊移动端绑定失败，请稍后重试。"))
+		return
+	}
+	if _, _, err := resolveChannelGroupMobileLink(h.db, state.SceneKey, "feishu", h.effectiveAppID(""), true); err != nil {
+		log.Printf("consume feishu group mobile link failed: %v", err)
+	}
+	if err := h.db.CreateTopic(link.TopicID, "group", link.CanonicalUID); err != nil {
+		log.Printf("create feishu group mobile topic failed: %v", err)
+	}
+	groupName := "这个群聊"
+	if group != nil && strings.TrimSpace(group.Name) != "" {
+		groupName = strings.TrimSpace(group.Name)
+	}
+	writeHTML(w, http.StatusOK, oauthResultHTML("已进入群聊", fmt.Sprintf("已进入「%s」。你现在可以回到飞书聊天框直接发消息，CatsCo 会把消息同步到这个群。", groupName)))
+}
+
 // HandleEvents receives Feishu URL verification and message events.
 func (h *FeishuChannelHandler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -407,6 +487,26 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 	actorUID, err := h.ensureChannelActor("feishu", appID, channelUserID, identity)
 	if err != nil {
 		return err
+	}
+	if groupBinding, err := h.resolveFeishuGroupBinding(appID, channelUserID, event.Message.ChatID, chatType, actorUID); err != nil {
+		return err
+	} else if groupBinding != nil {
+		groupText := strings.TrimSpace(stripFeishuLeadingMentions(text))
+		if groupText == "" {
+			return nil
+		}
+		return deliverInboundChannelTextToGroup(h.db, h.hub, groupBinding.CanonicalUID, groupBinding, groupText, "feishu-group:"+event.Message.MessageID, "feishu", map[string]interface{}{
+			"source_channel":            "feishu",
+			"channel_app_id":            appID,
+			"channel_user_id":           channelUserID,
+			"channel_actor_uid":         actorUID,
+			"channel_conversation_id":   event.Message.ChatID,
+			"channel_conversation_type": chatType,
+			"channel_message_id":        event.Message.MessageID,
+			"channel_identity_source":   "feishu.event",
+			"channel_identity_trust":    "feishu_event_callback",
+			"channel_group_binding_id":  groupBinding.ID,
+		})
 	}
 
 	cmd := parseFeishuGatewayCommand(text)
@@ -673,6 +773,50 @@ func (h *FeishuChannelHandler) upsertFeishuRoute(appID, channelUserID, conversat
 		AgentUID:                agentUID,
 		Source:                  source,
 	})
+}
+
+func (h *FeishuChannelHandler) upsertFeishuGroupBinding(link *types.ChannelGroupMobileLink, actorUID int64, channelUserID, conversationID, conversationType string) (*types.ChannelGroupBinding, error) {
+	if link == nil {
+		return nil, errors.New("missing group mobile link")
+	}
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            h.effectiveAppID(""),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationType: normalizeFeishuChatType(conversationType),
+		ActorUID:                actorUID,
+		CanonicalUID:            link.CanonicalUID,
+		GroupID:                 link.GroupID,
+		TopicID:                 link.TopicID,
+		Status:                  types.ChannelAgentBindingActive,
+	})
+}
+
+func (h *FeishuChannelHandler) resolveFeishuGroupBinding(appID, channelUserID, conversationID, conversationType string, actorUID int64) (*types.ChannelGroupBinding, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	conversationType = normalizeFeishuChatType(conversationType)
+	query := types.ChannelGroupBindingQuery{
+		Channel:                 "feishu",
+		ChannelAppID:            strings.TrimSpace(appID),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationType: conversationType,
+		ActorUID:                actorUID,
+	}
+	binding, err := bindings.ResolveChannelGroupBinding(query)
+	if err != nil || binding != nil || conversationType != "p2p" || strings.TrimSpace(conversationID) == "" {
+		return binding, err
+	}
+	query.ChannelConversationID = ""
+	return bindings.ResolveChannelGroupBinding(query)
 }
 
 func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID, conversationID, conversationType string, actorUID int64) (*types.ChannelAgentBinding, error) {
@@ -1553,6 +1697,30 @@ func (h *Hub) forwardChannelBotReply(senderUID int64, peerUID int64, topicID str
 	go dispatcher.ForwardBotReply(context.Background(), peerUID, senderUID, topicID, text)
 }
 
+func (h *Hub) forwardChannelGroupBotReply(senderUID int64, topicID string, payload *normalizedMessagePayload, msgID int64) {
+	if h == nil || payload == nil || msgID <= 0 || senderUID <= 0 || strings.TrimSpace(topicID) == "" {
+		return
+	}
+	if payload.StoredType != "text" || isTransientRuntimePayload(payload) {
+		return
+	}
+	user, err := h.db.GetUser(senderUID)
+	if err != nil || user == nil || user.AccountType != types.AccountBot {
+		return
+	}
+	h.mu.RLock()
+	dispatcher := h.channelOut
+	h.mu.RUnlock()
+	if dispatcher == nil {
+		return
+	}
+	text := normalizeContentText(payload.DisplayContent)
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	go dispatcher.ForwardGroupBotReply(context.Background(), senderUID, topicID, text)
+}
+
 func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUID int64, agentUID int64, topicID string, text string) error {
 	if d == nil || d.db == nil {
 		return nil
@@ -1588,6 +1756,54 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 		if binding != nil {
 			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
 			return err
+		}
+	}
+	return nil
+}
+
+func (d *ChannelOutboundDispatcher) ForwardGroupBotReply(ctx context.Context, senderUID int64, topicID string, text string) error {
+	if d == nil || d.db == nil || strings.TrimSpace(topicID) == "" || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	bindingsStore, ok := d.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil
+	}
+	bindings, err := bindingsStore.ListChannelGroupBindingsForTopic(topicID)
+	if err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		if binding == nil || binding.Status != types.ChannelAgentBindingActive {
+			continue
+		}
+		if _, err := validateDeliverableChannelGroupBinding(d.db, binding); err != nil {
+			continue
+		}
+		switch normalizeChannel(binding.Channel) {
+		case "feishu":
+			if d.feishu == nil || strings.TrimSpace(binding.ChannelAppID) != strings.TrimSpace(d.feishuAppID) {
+				continue
+			}
+			receiveIDType := "open_id"
+			receiveID := binding.ChannelUserID
+			if binding.ChannelConversationType == "group" && strings.TrimSpace(binding.ChannelConversationID) != "" {
+				receiveIDType = "chat_id"
+				receiveID = binding.ChannelConversationID
+			}
+			if strings.TrimSpace(receiveID) == "" {
+				continue
+			}
+			if err := d.feishu.SendTextMessage(ctx, receiveIDType, receiveID, text); err != nil {
+				log.Printf("feishu group outbound reply failed topic=%s sender=%d binding=%d: %v", topicID, senderUID, binding.ID, err)
+			}
+		case "weixin":
+			if d.weixin == nil || strings.TrimSpace(binding.ChannelAppID) != strings.TrimSpace(d.weixinAppID) || strings.TrimSpace(binding.ChannelUserID) == "" {
+				continue
+			}
+			if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
+				log.Printf("weixin group outbound reply failed topic=%s sender=%d binding=%d: %v", topicID, senderUID, binding.ID, err)
+			}
 		}
 	}
 	return nil

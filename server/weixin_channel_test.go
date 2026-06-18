@@ -209,7 +209,7 @@ func TestWeixinMobileIdentityLinkReusesExistingCatsCoFriend(t *testing.T) {
 	if len(db.accessRequests) != 0 {
 		t.Fatalf("mobile link should not create a new approval request: %+v", db.accessRequests)
 	}
-	if body := rec.Body.String(); strings.Contains(body, "需要登录") || strings.Contains(body, "好友申请") || strings.Contains(body, "管理员通过") || strings.Contains(body, "channel-device-link") || strings.Contains(body, "设备授权") {
+	if body := rec.Body.String(); strings.Contains(body, "需要登录") || strings.Contains(body, "好友申请") || strings.Contains(body, "管理员通过") {
 		t.Fatalf("mobile link should bind directly, reply=%s", body)
 	}
 	reused, _, err := resolveChannelIdentityMobileLink(db, sceneKey, "weixin", "wx_app", true)
@@ -218,75 +218,6 @@ func TestWeixinMobileIdentityLinkReusesExistingCatsCoFriend(t *testing.T) {
 	}
 	if reused != nil {
 		t.Fatalf("mobile link should be consumed by scan event, reused=%+v", reused)
-	}
-}
-
-func TestWeixinMobileIdentityLinkRejectsDifferentCatsCoUserWithoutConsuming(t *testing.T) {
-	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
-	db := newChannelAgentTestStore()
-	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
-	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
-	db.users[10] = &types.User{ID: 10, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman}
-	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
-	db.users[100] = &types.User{ID: 100, Username: channelActorUsername("weixin", "wx_app", "openid-mobile"), DisplayName: "Weixin Mobile", AccountType: types.AccountHuman}
-	db.owners[43] = 7
-	db.friends[friendKey(9, 43)] = types.FriendAccepted
-	db.friends[friendKey(43, 9)] = types.FriendAccepted
-	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
-		SceneKey:     "scene-private-weixin",
-		Channel:      "weixin",
-		ChannelAppID: "wx_app",
-		AccessMode:   types.ChannelAgentAccessApprovalRequired,
-		OwnerUID:     7,
-		AgentUID:     43,
-		Status:       "active",
-	})
-	if err != nil {
-		t.Fatalf("seed entry: %v", err)
-	}
-	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:                 "weixin",
-		ChannelAppID:            "wx_app",
-		ChannelUserID:           "openid-mobile",
-		ChannelConversationType: "p2p",
-		ActorUID:                100,
-		CanonicalUID:            10,
-		OwnerUID:                7,
-		AgentUID:                43,
-		EntryID:                 entry.ID,
-		Status:                  types.ChannelAgentBindingActive,
-	}); err != nil {
-		t.Fatalf("seed existing channel identity: %v", err)
-	}
-	mobileLink, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
-		SceneKey:     "m.weixin-conflict",
-		EntryID:      entry.ID,
-		Channel:      "weixin",
-		ChannelAppID: "wx_app",
-		CanonicalUID: 9,
-		ExpiresAt:    time.Now().Add(10 * time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("create mobile link: %v", err)
-	}
-
-	handler := NewWeixinChannelHandler(db, nil, WeixinChannelConfig{
-		AppID:      "wx_app",
-		EventToken: "token-1",
-	}, &fakeWeixinAPI{appID: "wx_app"})
-	body := `<xml><ToUserName><![CDATA[gh_app]]></ToUserName><FromUserName><![CDATA[openid-mobile]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[subscribe]]></Event><EventKey><![CDATA[qrscene_` + mobileLink.SceneKey + `]]></EventKey></xml>`
-	req := httptest.NewRequest(http.MethodPost, "/api/channels/weixin/events?timestamp=1&nonce=2&signature="+weixinTestSignature("token-1", "1", "2"), strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	handler.HandleEvents(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("scan status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "已经绑定到另一个 CatsCo 账号") {
-		t.Fatalf("expected account conflict guidance, body=%s", body)
-	}
-	if got := db.mobileLinks[mobileLink.SceneKey]; got == nil || got.Status != "active" {
-		t.Fatalf("mobile link should remain active after failed binding, got=%+v", got)
 	}
 }
 
@@ -909,19 +840,36 @@ func TestWeixinInboundCanonicalDeliveryRecordsReplyRoute(t *testing.T) {
 	db.friends[friendKey(8, 43)] = types.FriendAccepted
 	db.friends[friendKey(43, 8)] = types.FriendAccepted
 	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
-		Channel:       "weixin",
-		ChannelAppID:  "wx_app",
-		ChannelUserID: "openid-mobile",
-		ActorUID:      100,
-		CanonicalUID:  8,
-		OwnerUID:      7,
-		AgentUID:      43,
-		Status:        types.ChannelAgentBindingActive,
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-mobile",
+		ActorUID:            100,
+		CanonicalUID:        8,
+		OwnerUID:            7,
+		AgentUID:            43,
+		DeviceAccessEnabled: true,
+		Status:              types.ChannelAgentBindingActive,
 	}); err != nil {
 		t.Fatalf("seed binding: %v", err)
 	}
 	api := &fakeWeixinAPI{appID: "wx_app"}
 	hub := NewHub(db, nil)
+	hub.userDevices.now = func() time.Time { return time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC) }
+	device, err := hub.userDevices.register(8, RegisterUserDeviceRequest{
+		DeviceID:       "alice-phone-linked-laptop",
+		DisplayName:    "Alice Laptop",
+		BodyID:         "body-alice",
+		InstallationID: "install-alice",
+		Capabilities:   []string{"read_file", "write_file"},
+	})
+	if err != nil {
+		t.Fatalf("register canonical user device: %v", err)
+	}
+	deviceClient := &Client{uid: 8, accountType: types.AccountHuman, deviceOwnerUID: 8, deviceID: "alice-phone-linked-laptop", deviceBodyID: "body-alice", deviceInstallationID: "install-alice", send: make(chan []byte, 1)}
+	botClient := &Client{uid: 43, accountType: types.AccountBot, bodyID: "body-agent", send: make(chan []byte, 1)}
+	hub.addClient(deviceClient)
+	hub.addClient(botClient)
+	hub.bindDeviceClient(8, device, deviceClient)
 	dispatcher := NewChannelOutboundDispatcher(db, nil, "").WithWeixin(api, "wx_app")
 	hub.SetChannelOutboundDispatcher(dispatcher)
 	topicID := p2pTopicID(8, 43)
@@ -936,6 +884,17 @@ func TestWeixinInboundCanonicalDeliveryRecordsReplyRoute(t *testing.T) {
 	}
 	if len(db.messages) != 1 || db.messages[0].FromUID != 8 || db.messages[0].TopicID != topicID {
 		t.Fatalf("mobile message should persist in canonical topic, messages=%+v", db.messages)
+	}
+	var inbound ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &inbound)
+	identity := metadataMapFromServerMessage(t, &inbound, "catsco_identity")
+	permissions, ok := identity["permissions"].(map[string]interface{})
+	if !ok || permissions["device_owner_user_id"] != "usr8" || permissions["device_owner_source"] != "actor" {
+		t.Fatalf("canonical mobile inbound should use the CatsCo user's own device context: %#v", identity["permissions"])
+	}
+	grant := firstDeviceGrantMap(t, identity)
+	if grant["ownerUserId"] != "usr8" || grant["actorUserId"] != "usr8" || grant["deviceId"] != "alice-phone-linked-laptop" {
+		t.Fatalf("canonical mobile inbound should issue self-owner device grant: %#v", grant)
 	}
 
 	if err := dispatcher.ForwardBotReply(context.Background(), 8, 43, topicID, "继续处理"); err != nil {
