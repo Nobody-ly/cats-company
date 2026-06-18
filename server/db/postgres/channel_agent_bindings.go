@@ -950,6 +950,7 @@ func (a *Adapter) UpsertChannelAgentRoute(route *types.ChannelAgentRoute) (*type
 		     agent_uid = EXCLUDED.agent_uid,
 		     source = EXCLUDED.source,
 		     selected_at = CURRENT_TIMESTAMP,
+		     updated_at = CURRENT_TIMESTAMP,
 		     last_used_at = CURRENT_TIMESTAMP`,
 		route.Channel,
 		route.ChannelAppID,

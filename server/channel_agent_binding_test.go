@@ -2787,7 +2787,6 @@ func (s *channelAgentTestStore) ResolveChannelAgentRoute(query types.ChannelAgen
 	}
 	now := time.Now()
 	route.LastUsedAt = &now
-	route.UpdatedAt = now
 	return cloneRoute(route), nil
 }
 
