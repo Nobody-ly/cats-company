@@ -31,6 +31,7 @@ type DeviceGrantOperation string
 
 const (
 	DeviceGrantReadFile       DeviceGrantOperation = "read_file"
+	DeviceGrantResolveDir     DeviceGrantOperation = "resolve_common_directory"
 	DeviceGrantWriteFile      DeviceGrantOperation = "write_file"
 	DeviceGrantEditFile       DeviceGrantOperation = "edit_file"
 	DeviceGrantSendFile       DeviceGrantOperation = "send_file"
@@ -777,11 +778,13 @@ func deviceGrantOperations(capabilities []DeviceGrantOperation) []DeviceGrantOpe
 func isAllowedDeviceGrantRuntimeOperation(operation DeviceGrantOperation) bool {
 	switch operation {
 	case DeviceGrantReadFile,
+		DeviceGrantResolveDir,
 		DeviceGrantGlob,
 		DeviceGrantGrep,
 		DeviceGrantWriteFile,
 		DeviceGrantEditFile,
-		DeviceGrantSendFile:
+		DeviceGrantSendFile,
+		DeviceGrantExecuteShell:
 		return true
 	default:
 		return false
@@ -842,6 +845,7 @@ func normalizeDeviceCapabilities(values []string) []DeviceGrantOperation {
 func isAllowedDeviceGrantOperation(operation DeviceGrantOperation) bool {
 	switch operation {
 	case DeviceGrantReadFile,
+		DeviceGrantResolveDir,
 		DeviceGrantWriteFile,
 		DeviceGrantEditFile,
 		DeviceGrantSendFile,

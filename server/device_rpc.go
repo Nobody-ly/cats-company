@@ -622,10 +622,12 @@ func validateDeviceRPCGrant(client *Client, msg *MsgDeviceRPC, grant ScopedDevic
 func isAllowedDeviceRPCOperation(operation DeviceGrantOperation) bool {
 	switch operation {
 	case DeviceGrantReadFile,
+		DeviceGrantResolveDir,
 		DeviceGrantGlob,
 		DeviceGrantGrep,
 		DeviceGrantWriteFile,
-		DeviceGrantEditFile:
+		DeviceGrantEditFile,
+		DeviceGrantExecuteShell:
 		return true
 	default:
 		return false

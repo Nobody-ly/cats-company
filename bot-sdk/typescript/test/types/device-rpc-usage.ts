@@ -32,6 +32,11 @@ const writeInput: DeviceRPCRequestInput = {
   operation: 'write_file',
   payload: { path: 'quote.xlsx', content: 'updated' },
 };
+const resolveDirectoryInput: DeviceRPCRequestInput = {
+  grant_id: 'grant-resolve-directory',
+  operation: 'resolve_common_directory',
+  payload: { directory: 'desktop' },
+};
 const editInput: DeviceRPCRequestInput = {
   grant_id: 'grant-edit',
   operation: 'edit_file',
@@ -42,6 +47,7 @@ const editInput: DeviceRPCRequestInput = {
 
 void bot.sendDeviceRPCRequest(input).then((ack: DeviceRPCRequestAck) => ack.request_id);
 void bot.sendDeviceRPCRequest(writeInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
+void bot.sendDeviceRPCRequest(resolveDirectoryInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
 void bot.sendDeviceRPCRequest(editInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
 void bot.sendDeviceRPC({
   type: 'result',

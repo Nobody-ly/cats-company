@@ -159,7 +159,7 @@ func normalizeDeviceConnectorScopes(scopes []string) []string {
 
 func normalizeDeviceConnectorCapabilityStrings(values []string) []string {
 	if len(values) == 0 {
-		values = []string{"read_file", "glob", "grep"}
+		values = []string{"read_file", "resolve_common_directory", "glob", "grep"}
 	}
 	ops := normalizeDeviceCapabilities(values)
 	out := make([]string, 0, len(ops))

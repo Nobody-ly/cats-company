@@ -153,7 +153,7 @@ export const api = {
   createDeviceConnectorPairing: (deviceName) =>
     request('POST', '/api/device-connectors/pairings', {
       device_name: deviceName || '',
-      capabilities: ['read_file', 'glob', 'grep'],
+      capabilities: ['read_file', 'resolve_common_directory', 'glob', 'grep'],
     }),
   getDeviceConnectorPairing: (pairingId) =>
     request('GET', `/api/device-connectors/pairings/${encodeURIComponent(pairingId)}`),
