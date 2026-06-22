@@ -6,13 +6,18 @@ import AddFriend from '../widgets/add-friend';
 import FriendRequest from '../widgets/friend-request';
 import AgentStoreModal from '../widgets/agent-store-modal';
 import MobileChannelBindModal from '../widgets/mobile-channel-bind-modal';
-import { Users, Zap, Bot, Trash2, MessageSquare, Smartphone, Check, X } from 'lucide-react';
+import { Users, Zap, Bot, Trash2, MessageSquare, Smartphone, Check, X, Pin } from 'lucide-react';
 
 const SIDEBAR_COLLAPSED_STORAGE_PREFIX = 'cc_sidebar_collapsed_v1';
 const DEFAULT_COLLAPSED_SECTIONS = { ai: false, friends: false, groups: false, agents: false };
+const PINNED_GROUPS_STORAGE_PREFIX = 'cc_pinned_groups_v1';
 
 function sidebarCollapsedStorageKey(uid) {
   return `${SIDEBAR_COLLAPSED_STORAGE_PREFIX}:${uid || 'guest'}`;
+}
+
+function pinnedGroupsStorageKey(uid) {
+  return `${PINNED_GROUPS_STORAGE_PREFIX}:${uid || 'guest'}`;
 }
 
 function normalizeCollapsedSections(value) {
@@ -48,6 +53,30 @@ function saveCollapsedSections(uid, next) {
   }
 }
 
+function loadPinnedGroupIds(uid) {
+  if (typeof window === 'undefined' || !window.localStorage) return new Set();
+
+  try {
+    const raw = window.localStorage.getItem(pinnedGroupsStorageKey(uid));
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((value) => String(value || '').trim()).filter(Boolean));
+  } catch (error) {
+    console.warn('Failed to restore pinned groups:', error);
+    return new Set();
+  }
+}
+
+function savePinnedGroupIds(uid, next) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    window.localStorage.setItem(pinnedGroupsStorageKey(uid), JSON.stringify([...next]));
+  } catch (error) {
+    console.warn('Failed to save pinned groups:', error);
+  }
+}
+
 export default function ChatListView({ activeTopic, onSelectTopic, user, onlineUsers }) {
   const [chats, setChats] = useState([]);
   const [friends, setFriends] = useState([]);
@@ -68,15 +97,32 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
   const [agentActionId, setAgentActionId] = useState('');
   const [agentPendingRequests, setAgentPendingRequests] = useState([]);
   const [agentReviewingKey, setAgentReviewingKey] = useState('');
+  const [pinnedGroupIds, setPinnedGroupIds] = useState(() => loadPinnedGroupIds(user?.uid));
 
   useEffect(() => {
     setCollapsed(loadCollapsedSections(user?.uid));
+    setPinnedGroupIds(loadPinnedGroupIds(user?.uid));
   }, [user?.uid]);
 
   const toggleCollapsed = (section) => {
     setCollapsed((prev) => {
       const next = { ...prev, [section]: !prev[section] };
       saveCollapsedSections(user?.uid, next);
+      return next;
+    });
+  };
+
+  const togglePinnedGroup = (topicId) => {
+    setPinnedGroupIds((prev) => {
+      const next = new Set(prev);
+      const key = String(topicId || '').trim();
+      if (!key) return prev;
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      savePinnedGroupIds(user?.uid, next);
       return next;
     });
   };
@@ -353,7 +399,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
 
   const aiChats = directChats.filter(c => c.isBot);
   const friendChats = directChats.filter(c => !c.isBot);
-  const groupChats = filteredGroups;
+  const groupChats = sortGroupsWithPins(filteredGroups, pinnedGroupIds);
   const hasSearchResults = aiChats.length > 0 || friendChats.length > 0 || groupChats.length > 0 || filteredAgents.length > 0;
 
   return (
@@ -458,6 +504,7 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
         ) : (
           groupChats.map((chat) => {
             const canDelete = groupOwnerById.get(String(chat.groupId)) === String(user.uid);
+            const isPinned = pinnedGroupIds.has(String(chat.id));
             return (
               <div key={chat.id} className={`v3-chat-item ${activeTopic === chat.id ? 'active' : ''}`}
                 onClick={() => onSelectTopic({ topicId: chat.id, name: chat.name, isGroup: true, groupId: chat.groupId, avatar_url: chat.avatar_url })}>
@@ -467,6 +514,18 @@ export default function ChatListView({ activeTopic, onSelectTopic, user, onlineU
                   {chat.preview && <div style={{fontSize: 12, color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{chat.preview}</div>}
                 </div>
                 {chat.time && <span style={{fontSize: 11, color: '#555', flexShrink: 0}}>{chat.time}</span>}
+                <button
+                  type="button"
+                  className={`v3-chat-item-action ${isPinned ? 'is-pinned' : ''}`}
+                  title={isPinned ? '取消置顶' : '置顶群聊'}
+                  aria-label={`${isPinned ? '取消置顶' : '置顶'} ${chat.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    togglePinnedGroup(chat.id);
+                  }}
+                >
+                  <Pin size={14} fill={isPinned ? 'currentColor' : 'none'} />
+                </button>
                 <button
                   type="button"
                   className="v3-chat-item-action"
@@ -758,6 +817,15 @@ function numericGroupIdFromTopic(topicId) {
 
 function sortConversationsByRecent(items) {
   return [...items].sort(conversationRecentLess);
+}
+
+function sortGroupsWithPins(items, pinnedGroupIds) {
+  return [...items].sort((left, right) => {
+    const leftPinned = pinnedGroupIds?.has(String(left.id));
+    const rightPinned = pinnedGroupIds?.has(String(right.id));
+    if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+    return conversationRecentLess(left, right);
+  });
 }
 
 function conversationRecentLess(left, right) {
