@@ -283,8 +283,10 @@ func TestDeviceRPCRejectsOfflineDevice(t *testing.T) {
 	}
 }
 
-func TestDeviceRPCRoutesShellOperationToSelectedDevice(t *testing.T) {
-	hub, agent, target, _, grant := newDeviceRPCTestFixture(t, true)
+func TestDeviceRPCRejectsShellOperationEvenWhenGranted(t *testing.T) {
+	hub, agent, _, _, grant := newDeviceRPCTestFixture(t, true)
+	grant.Operations = append(grant.Operations, DeviceGrantExecuteShell)
+	hub.userDevices.rememberGrants([]ScopedDeviceGrant{grant})
 
 	hub.handleDeviceRPC(agent, &MsgDeviceRPC{
 		ID:        "rpc-msg-1",
@@ -295,19 +297,10 @@ func TestDeviceRPCRoutesShellOperationToSelectedDevice(t *testing.T) {
 		Operation: "execute_shell",
 	})
 
-	var forwarded ServerMessage
-	decodeQueuedServerMessage(t, target.send, &forwarded)
-	if forwarded.DeviceRPC == nil || forwarded.DeviceRPC.Operation != "execute_shell" {
-		t.Fatalf("target received %#v, want execute_shell device_rpc request", forwarded)
-	}
-	if forwarded.DeviceRPC.GrantID != grant.GrantID || forwarded.DeviceRPC.DeviceID != grant.DeviceID {
-		t.Fatalf("shell request missing canonical scope: %#v", forwarded.DeviceRPC)
-	}
-
 	var ack ServerMessage
 	decodeQueuedServerMessage(t, agent.send, &ack)
-	if ack.Ctrl == nil || ack.Ctrl.Code != 200 {
-		t.Fatalf("shell rpc ack = %#v, want 200", ack.Ctrl)
+	if ack.Ctrl == nil || ack.Ctrl.Code != 403 || !strings.Contains(ack.Ctrl.Text, "not supported") {
+		t.Fatalf("unsupported rpc operation ack = %#v, want 403 unsupported", ack.Ctrl)
 	}
 }
 
@@ -720,7 +713,7 @@ func newDeviceRPCTestFixture(t *testing.T, bindTarget bool) (*Hub, *Client, *Cli
 		DisplayName:    "Alice Laptop",
 		BodyID:         "body-device",
 		InstallationID: "install-device",
-		Capabilities:   []string{"read_file", "resolve_common_directory", "write_file", "send_file", "execute_shell"},
+		Capabilities:   []string{"read_file", "resolve_common_directory", "write_file", "send_file"},
 	})
 	if err != nil {
 		t.Fatalf("register device: %v", err)

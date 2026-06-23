@@ -626,8 +626,7 @@ func isAllowedDeviceRPCOperation(operation DeviceGrantOperation) bool {
 		DeviceGrantGlob,
 		DeviceGrantGrep,
 		DeviceGrantWriteFile,
-		DeviceGrantEditFile,
-		DeviceGrantExecuteShell:
+		DeviceGrantEditFile:
 		return true
 	default:
 		return false
