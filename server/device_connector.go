@@ -20,6 +20,7 @@ const (
 	devicePairingTTL         = 5 * time.Minute
 	deviceConnectorTokenTTL  = 30 * 24 * time.Hour
 	maxDeviceAuditEvents     = 500
+	maxDeviceAuditCommandLen = 2048
 	devicePairingCodeBytes   = 8
 )
 
@@ -314,6 +315,7 @@ type DeviceAuditEvent struct {
 	SessionKey  string `json:"session_key,omitempty"`
 	Operation   string `json:"operation,omitempty"`
 	ToolName    string `json:"tool_name,omitempty"`
+	Command     string `json:"command,omitempty"`
 	Phase       string `json:"phase"`
 	Result      string `json:"result,omitempty"`
 	Reason      string `json:"reason,omitempty"`

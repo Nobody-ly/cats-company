@@ -68,6 +68,32 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	}
 }
 
+func TestUserDeviceRegistryIssuesShellGrantWhenDeviceCapabilityIsRegistered(t *testing.T) {
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	registry := newUserDeviceRegistry(time.Minute)
+	registry.now = func() time.Time { return now }
+
+	device, err := registry.register(7, RegisterUserDeviceRequest{
+		DeviceID:     "shell-laptop",
+		DisplayName:  "Shell Laptop",
+		BodyID:       "body-shell",
+		Capabilities: []string{"read_file", "execute_shell"},
+	})
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	grants := registry.grantsForTurn(7, "p2p_7_42", "p2p", 42, "body-agent")
+	if len(grants) != 1 {
+		t.Fatalf("grants len = %d, want 1", len(grants))
+	}
+	if grants[0].DeviceID != device.DeviceID {
+		t.Fatalf("grant should target registered shell device, got %#v", grants[0])
+	}
+	if !hasGrantOperation(grants[0].Operations, DeviceGrantExecuteShell) {
+		t.Fatalf("grant should expose execute_shell when registered, got %#v", grants[0].Operations)
+	}
+}
+
 func TestUserDeviceRegistrySelectsMentionedDeviceAndRemembersPreference(t *testing.T) {
 	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
 	registry := newUserDeviceRegistry(10 * time.Minute)
@@ -966,6 +992,15 @@ func deviceSelectionMap(t *testing.T, identity map[string]interface{}) map[strin
 		t.Fatalf("device_selection = %#v, want object", identity["device_selection"])
 	}
 	return selection
+}
+
+func hasGrantOperation(operations []DeviceGrantOperation, expected DeviceGrantOperation) bool {
+	for _, operation := range operations {
+		if operation == expected {
+			return true
+		}
+	}
+	return false
 }
 
 type deviceHandlerStore struct {

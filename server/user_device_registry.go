@@ -783,7 +783,8 @@ func isAllowedDeviceGrantRuntimeOperation(operation DeviceGrantOperation) bool {
 		DeviceGrantGrep,
 		DeviceGrantWriteFile,
 		DeviceGrantEditFile,
-		DeviceGrantSendFile:
+		DeviceGrantSendFile,
+		DeviceGrantExecuteShell:
 		return true
 	default:
 		return false

@@ -80,6 +80,16 @@
 - `kp`: 正在输入
 - `read`: 已读回执
 
+#### 6. 设备 RPC (device_rpc)
+
+`device_rpc` 用于 bot 将被授权的工具请求路由到用户当前选定的本地设备。服务端只接受 bot 连接发起的 `request`，并要求请求绑定有效的 `grant_id`、会话、用户、设备和 operation。
+
+当前 Device RPC operation：
+- 普通文件任务：`read_file`、`resolve_common_directory`、`glob`、`grep`、`write_file`、`edit_file`
+- 高风险命令任务：`execute_shell`
+
+`execute_shell` 只有在目标设备声明了该 capability、服务端为当前会话下发的 grant 包含 `execute_shell`、并且请求通过 Device RPC grant 校验时才会被转发。服务端会记录设备审计事件，包括操作者、agent、目标设备、session、operation、tool、阶段、结果；`execute_shell` 还会记录本次 shell 命令文本。
+
 ### 服务器 → 客户端
 
 #### 1. 控制消息 (ctrl)
