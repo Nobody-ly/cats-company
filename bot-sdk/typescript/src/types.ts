@@ -68,7 +68,7 @@ export interface MsgClientFriend {
 }
 
 export type DeviceRPCType = 'request' | 'result';
-export type DeviceRPCOperation = 'read_file' | 'glob' | 'grep' | 'write_file' | 'edit_file';
+export type DeviceRPCOperation = 'read_file' | 'resolve_common_directory' | 'glob' | 'grep' | 'write_file' | 'edit_file';
 
 export interface MsgDeviceRPCError {
   code: string;

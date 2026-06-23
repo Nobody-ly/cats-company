@@ -26,7 +26,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 		DisplayName:    " Alice Laptop ",
 		BodyID:         " body-main ",
 		InstallationID: " install-main ",
-		Capabilities:   []string{"read_file", "unknown", "write_file", "edit_file", "send_file", "read_file"},
+		Capabilities:   []string{"read_file", "unknown", "resolve_common_directory", "write_file", "edit_file", "send_file", "read_file"},
 	})
 	if err != nil {
 		t.Fatalf("register device: %v", err)
@@ -34,7 +34,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	if device.DeviceID != "laptop-main" || device.DisplayName != "Alice Laptop" {
 		t.Fatalf("unexpected registered device: %#v", device)
 	}
-	if got := device.Capabilities; len(got) != 4 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantWriteFile || got[2] != DeviceGrantEditFile || got[3] != DeviceGrantSendFile {
+	if got := device.Capabilities; len(got) != 5 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantResolveDir || got[2] != DeviceGrantWriteFile || got[3] != DeviceGrantEditFile || got[4] != DeviceGrantSendFile {
 		t.Fatalf("unexpected capabilities: %#v", got)
 	}
 
@@ -55,7 +55,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	if grant.DeviceID != "laptop-main" || grant.DeviceBodyID != "body-main" || grant.DeviceInstallationID != "install-main" {
 		t.Fatalf("unexpected grant device: %#v", grant)
 	}
-	if len(grant.Operations) != 4 || grant.Operations[0] != DeviceGrantReadFile || grant.Operations[1] != DeviceGrantWriteFile || grant.Operations[2] != DeviceGrantEditFile || grant.Operations[3] != DeviceGrantSendFile {
+	if len(grant.Operations) != 5 || grant.Operations[0] != DeviceGrantReadFile || grant.Operations[1] != DeviceGrantResolveDir || grant.Operations[2] != DeviceGrantWriteFile || grant.Operations[3] != DeviceGrantEditFile || grant.Operations[4] != DeviceGrantSendFile {
 		t.Fatalf("grant should expose registered file operations, got %#v", grant.Operations)
 	}
 	if grant.CreatedAt != unixMillis(now) || grant.ExpiresAt != unixMillis(now.Add(2*time.Minute)) {
