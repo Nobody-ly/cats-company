@@ -313,6 +313,44 @@ type ChannelIdentityMobileLink struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+// ChannelGroupMobileLink is a one-time QR scene generated from a CatsCo group
+// member so the same human can continue that group from Weixin/Feishu.
+type ChannelGroupMobileLink struct {
+	ID           int64      `json:"id"`
+	SceneKey     string     `json:"scene_key"`
+	Channel      string     `json:"channel"`
+	ChannelAppID string     `json:"channel_app_id,omitempty"`
+	CanonicalUID int64      `json:"canonical_uid"`
+	GroupID      int64      `json:"group_id"`
+	TopicID      string     `json:"topic_id"`
+	Status       string     `json:"status"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	ConsumedAt   *time.Time `json:"consumed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// ChannelGroupBinding maps a Weixin/Feishu identity to a CatsCo group topic.
+// It is separate from ChannelAgentBinding: the user is joining an existing
+// group conversation, not selecting or adding a virtual employee.
+type ChannelGroupBinding struct {
+	ID                      int64      `json:"id"`
+	Channel                 string     `json:"channel"`
+	ChannelAppID            string     `json:"channel_app_id,omitempty"`
+	ChannelUserID           string     `json:"channel_user_id"`
+	ChannelConversationID   string     `json:"channel_conversation_id,omitempty"`
+	ChannelConversationType string     `json:"channel_conversation_type,omitempty"`
+	ActorUID                int64      `json:"actor_uid,omitempty"`
+	CanonicalUID            int64      `json:"canonical_uid"`
+	GroupID                 int64      `json:"group_id"`
+	TopicID                 string     `json:"topic_id"`
+	Status                  string     `json:"status"`
+	BoundAt                 time.Time  `json:"bound_at"`
+	SelectedAt              time.Time  `json:"selected_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+	LastUsedAt              *time.Time `json:"last_used_at,omitempty"`
+}
+
 // ChannelAgentBindingQuery is the normalized lookup key used by channel
 // adapters before they create a model session route.
 type ChannelAgentBindingQuery struct {
@@ -323,6 +361,19 @@ type ChannelAgentBindingQuery struct {
 	ChannelConversationType string
 	AgentUID                int64
 	ActorUID                int64
+}
+
+// ChannelGroupBindingQuery is the normalized lookup key used by channel
+// adapters before they route an inbound mobile-channel message to a group.
+type ChannelGroupBindingQuery struct {
+	Channel                 string
+	ChannelAppID            string
+	ChannelUserID           string
+	ChannelConversationID   string
+	ChannelConversationType string
+	ActorUID                int64
+	GroupID                 int64
+	TopicID                 string
 }
 
 // ChannelAgentRoute records the current virtual employee selected inside one

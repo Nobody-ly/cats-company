@@ -1273,6 +1273,18 @@ body {
   color: var(--v3-text-name);
 }
 
+.v3-chat-item-action.is-pinned {
+  opacity: 1;
+  color: var(--v3-primary);
+  background: rgba(0, 198, 137, 0.12);
+}
+
+.v3-chat-item-action.is-pinned:hover:not(:disabled),
+.v3-chat-item-action.is-pinned:focus-visible {
+  color: #47e5b4;
+  background: rgba(0, 198, 137, 0.18);
+}
+
 .v3-chat-item-action.danger:hover:not(:disabled),
 .v3-chat-item-action.danger:focus-visible {
   background: rgba(255, 86, 86, 0.14);

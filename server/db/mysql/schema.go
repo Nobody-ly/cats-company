@@ -24,6 +24,8 @@ func (a *Adapter) CreateSchema() error {
 		createChannelAgentBindingsTable,
 		createChannelAgentRoutesTable,
 		createChannelIdentityMobileLinksTable,
+		createChannelGroupMobileLinksTable,
+		createChannelGroupBindingsTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -62,6 +64,9 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentBindingsActorAnyIndex,
 		migrateChannelAgentRoutesLookupIndex,
 		migrateChannelAgentRoutesActorIndex,
+		migrateChannelGroupBindingsAddSelectedAt,
+		migrateChannelGroupBindingsBackfillSelectedAt,
+		migrateChannelGroupBindingsSelectedAtNotNull,
 		migrateChannelAgentAccessOwnerAgentIndex,
 		migrateChannelAgentAccessActorAgentIndex,
 		migrateChannelAgentAccessLookupIndex,
@@ -411,6 +416,52 @@ CREATE TABLE IF NOT EXISTS channel_identity_mobile_links (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 
+const createChannelGroupMobileLinksTable = `
+CREATE TABLE IF NOT EXISTS channel_group_mobile_links (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    scene_key VARCHAR(64) NOT NULL UNIQUE,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    canonical_uid BIGINT NOT NULL,
+    group_id BIGINT NOT NULL,
+    topic_id VARCHAR(128) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_channel_group_mobile_links_group (group_id, canonical_uid, status, expires_at),
+    FOREIGN KEY (canonical_uid) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES ` + "`groups`" + `(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createChannelGroupBindingsTable = `
+CREATE TABLE IF NOT EXISTS channel_group_bindings (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    channel VARCHAR(32) NOT NULL,
+    channel_app_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_user_id VARCHAR(128) NOT NULL,
+    channel_conversation_id VARCHAR(128) NOT NULL DEFAULT '',
+    channel_conversation_type VARCHAR(32) NOT NULL DEFAULT 'p2p',
+    actor_uid BIGINT NULL DEFAULT NULL,
+    canonical_uid BIGINT NOT NULL,
+    group_id BIGINT NOT NULL,
+	topic_id VARCHAR(128) NOT NULL,
+	status VARCHAR(16) NOT NULL DEFAULT 'active',
+	bound_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	selected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	last_used_at TIMESTAMP NULL DEFAULT NULL,
+	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_channel_group_binding_identity (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type),
+    INDEX idx_channel_group_bindings_topic (topic_id, status),
+    INDEX idx_channel_group_bindings_lookup (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type, status),
+    FOREIGN KEY (actor_uid) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (canonical_uid) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES ` + "`groups`" + `(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
 // Migration: add reply_to column to messages table.
 const migrateMessagesAddReplyTo = `
 ALTER TABLE messages ADD COLUMN reply_to BIGINT DEFAULT NULL;
@@ -548,6 +599,18 @@ ALTER TABLE channel_agent_routes ADD INDEX idx_channel_agent_routes_lookup (chan
 
 const migrateChannelAgentRoutesActorIndex = `
 ALTER TABLE channel_agent_routes ADD INDEX idx_channel_agent_routes_actor (channel, channel_app_id, actor_uid, agent_uid);
+`
+
+const migrateChannelGroupBindingsAddSelectedAt = `
+ALTER TABLE channel_group_bindings ADD COLUMN selected_at TIMESTAMP NULL DEFAULT NULL;
+`
+
+const migrateChannelGroupBindingsBackfillSelectedAt = `
+UPDATE channel_group_bindings SET selected_at = COALESCE(bound_at, updated_at, CURRENT_TIMESTAMP) WHERE selected_at IS NULL;
+`
+
+const migrateChannelGroupBindingsSelectedAtNotNull = `
+ALTER TABLE channel_group_bindings MODIFY COLUMN selected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
 `
 
 const migrateChannelAgentAccessOwnerAgentIndex = `

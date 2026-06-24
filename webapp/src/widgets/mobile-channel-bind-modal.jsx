@@ -3,16 +3,18 @@ import { Copy, RefreshCw, X } from 'lucide-react';
 import { api } from '../api';
 import QRCode from './qr-code';
 
-export default function MobileChannelBindModal({ agentUid, agentName, onClose }) {
+export default function MobileChannelBindModal({ agentUid, agentName, groupId, topicId, groupName, onClose }) {
   const [channel, setChannel] = useState('weixin');
   const [linkInfo, setLinkInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
   const requestSeqRef = useRef(0);
+  const isGroupTarget = Boolean(groupId || topicId);
+  const targetName = isGroupTarget ? (groupName || '群聊') : agentName;
 
   const loadLink = useCallback(async () => {
-    if (!agentUid) return;
+    if (!isGroupTarget && !agentUid) return;
     const requestSeq = requestSeqRef.current + 1;
     requestSeqRef.current = requestSeq;
     try {
@@ -20,7 +22,9 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
       setError('');
       setCopied(false);
       setLinkInfo(null);
-      const res = await api.createChannelIdentityMobileLink(agentUid, channel);
+      const res = isGroupTarget
+        ? await api.createChannelGroupMobileLink(groupId, topicId, channel)
+        : await api.createChannelIdentityMobileLink(agentUid, channel);
       if (requestSeqRef.current !== requestSeq) return;
       setLinkInfo(res);
     } catch (err) {
@@ -32,7 +36,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
         setLoading(false);
       }
     }
-  }, [agentUid, channel]);
+  }, [agentUid, channel, groupId, isGroupTarget, topicId]);
 
   useEffect(() => {
     loadLink();
@@ -52,6 +56,9 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
     }
     if (isFeishuNativeUnconfigured) {
       return '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码。';
+    }
+    if (isGroupTarget) {
+      return `扫码后会把你的${channel === 'weixin' ? '微信' : '飞书'}身份绑定到当前 CatsCo 账号，之后可直接在移动端进入这个群聊。`;
     }
     return `扫码后会把你的${channel === 'weixin' ? '微信' : '飞书'}身份绑定到当前 CatsCo 账号，之后可直接在移动端继续和这个虚拟员工对话。`;
   })();
@@ -78,7 +85,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
         <div className="mobile-channel-bind-header">
           <div>
             <div className="oc-modal-title">移动端使用</div>
-            <div className="mobile-channel-bind-subtitle">{agentName}</div>
+            <div className="mobile-channel-bind-subtitle">{targetName}</div>
           </div>
           <button type="button" className="v3-action-btn" onClick={onClose} aria-label="关闭">
             <X size={16} />
@@ -96,7 +103,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, onClose })
           {loading && <div className="mobile-channel-placeholder">正在生成...</div>}
           {!loading && error && <div className="mobile-channel-error">{error}</div>}
           {!loading && !error && weixinImageURL && (
-            <img className="mobile-channel-qr-img" src={weixinImageURL} alt="微信移动端绑定二维码" />
+            <img className="mobile-channel-qr-img" src={weixinImageURL} alt={`${channel === 'weixin' ? '微信' : '飞书'}移动端绑定二维码`} />
           )}
           {!loading && !error && !weixinImageURL && qrValue && (
             <div className="mobile-channel-qr-box">

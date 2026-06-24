@@ -283,7 +283,7 @@ func TestDeviceRPCRejectsOfflineDevice(t *testing.T) {
 	}
 }
 
-func TestDeviceRPCRejectsShellOperationEvenWhenGranted(t *testing.T) {
+func TestDeviceRPCRejectsShellOperationWithoutGrant(t *testing.T) {
 	hub, agent, _, _, grant := newDeviceRPCTestFixture(t, true)
 
 	hub.handleDeviceRPC(agent, &MsgDeviceRPC{
@@ -297,8 +297,83 @@ func TestDeviceRPCRejectsShellOperationEvenWhenGranted(t *testing.T) {
 
 	var ack ServerMessage
 	decodeQueuedServerMessage(t, agent.send, &ack)
-	if ack.Ctrl == nil || ack.Ctrl.Code != 403 || !strings.Contains(ack.Ctrl.Text, "not supported") {
-		t.Fatalf("unsupported rpc operation ack = %#v, want 403 unsupported", ack.Ctrl)
+	if ack.Ctrl == nil || ack.Ctrl.Code != 403 || !strings.Contains(ack.Ctrl.Text, "not allowed by grant") {
+		t.Fatalf("shell without grant ack = %#v, want 403 not allowed by grant", ack.Ctrl)
+	}
+}
+
+func TestDeviceRPCRoutesShellOperationWhenGrantedAndAuditsCommand(t *testing.T) {
+	hub, agent, target, _, grant := newDeviceRPCTestFixture(t, true)
+	grant.Operations = append(grant.Operations, DeviceGrantExecuteShell)
+	hub.userDevices.rememberGrants([]ScopedDeviceGrant{grant})
+
+	hub.handleDeviceRPC(agent, &MsgDeviceRPC{
+		ID:        "rpc-msg-shell",
+		Type:      "request",
+		RequestID: "rpc-shell",
+		GrantID:   grant.GrantID,
+		DeviceID:  grant.DeviceID,
+		Operation: "execute_shell",
+		ToolName:  "execute_shell",
+		Payload: map[string]interface{}{
+			"args": map[string]interface{}{"command": "echo remote-shell"},
+		},
+	})
+
+	var forwarded ServerMessage
+	decodeQueuedServerMessage(t, target.send, &forwarded)
+	if forwarded.DeviceRPC == nil || forwarded.DeviceRPC.Operation != "execute_shell" || forwarded.DeviceRPC.ToolName != "execute_shell" {
+		t.Fatalf("target received %#v, want execute_shell device_rpc request", forwarded.DeviceRPC)
+	}
+	if forwarded.DeviceRPC.GrantID != grant.GrantID || forwarded.DeviceRPC.DeviceID != grant.DeviceID || forwarded.DeviceRPC.SessionKey != grant.SessionKey {
+		t.Fatalf("shell request missing canonical grant scope: %#v", forwarded.DeviceRPC)
+	}
+
+	var ack ServerMessage
+	decodeQueuedServerMessage(t, agent.send, &ack)
+	if ack.Ctrl == nil || ack.Ctrl.Code != http.StatusOK {
+		t.Fatalf("shell rpc ack = %#v, want 200", ack.Ctrl)
+	}
+
+	events := hub.listDeviceAudit(7, 10)
+	if len(events) == 0 {
+		t.Fatal("execute_shell rpc should create a device audit event")
+	}
+	event := events[0]
+	if event.Phase != "rpc_forwarded" || event.Operation != "execute_shell" || event.Command != "echo remote-shell" {
+		t.Fatalf("unexpected shell audit event: %#v", event)
+	}
+	if event.ActorUserID != grant.ActorUserID || event.AgentID != grant.AgentID || event.DeviceID != grant.DeviceID || event.SessionKey != grant.SessionKey {
+		t.Fatalf("shell audit event missing scope: %#v", event)
+	}
+}
+
+func TestDeviceRPCRoutesCommonDirectoryResolutionToSelectedDevice(t *testing.T) {
+	hub, agent, target, _, grant := newDeviceRPCTestFixture(t, true)
+
+	hub.handleDeviceRPC(agent, &MsgDeviceRPC{
+		ID:        "rpc-msg-1",
+		Type:      "request",
+		RequestID: "rpc-resolve-dir",
+		GrantID:   grant.GrantID,
+		DeviceID:  grant.DeviceID,
+		Operation: string(DeviceGrantResolveDir),
+		Payload:   map[string]interface{}{"args": map[string]interface{}{"directory": "desktop"}},
+	})
+
+	var forwarded ServerMessage
+	decodeQueuedServerMessage(t, target.send, &forwarded)
+	if forwarded.DeviceRPC == nil || forwarded.DeviceRPC.Operation != string(DeviceGrantResolveDir) {
+		t.Fatalf("target received %#v, want resolve_common_directory device_rpc request", forwarded)
+	}
+	if forwarded.DeviceRPC.GrantID != grant.GrantID || forwarded.DeviceRPC.DeviceID != grant.DeviceID {
+		t.Fatalf("resolve directory request missing canonical scope: %#v", forwarded.DeviceRPC)
+	}
+
+	var ack ServerMessage
+	decodeQueuedServerMessage(t, agent.send, &ack)
+	if ack.Ctrl == nil || ack.Ctrl.Code != 200 {
+		t.Fatalf("resolve directory rpc ack = %#v, want 200", ack.Ctrl)
 	}
 }
 
@@ -682,7 +757,7 @@ func newDeviceRPCTestFixture(t *testing.T, bindTarget bool) (*Hub, *Client, *Cli
 		DisplayName:    "Alice Laptop",
 		BodyID:         "body-device",
 		InstallationID: "install-device",
-		Capabilities:   []string{"read_file", "write_file", "send_file"},
+		Capabilities:   []string{"read_file", "resolve_common_directory", "write_file", "send_file"},
 	})
 	if err != nil {
 		t.Fatalf("register device: %v", err)

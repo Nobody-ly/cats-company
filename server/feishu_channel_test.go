@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,12 +20,19 @@ type fakeFeishuAPI struct {
 	appID    string
 	identity *FeishuUserIdentity
 	sends    []fakeFeishuSend
+	media    map[string]fakeFeishuMedia
 }
 
 type fakeFeishuSend struct {
 	ReceiveIDType string
 	ReceiveID     string
 	Text          string
+}
+
+type fakeFeishuMedia struct {
+	FileName    string
+	ContentType string
+	Body        string
 }
 
 func (f *fakeFeishuAPI) AppID() string {
@@ -36,6 +46,21 @@ func (f *fakeFeishuAPI) ExchangeOAuthCode(ctx context.Context, code string, redi
 func (f *fakeFeishuAPI) SendTextMessage(ctx context.Context, receiveIDType string, receiveID string, text string) error {
 	f.sends = append(f.sends, fakeFeishuSend{ReceiveIDType: receiveIDType, ReceiveID: receiveID, Text: text})
 	return nil
+}
+
+func (f *fakeFeishuAPI) DownloadMessageResource(ctx context.Context, messageID, fileKey, resourceType string) (*channelMediaDownload, error) {
+	if f.media == nil {
+		return nil, errors.New("missing media")
+	}
+	media, ok := f.media[fileKey]
+	if !ok {
+		return nil, errors.New("unknown media")
+	}
+	return &channelMediaDownload{
+		Body:        io.NopCloser(strings.NewReader(media.Body)),
+		FileName:    media.FileName,
+		ContentType: media.ContentType,
+	}, nil
 }
 
 func TestFeishuEventURLVerification(t *testing.T) {
@@ -548,6 +573,112 @@ func TestFeishuMessageEventDeliversToBoundAgent(t *testing.T) {
 	}
 }
 
+func TestFeishuFileMessageDeliversAttachmentBlocks(t *testing.T) {
+	os.RemoveAll("uploads")
+	t.Cleanup(func() { os.RemoveAll("uploads") })
+
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "test",
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+	api := &fakeFeishuAPI{
+		appID: "cli_app",
+		media: map[string]fakeFeishuMedia{
+			"file-key-1": {
+				FileName:    "contract.pdf",
+				ContentType: "application/pdf",
+				Body:        "%PDF-1.4 fake",
+			},
+		},
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+	content, _ := json.Marshal(map[string]interface{}{
+		"file_key":  "file-key-1",
+		"file_name": "contract.pdf",
+		"size":      13,
+	})
+	eventBody := map[string]interface{}{
+		"schema": "2.0",
+		"header": map[string]interface{}{
+			"event_type": "im.message.receive_v1",
+			"app_id":     "cli_app",
+		},
+		"event": map[string]interface{}{
+			"sender": map[string]interface{}{
+				"sender_type": "user",
+				"sender_id": map[string]interface{}{
+					"open_id": "ou_user",
+				},
+			},
+			"message": map[string]interface{}{
+				"message_id":   "om_file_1",
+				"chat_id":      "oc_chat_1",
+				"chat_type":    "p2p",
+				"message_type": "file",
+				"content":      string(content),
+			},
+		},
+	}
+	body, _ := json.Marshal(eventBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/channels/feishu/events", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%d", len(db.messages))
+	}
+	msg := db.messages[0]
+	if msg.TopicID != "p2p_8_43" || msg.FromUID != 8 || msg.MsgType != "file" {
+		t.Fatalf("message=%+v", msg)
+	}
+	if len(msg.ContentBlocks) != 1 || msg.ContentBlocks[0].Type != "file" {
+		t.Fatalf("content blocks=%+v", msg.ContentBlocks)
+	}
+	payload := msg.ContentBlocks[0].Payload
+	if payload["name"] != "contract.pdf" || payload["mime_type"] != "application/pdf" {
+		t.Fatalf("payload=%+v", payload)
+	}
+	url, _ := payload["url"].(string)
+	if !strings.HasPrefix(url, "/uploads/files/") {
+		t.Fatalf("url=%q", url)
+	}
+	if len(api.sends) != 0 {
+		t.Fatalf("unexpected immediate sends: %+v", api.sends)
+	}
+}
+
 func TestFeishuMessageEventRequiresSelectedAgent(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
@@ -866,6 +997,21 @@ func TestFeishuGroupBindingLinksAreSentPrivately(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed binding: %v", err)
 	}
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "chat-1",
+		ChannelConversationType: "p2p",
+		ActorUID:                100,
+		CanonicalUID:            8,
+		DeviceAccessEnabled:     false,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed stale conversation binding: %v", err)
+	}
 	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
 		Channel:                 "feishu",
 		ChannelAppID:            "cli_app",
@@ -971,6 +1117,159 @@ func TestFeishuConversationBindingInheritsDeviceAccess(t *testing.T) {
 	}
 	if binding == nil || binding.ChannelConversationID != "chat-1" || binding.CanonicalUID != 8 || !binding.DeviceAccessEnabled {
 		t.Fatalf("conversation binding should inherit canonical device access: %+v", binding)
+	}
+}
+
+func TestFeishuP2PScanRouteOverridesStaleConversationRoute(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "dev-agent", DisplayName: "Dev Agent", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	db.friends[friendKey(8, 44)] = types.FriendAccepted
+	db.friends[friendKey(44, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed stale conversation binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "manual",
+	}); err != nil {
+		t.Fatalf("seed stale conversation route: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                44,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed fresh base binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                44,
+		Source:                  "entry_scan",
+	}); err != nil {
+		t.Fatalf("seed fresh base route: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, &fakeFeishuAPI{appID: "cli_app"})
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_after_scan", "你好")
+	if len(db.messages) != 1 || db.messages[0].TopicID != "p2p_8_44" || db.messages[0].Content != "你好" {
+		t.Fatalf("message should follow latest scanned agent route: %+v", db.messages)
+	}
+	route, err := db.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+	})
+	if err != nil || route == nil || route.AgentUID != 44 {
+		t.Fatalf("conversation route should switch to scanned agent, got %+v err=%v", route, err)
+	}
+}
+
+func TestFeishuP2PNewerConversationRouteKeepsManualSelection(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "dev-agent", DisplayName: "Dev Agent", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	db.friends[friendKey(8, 44)] = types.FriendAccepted
+	db.friends[friendKey(44, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                44,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed base binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                44,
+		Source:                  "entry_scan",
+	}); err != nil {
+		t.Fatalf("seed base route: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed manual binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "manual",
+	}); err != nil {
+		t.Fatalf("seed manual route: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, &fakeFeishuAPI{appID: "cli_app"})
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_manual", "继续")
+	if len(db.messages) != 1 || db.messages[0].TopicID != "p2p_8_43" || db.messages[0].Content != "继续" {
+		t.Fatalf("newer manual route should keep current conversation agent: %+v", db.messages)
 	}
 }
 

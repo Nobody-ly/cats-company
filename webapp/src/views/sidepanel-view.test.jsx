@@ -18,11 +18,14 @@ jest.mock('../widgets/agent-store-modal', () => function MockAgentStoreModal() {
   return null;
 });
 
-jest.mock('../widgets/mobile-channel-bind-modal', () => function MockMobileChannelBindModal({ agentName, onClose }) {
+jest.mock('../widgets/mobile-channel-bind-modal', () => function MockMobileChannelBindModal({ agentName, groupId, topicId, groupName, onClose }) {
   return (
     <div data-testid="mobile-channel-modal">
       <strong>移动端使用</strong>
       <span>{agentName}</span>
+      <span>{groupName}</span>
+      <span data-testid="mobile-channel-group-id">{groupId || ''}</span>
+      <span data-testid="mobile-channel-topic-id">{topicId || ''}</span>
       <button type="button" onClick={onClose}>关闭移动端</button>
     </div>
   );
@@ -179,6 +182,35 @@ describe('ChatListView sidebar sections', () => {
     expect(api.openAgent).not.toHaveBeenCalled();
     expect(container.textContent).toContain('移动端使用');
     expect(container.textContent).toContain('Dev Agent');
+  });
+
+  it('opens mobile binding from a group row without opening the group conversation', async () => {
+    api.getGroups.mockResolvedValue({
+      groups: [
+        {
+          id: 88,
+          name: 'Virtual Team',
+          topic_id: 'grp_88',
+          owner_id: 7,
+        },
+      ],
+    });
+
+    await mount();
+
+    const mobileButton = container.querySelector('[aria-label="Virtual Team 移动端使用"]');
+    expect(mobileButton).toBeTruthy();
+
+    await act(async () => {
+      Simulate.click(mobileButton);
+      await Promise.resolve();
+    });
+
+    expect(onSelectTopic).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('移动端使用');
+    expect(container.textContent).toContain('Virtual Team');
+    expect(container.querySelector('[data-testid="mobile-channel-group-id"]').textContent).toBe('88');
+    expect(container.querySelector('[data-testid="mobile-channel-topic-id"]').textContent).toBe('grp_88');
   });
 
   it('removes friend agents directly from the assistant row', async () => {
@@ -486,6 +518,54 @@ describe('ChatListView sidebar sections', () => {
     expect(text.indexOf('New Agent')).toBeLessThan(text.indexOf('Old Agent'));
     expect(text.indexOf('New Friend')).toBeLessThan(text.indexOf('Old Friend'));
     expect(text.indexOf('New Empty Group')).toBeLessThan(text.indexOf('Old Group'));
+  });
+
+  it('keeps pinned group chats above newer group activity and persists the choice', async () => {
+    api.getConversations.mockResolvedValue({
+      conversations: [
+        {
+          id: 'grp_20',
+          group_id: 20,
+          name: 'Old Group',
+          is_group: true,
+          last_time: '2026-06-02T08:00:00Z',
+          latest_seq: 1,
+        },
+        {
+          id: 'grp_21',
+          group_id: 21,
+          name: 'Busy Group',
+          is_group: true,
+          last_time: '2026-06-08T08:00:00Z',
+          latest_seq: 20,
+        },
+      ],
+    });
+    api.getGroups.mockResolvedValue({
+      groups: [
+        { id: 20, name: 'Old Group', owner_id: 7, created_at: '2026-06-02T08:00:00Z' },
+        { id: 21, name: 'Busy Group', owner_id: 7, created_at: '2026-06-08T08:00:00Z' },
+      ],
+    });
+    api.getAgents.mockResolvedValue({ agents: [] });
+
+    await mount();
+
+    expect(container.textContent.indexOf('Busy Group')).toBeLessThan(container.textContent.indexOf('Old Group'));
+
+    const pinOldGroup = container.querySelector('button[aria-label="置顶 Old Group"]');
+    expect(pinOldGroup).toBeTruthy();
+    await act(async () => {
+      Simulate.click(pinOldGroup);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent.indexOf('Old Group')).toBeLessThan(container.textContent.indexOf('Busy Group'));
+
+    await remount();
+
+    expect(container.textContent.indexOf('Old Group')).toBeLessThan(container.textContent.indexOf('Busy Group'));
+    expect(container.querySelector('button[aria-label="取消置顶 Old Group"]')).toBeTruthy();
   });
 
   it('falls back to created_at when direct conversations have no last_time', async () => {

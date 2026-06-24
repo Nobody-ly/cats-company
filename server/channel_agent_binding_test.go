@@ -1837,6 +1837,46 @@ func TestChannelAgentEntryRegenerateRefreshesConfiguredFeishuAppID(t *testing.T)
 	}
 }
 
+func TestCreateChannelGroupMobileLinkRequiresGroupMembership(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: "outsider", DisplayName: "Outsider", AccountType: types.AccountHuman}
+	groupID, err := db.CreateGroup("Virtual Team", 7)
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	topicID := "grp_" + strconv.FormatInt(groupID, 10)
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	body := `{"group_id":` + strconv.FormatInt(groupID, 10) + `,"topic_id":"` + topicID + `","channel":"weixin"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/group-mobile-link", bytes.NewBufferString(body))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelGroupMobileLink(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("member create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp channelGroupMobileLinkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.GroupID != groupID || resp.TopicID != topicID || resp.GroupName != "Virtual Team" || !strings.HasPrefix(resp.SceneKey, "g.") {
+		t.Fatalf("unexpected group mobile response: %+v", resp)
+	}
+	link, err := db.GetChannelGroupMobileLink(resp.SceneKey)
+	if err != nil || link == nil || link.CanonicalUID != 7 || link.GroupID != groupID || link.TopicID != topicID {
+		t.Fatalf("stored link = %#v err=%v", link, err)
+	}
+
+	outsiderReq := httptest.NewRequest(http.MethodPost, "/api/channel-agent-bindings/group-mobile-link", bytes.NewBufferString(body))
+	outsiderReq = outsiderReq.WithContext(context.WithValue(outsiderReq.Context(), uidKey, int64(8)))
+	outsiderRec := httptest.NewRecorder()
+	handler.HandleCreateChannelGroupMobileLink(outsiderRec, outsiderReq)
+	if outsiderRec.Code != http.StatusForbidden {
+		t.Fatalf("outsider status=%d body=%s", outsiderRec.Code, outsiderRec.Body.String())
+	}
+}
+
 type channelAgentTestStore struct {
 	store.Store
 	users          map[int64]*types.User
@@ -1846,6 +1886,10 @@ type channelAgentTestStore struct {
 	accessRequests map[string]*types.ChannelAgentAccessRequest
 	bindings       map[string]*types.ChannelAgentBinding
 	mobileLinks    map[string]*types.ChannelIdentityMobileLink
+	groups         map[int64]*types.Group
+	groupMembers   map[int64]map[int64]*types.GroupMember
+	groupLinks     map[string]*types.ChannelGroupMobileLink
+	groupBindings  map[string]*types.ChannelGroupBinding
 	routes         map[string]*types.ChannelAgentRoute
 	friends        map[string]types.FriendStatus
 	messages       []*types.Message
@@ -1872,6 +1916,10 @@ func newChannelAgentTestStore() *channelAgentTestStore {
 		accessRequests: map[string]*types.ChannelAgentAccessRequest{},
 		bindings:       map[string]*types.ChannelAgentBinding{},
 		mobileLinks:    map[string]*types.ChannelIdentityMobileLink{},
+		groups:         map[int64]*types.Group{},
+		groupMembers:   map[int64]map[int64]*types.GroupMember{},
+		groupLinks:     map[string]*types.ChannelGroupMobileLink{},
+		groupBindings:  map[string]*types.ChannelGroupBinding{},
 		routes:         map[string]*types.ChannelAgentRoute{},
 		friends:        map[string]types.FriendStatus{},
 		messages:       []*types.Message{},
@@ -1982,6 +2030,166 @@ func (s *channelAgentTestStore) AreFriends(uid1, uid2 int64) (bool, error) {
 
 func (s *channelAgentTestStore) IsBlocked(uid, blockedUID int64) (bool, error) {
 	return s.friends[friendKey(uid, blockedUID)] == types.FriendBlocked, nil
+}
+
+func (s *channelAgentTestStore) CreateGroup(name string, ownerID int64) (int64, error) {
+	id := s.nextID
+	s.nextID++
+	s.groups[id] = &types.Group{
+		ID:         id,
+		Name:       name,
+		OwnerID:    ownerID,
+		MaxMembers: 100,
+		CreatedAt:  time.Now(),
+	}
+	_ = s.AddGroupMember(id, ownerID, "owner")
+	return id, nil
+}
+
+func (s *channelAgentTestStore) GetGroup(groupID int64) (*types.Group, error) {
+	group := s.groups[groupID]
+	if group == nil {
+		return nil, nil
+	}
+	next := *group
+	return &next, nil
+}
+
+func (s *channelAgentTestStore) AddGroupMember(groupID, userID int64, role string) error {
+	if groupID <= 0 || userID <= 0 {
+		return nil
+	}
+	if role == "" {
+		role = "member"
+	}
+	if s.groupMembers[groupID] == nil {
+		s.groupMembers[groupID] = map[int64]*types.GroupMember{}
+	}
+	member := &types.GroupMember{
+		ID:       s.nextID,
+		GroupID:  groupID,
+		UserID:   userID,
+		Role:     role,
+		JoinedAt: time.Now(),
+	}
+	s.nextID++
+	if user := s.users[userID]; user != nil {
+		member.Username = user.Username
+		member.DisplayName = user.DisplayName
+		member.AvatarURL = user.AvatarURL
+		member.IsBot = user.AccountType == types.AccountBot
+	}
+	s.groupMembers[groupID][userID] = member
+	return nil
+}
+
+func (s *channelAgentTestStore) RemoveGroupMember(groupID, userID int64) error {
+	if members := s.groupMembers[groupID]; members != nil {
+		delete(members, userID)
+	}
+	return nil
+}
+
+func (s *channelAgentTestStore) GetGroupMembers(groupID int64) ([]*types.GroupMember, error) {
+	var out []*types.GroupMember
+	for _, member := range s.groupMembers[groupID] {
+		next := *member
+		out = append(out, &next)
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) GetUserGroups(userID int64) ([]*types.Group, error) {
+	var out []*types.Group
+	for groupID, members := range s.groupMembers {
+		if members[userID] == nil {
+			continue
+		}
+		if group := s.groups[groupID]; group != nil {
+			next := *group
+			out = append(out, &next)
+		}
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) IsGroupMember(groupID, userID int64) (bool, error) {
+	return s.groupMembers[groupID] != nil && s.groupMembers[groupID][userID] != nil, nil
+}
+
+func (s *channelAgentTestStore) GetGroupMemberCount(groupID int64) (int, error) {
+	return len(s.groupMembers[groupID]), nil
+}
+
+func (s *channelAgentTestStore) GetGroupBotCount(groupID int64) (int, error) {
+	count := 0
+	for userID := range s.groupMembers[groupID] {
+		if user := s.users[userID]; user != nil && user.AccountType == types.AccountBot {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *channelAgentTestStore) UpdateMemberRole(groupID, userID int64, role string) error {
+	if member := s.groupMembers[groupID][userID]; member != nil {
+		member.Role = role
+	}
+	return nil
+}
+
+func (s *channelAgentTestStore) DeleteGroup(groupID int64) error {
+	delete(s.groups, groupID)
+	delete(s.groupMembers, groupID)
+	return nil
+}
+
+func (s *channelAgentTestStore) GetMemberRole(groupID, userID int64) (string, error) {
+	if member := s.groupMembers[groupID][userID]; member != nil {
+		return member.Role, nil
+	}
+	return "", nil
+}
+
+func (s *channelAgentTestStore) IsMemberMuted(groupID, userID int64) (bool, error) {
+	if member := s.groupMembers[groupID][userID]; member != nil {
+		return member.Muted, nil
+	}
+	return false, nil
+}
+
+func (s *channelAgentTestStore) SetMemberMuted(groupID, userID int64, muted bool) error {
+	if member := s.groupMembers[groupID][userID]; member != nil {
+		member.Muted = muted
+	}
+	return nil
+}
+
+func (s *channelAgentTestStore) CanManageMember(groupID, actorID, targetID int64) (bool, error) {
+	role, _ := s.GetMemberRole(groupID, actorID)
+	return role == "owner" || role == "admin", nil
+}
+
+func (s *channelAgentTestStore) SetGroupAnnouncement(groupID int64, announcement string) error {
+	if group := s.groups[groupID]; group != nil {
+		group.Announcement = announcement
+	}
+	return nil
+}
+
+func (s *channelAgentTestStore) UpdateGroupProfile(groupID int64, name, avatarURL string) error {
+	if group := s.groups[groupID]; group != nil {
+		if name != "" {
+			group.Name = name
+		}
+		group.AvatarURL = avatarURL
+	}
+	return nil
+}
+
+func (s *channelAgentTestStore) IsUserBot(userID int64) (bool, error) {
+	user := s.users[userID]
+	return user != nil && user.AccountType == types.AccountBot, nil
 }
 
 func (s *channelAgentTestStore) CreateTopic(id, topicType string, ownerID int64) error {
@@ -2131,6 +2339,135 @@ func (s *channelAgentTestStore) ConsumeChannelIdentityMobileLink(sceneKey, chann
 	link.ConsumedAt = &now
 	link.UpdatedAt = now
 	return cloneMobileLink(link), nil
+}
+
+func (s *channelAgentTestStore) CreateChannelGroupMobileLink(link *types.ChannelGroupMobileLink) (*types.ChannelGroupMobileLink, error) {
+	if link == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	next := cloneGroupMobileLink(link)
+	next.ID = s.nextID
+	s.nextID++
+	next.Channel = normalizeChannel(next.Channel)
+	if next.Status == "" {
+		next.Status = "active"
+	}
+	if next.CreatedAt.IsZero() {
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	s.groupLinks[strings.TrimSpace(next.SceneKey)] = next
+	return cloneGroupMobileLink(next), nil
+}
+
+func (s *channelAgentTestStore) GetChannelGroupMobileLink(sceneKey string) (*types.ChannelGroupMobileLink, error) {
+	return cloneGroupMobileLink(s.groupLinks[strings.TrimSpace(sceneKey)]), nil
+}
+
+func (s *channelAgentTestStore) ConsumeChannelGroupMobileLink(sceneKey, channel, channelAppID string) (*types.ChannelGroupMobileLink, error) {
+	link := s.groupLinks[strings.TrimSpace(sceneKey)]
+	if link == nil || link.Status != "active" || !link.ExpiresAt.After(time.Now()) {
+		return nil, nil
+	}
+	if normalizeChannel(link.Channel) != normalizeChannel(channel) {
+		return nil, nil
+	}
+	if expectedAppID := strings.TrimSpace(channelAppID); expectedAppID != "" && strings.TrimSpace(link.ChannelAppID) != expectedAppID {
+		return nil, nil
+	}
+	now := time.Now()
+	link.Status = "consumed"
+	link.ConsumedAt = &now
+	link.UpdatedAt = now
+	return cloneGroupMobileLink(link), nil
+}
+
+func (s *channelAgentTestStore) UpsertChannelGroupBinding(binding *types.ChannelGroupBinding) (*types.ChannelGroupBinding, error) {
+	if binding == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	next := cloneGroupBinding(binding)
+	next.Channel = normalizeChannel(next.Channel)
+	if next.ChannelConversationType == "" {
+		next.ChannelConversationType = "p2p"
+	}
+	key := groupBindingKey(next.Channel, next.ChannelAppID, next.ChannelUserID, next.ChannelConversationID, next.TopicID)
+	if existing := s.groupBindings[key]; existing != nil {
+		next.ID = existing.ID
+		if next.ActorUID <= 0 {
+			next.ActorUID = existing.ActorUID
+		}
+		if next.CanonicalUID <= 0 {
+			next.CanonicalUID = existing.CanonicalUID
+		}
+		if next.GroupID <= 0 {
+			next.GroupID = existing.GroupID
+		}
+		if next.TopicID == "" {
+			next.TopicID = existing.TopicID
+		}
+		next.BoundAt = existing.BoundAt
+	} else {
+		next.ID = s.nextID
+		s.nextID++
+		next.BoundAt = now
+	}
+	if next.Status == "" {
+		next.Status = types.ChannelAgentBindingActive
+	}
+	next.SelectedAt = now
+	if next.Status == types.ChannelAgentBindingActive {
+		next.LastUsedAt = &now
+	}
+	next.UpdatedAt = now
+	s.groupBindings[key] = next
+	return cloneGroupBinding(next), nil
+}
+
+func (s *channelAgentTestStore) ResolveChannelGroupBinding(query types.ChannelGroupBindingQuery) (*types.ChannelGroupBinding, error) {
+	var selected *types.ChannelGroupBinding
+	for _, binding := range s.groupBindings {
+		if binding.Channel != normalizeChannel(query.Channel) || binding.ChannelAppID != query.ChannelAppID || binding.ChannelUserID != query.ChannelUserID {
+			continue
+		}
+		if query.ChannelConversationID != "" && binding.ChannelConversationID != query.ChannelConversationID {
+			continue
+		}
+		if query.ChannelConversationType != "" && binding.ChannelConversationType != query.ChannelConversationType {
+			continue
+		}
+		if query.ActorUID > 0 && binding.ActorUID != query.ActorUID {
+			continue
+		}
+		if query.GroupID > 0 && binding.GroupID != query.GroupID {
+			continue
+		}
+		if strings.TrimSpace(query.TopicID) != "" && binding.TopicID != strings.TrimSpace(query.TopicID) {
+			continue
+		}
+		if selected == nil || binding.UpdatedAt.After(selected.UpdatedAt) {
+			selected = binding
+		}
+	}
+	if selected == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	selected.LastUsedAt = &now
+	selected.UpdatedAt = now
+	return cloneGroupBinding(selected), nil
+}
+
+func (s *channelAgentTestStore) ListChannelGroupBindingsForTopic(topicID string) ([]*types.ChannelGroupBinding, error) {
+	var out []*types.ChannelGroupBinding
+	for _, binding := range s.groupBindings {
+		if binding.TopicID == topicID {
+			out = append(out, cloneGroupBinding(binding))
+		}
+	}
+	return out, nil
 }
 
 func (s *channelAgentTestStore) RequestChannelAgentAccess(request *types.ChannelAgentAccessRequest) (*types.ChannelAgentAccessRequest, error) {
@@ -2451,7 +2788,6 @@ func (s *channelAgentTestStore) ResolveChannelAgentRoute(query types.ChannelAgen
 	}
 	now := time.Now()
 	route.LastUsedAt = &now
-	route.UpdatedAt = now
 	return cloneRoute(route), nil
 }
 
@@ -2475,7 +2811,27 @@ func cloneMobileLink(link *types.ChannelIdentityMobileLink) *types.ChannelIdenti
 	return &next
 }
 
+func cloneGroupMobileLink(link *types.ChannelGroupMobileLink) *types.ChannelGroupMobileLink {
+	if link == nil {
+		return nil
+	}
+	next := *link
+	if link.ConsumedAt != nil {
+		consumedAt := *link.ConsumedAt
+		next.ConsumedAt = &consumedAt
+	}
+	return &next
+}
+
 func cloneBinding(binding *types.ChannelAgentBinding) *types.ChannelAgentBinding {
+	if binding == nil {
+		return nil
+	}
+	next := *binding
+	return &next
+}
+
+func cloneGroupBinding(binding *types.ChannelGroupBinding) *types.ChannelGroupBinding {
 	if binding == nil {
 		return nil
 	}
@@ -2512,6 +2868,10 @@ func routeKey(channel, appID, userID, conversationID, conversationType string) s
 		conversationType = "p2p"
 	}
 	return channelIdentityKey(channel, appID, userID, conversationID) + "\x00" + conversationType
+}
+
+func groupBindingKey(channel, appID, userID, conversationID, topicID string) string {
+	return channelIdentityKey(channel, appID, userID, conversationID) + "\x00" + topicID
 }
 
 func accessRequestKey(entryID int64, channel, appID, userID, conversationID string) string {

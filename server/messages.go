@@ -200,6 +200,7 @@ func (h *Hub) fanoutNormalizedMessage(uid int64, topicID string, replyTo int, pa
 		dataMsg.Data.Mentions = mentions
 		h.SendToUserExcept(uid, dataMsg, exclude)
 		h.broadcastToGroupWithMentions(groupID, dataMsg, uid, mentions, uid)
+		h.forwardChannelGroupBotReply(uid, topicID, payload, msgID)
 		return
 	}
 
@@ -426,12 +427,26 @@ func (h *Hub) deviceAccessOwnerUID(actorUID, agentUID int64, sourceMetadata ...m
 				}
 				return 0, "channel_identity_unlinked"
 			}
-			if existing, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID); err == nil && existing != nil {
-				return 0, "channel_device_context_missing"
+			if channelBindingMetadataHintsPresent(metadata) || h.actorLooksLikeChannelIdentity(actorUID) {
+				if existing, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID); err == nil && existing != nil {
+					return 0, "channel_device_context_missing"
+				}
 			}
 		}
 	}
 	return actorUID, "actor"
+}
+
+func (h *Hub) actorLooksLikeChannelIdentity(actorUID int64) bool {
+	if h == nil || h.db == nil || actorUID <= 0 {
+		return false
+	}
+	user, err := h.db.GetUser(actorUID)
+	if err != nil || user == nil {
+		return false
+	}
+	username := strings.TrimSpace(user.Username)
+	return strings.HasPrefix(username, "ch_weixin_") || strings.HasPrefix(username, "ch_feishu_")
 }
 
 func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {
@@ -472,6 +487,25 @@ func trustedChannelBindingDeliveryMetadata(metadata map[string]interface{}) bool
 	}
 	_, ok := metadata[channelBindingDeliveryTrustMetadataKey].(channelBindingDeliveryTrustToken)
 	return ok
+}
+
+func channelBindingMetadataHintsPresent(metadata map[string]interface{}) bool {
+	if metadata == nil {
+		return false
+	}
+	if normalizeChannel(firstMetadataString(metadata, "source_channel", "channel")) != "" {
+		return true
+	}
+	if firstMetadataString(metadata, "channel_app_id", "channel_user_id", "channel_conversation_id", "channel_conversation_type") != "" {
+		return true
+	}
+	if firstMetadataInt64(metadata, "channel_agent_binding_id", "channel_actor_uid", "channel_canonical_uid") > 0 {
+		return true
+	}
+	if _, ok := metadata["channel_device_access_enabled"]; ok {
+		return true
+	}
+	return false
 }
 
 func withoutInternalChannelBindingDeliveryMetadata(metadata map[string]interface{}) map[string]interface{} {

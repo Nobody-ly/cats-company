@@ -26,7 +26,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 		DisplayName:    " Alice Laptop ",
 		BodyID:         " body-main ",
 		InstallationID: " install-main ",
-		Capabilities:   []string{"read_file", "unknown", "write_file", "edit_file", "send_file", "read_file"},
+		Capabilities:   []string{"read_file", "unknown", "resolve_common_directory", "write_file", "edit_file", "send_file", "read_file"},
 	})
 	if err != nil {
 		t.Fatalf("register device: %v", err)
@@ -34,7 +34,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	if device.DeviceID != "laptop-main" || device.DisplayName != "Alice Laptop" {
 		t.Fatalf("unexpected registered device: %#v", device)
 	}
-	if got := device.Capabilities; len(got) != 4 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantWriteFile || got[2] != DeviceGrantEditFile || got[3] != DeviceGrantSendFile {
+	if got := device.Capabilities; len(got) != 5 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantResolveDir || got[2] != DeviceGrantWriteFile || got[3] != DeviceGrantEditFile || got[4] != DeviceGrantSendFile {
 		t.Fatalf("unexpected capabilities: %#v", got)
 	}
 
@@ -55,7 +55,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	if grant.DeviceID != "laptop-main" || grant.DeviceBodyID != "body-main" || grant.DeviceInstallationID != "install-main" {
 		t.Fatalf("unexpected grant device: %#v", grant)
 	}
-	if len(grant.Operations) != 4 || grant.Operations[0] != DeviceGrantReadFile || grant.Operations[1] != DeviceGrantWriteFile || grant.Operations[2] != DeviceGrantEditFile || grant.Operations[3] != DeviceGrantSendFile {
+	if len(grant.Operations) != 5 || grant.Operations[0] != DeviceGrantReadFile || grant.Operations[1] != DeviceGrantResolveDir || grant.Operations[2] != DeviceGrantWriteFile || grant.Operations[3] != DeviceGrantEditFile || grant.Operations[4] != DeviceGrantSendFile {
 		t.Fatalf("grant should expose registered file operations, got %#v", grant.Operations)
 	}
 	if grant.CreatedAt != unixMillis(now) || grant.ExpiresAt != unixMillis(now.Add(2*time.Minute)) {
@@ -65,6 +65,32 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	registry.now = func() time.Time { return now.Add(2*time.Minute + time.Second) }
 	if grants := registry.grantsForTurn(7, "p2p_7_42", "p2p", 42, "body-agent"); len(grants) != 0 {
 		t.Fatalf("expired device still issued grants: %#v", grants)
+	}
+}
+
+func TestUserDeviceRegistryIssuesShellGrantWhenDeviceCapabilityIsRegistered(t *testing.T) {
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	registry := newUserDeviceRegistry(time.Minute)
+	registry.now = func() time.Time { return now }
+
+	device, err := registry.register(7, RegisterUserDeviceRequest{
+		DeviceID:     "shell-laptop",
+		DisplayName:  "Shell Laptop",
+		BodyID:       "body-shell",
+		Capabilities: []string{"read_file", "execute_shell"},
+	})
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	grants := registry.grantsForTurn(7, "p2p_7_42", "p2p", 42, "body-agent")
+	if len(grants) != 1 {
+		t.Fatalf("grants len = %d, want 1", len(grants))
+	}
+	if grants[0].DeviceID != device.DeviceID {
+		t.Fatalf("grant should target registered shell device, got %#v", grants[0])
+	}
+	if !hasGrantOperation(grants[0].Operations, DeviceGrantExecuteShell) {
+		t.Fatalf("grant should expose execute_shell when registered, got %#v", grants[0].Operations)
 	}
 }
 
@@ -653,6 +679,110 @@ func TestBotRecipientIdentityUsesCanonicalUserDeviceNotAgentOwnerDevice(t *testi
 	}
 }
 
+func TestBotRecipientIdentityKeepsActorDeviceForDirectFriendChatWithExistingChannelBinding(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman}
+	db.users[42] = &types.User{ID: 42, Username: "shared-agent", DisplayName: "Shared Agent", AccountType: types.AccountBot}
+	db.owners[42] = 7
+	db.friends[friendKey(9, 42)] = types.FriendAccepted
+	db.friends[friendKey(42, 9)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:             "weixin",
+		ChannelAppID:        "wx_app",
+		ChannelUserID:       "openid-bob",
+		ActorUID:            9,
+		CanonicalUID:        9,
+		DeviceAccessEnabled: true,
+		OwnerUID:            7,
+		AgentUID:            42,
+		Status:              "active",
+	}); err != nil {
+		t.Fatalf("seed channel binding: %v", err)
+	}
+
+	hub := NewHub(db, nil)
+	hub.userDevices.now = func() time.Time { return time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC) }
+	ownerDevice, err := hub.userDevices.register(7, RegisterUserDeviceRequest{
+		DeviceID:       "owner-cloud",
+		DisplayName:    "Owner Cloud",
+		BodyID:         "body-owner-cloud",
+		InstallationID: "install-owner-cloud",
+		Capabilities:   []string{"read_file", "write_file"},
+	})
+	if err != nil {
+		t.Fatalf("register owner device: %v", err)
+	}
+	bobDevice, err := hub.userDevices.register(9, RegisterUserDeviceRequest{
+		DeviceID:       "bob-laptop",
+		DisplayName:    "Bob Laptop",
+		BodyID:         "body-bob",
+		InstallationID: "install-bob",
+		Capabilities:   []string{"read_file", "write_file", "edit_file"},
+	})
+	if err != nil {
+		t.Fatalf("register bob device: %v", err)
+	}
+	ownerClient := &Client{uid: 7, accountType: types.AccountHuman, deviceOwnerUID: 7, deviceID: "owner-cloud", deviceBodyID: "body-owner-cloud", deviceInstallationID: "install-owner-cloud", send: make(chan []byte, 1)}
+	bobClient := &Client{uid: 9, accountType: types.AccountHuman, deviceOwnerUID: 9, deviceID: "bob-laptop", deviceBodyID: "body-bob", deviceInstallationID: "install-bob", send: make(chan []byte, 1)}
+	botClient := &Client{uid: 42, accountType: types.AccountBot, bodyID: "body-agent", send: make(chan []byte, 1)}
+	hub.addClient(ownerClient)
+	hub.addClient(bobClient)
+	hub.addClient(botClient)
+	hub.bindDeviceClient(7, ownerDevice, ownerClient)
+	hub.bindDeviceClient(9, bobDevice, bobClient)
+
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_9_42",
+		Content: json.RawMessage(`"在我的电脑上创建一个文件"`),
+	})
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+	hub.fanoutNormalizedMessage(9, "p2p_9_42", 0, payload, 203, nil)
+
+	var msg ServerMessage
+	decodeQueuedServerMessage(t, botClient.send, &msg)
+	identity := metadataMapFromServerMessage(t, &msg, "catsco_identity")
+	permissions, ok := identity["permissions"].(map[string]interface{})
+	if !ok || permissions["device_owner_user_id"] != "usr9" || permissions["device_owner_source"] != "actor" {
+		t.Fatalf("direct friend chat should keep actor device permissions: %#v", identity["permissions"])
+	}
+	grant := firstDeviceGrantMap(t, identity)
+	if grant["ownerUserId"] != "usr9" || grant["actorUserId"] != "usr9" || grant["agentId"] != "usr42" {
+		t.Fatalf("direct friend chat grant should target actor identity: %#v", grant)
+	}
+	if grant["deviceId"] != "bob-laptop" || grant["deviceId"] == "owner-cloud" {
+		t.Fatalf("direct friend chat must target Bob's device, not owner cloud: %#v", grant)
+	}
+	selection := deviceSelectionMap(t, identity)
+	if selection["ownerUserId"] != "usr9" || selection["actorUserId"] != "usr9" || selection["status"] != string(DeviceSelectionSelected) {
+		t.Fatalf("unexpected direct friend selection: %#v", selection)
+	}
+	selectedDevice, ok := selection["selectedDevice"].(map[string]interface{})
+	if !ok || selectedDevice["deviceId"] != "bob-laptop" {
+		t.Fatalf("direct friend selection should choose Bob's device: %#v", selection["selectedDevice"])
+	}
+}
+
+func TestActorLooksLikeChannelIdentity(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[1] = &types.User{ID: 1, Username: "ch_weixin_openid", DisplayName: "Weixin Actor", AccountType: types.AccountHuman}
+	db.users[2] = &types.User{ID: 2, Username: "ch_feishu_openid", DisplayName: "Feishu Actor", AccountType: types.AccountHuman}
+	db.users[3] = &types.User{ID: 3, Username: "bob", DisplayName: "Bob", AccountType: types.AccountHuman}
+	hub := NewHub(db, nil)
+
+	if !hub.actorLooksLikeChannelIdentity(1) {
+		t.Fatalf("weixin shadow actor should be treated as channel identity")
+	}
+	if !hub.actorLooksLikeChannelIdentity(2) {
+		t.Fatalf("feishu shadow actor should be treated as channel identity")
+	}
+	if hub.actorLooksLikeChannelIdentity(3) {
+		t.Fatalf("regular CatsCo user should not be treated as channel identity")
+	}
+}
+
 func TestBotRecipientIdentityDoesNotUseAgentOwnerDeviceWithoutChannelLink(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
@@ -862,6 +992,15 @@ func deviceSelectionMap(t *testing.T, identity map[string]interface{}) map[strin
 		t.Fatalf("device_selection = %#v, want object", identity["device_selection"])
 	}
 	return selection
+}
+
+func hasGrantOperation(operations []DeviceGrantOperation, expected DeviceGrantOperation) bool {
+	for _, operation := range operations {
+		if operation == expected {
+			return true
+		}
+	}
+	return false
 }
 
 type deviceHandlerStore struct {

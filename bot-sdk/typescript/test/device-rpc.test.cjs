@@ -181,6 +181,58 @@ test('sendDeviceRPCRequest preserves file-level write and edit operations used b
   });
 });
 
+test('sendDeviceRPCRequest preserves common directory resolution operations', async () => {
+  await withBot((ws, msg) => ack(ws, msg, 200, 'ok', {
+    request_id: msg.device_rpc.request_id,
+    operation: msg.device_rpc.operation,
+    device_id: 'alice-laptop',
+  }), async ({ bot, messages }) => {
+    const resolveAck = await bot.sendDeviceRPCRequest({
+      grant_id: 'grant-resolve-directory',
+      operation: 'resolve_common_directory',
+      tool_name: 'resolve_common_directory',
+      payload: { directory: 'desktop' },
+      session_key: 'session:v2:catscompany:p2p:p2p_7_43:agent:usr43',
+      topic_id: 'p2p_7_43',
+      topic_type: 'p2p',
+    });
+
+    assert.equal(resolveAck.operation, 'resolve_common_directory');
+    assert.equal(resolveAck.device_id, 'alice-laptop');
+
+    const rpc = latestDeviceRPC(messages);
+    assert.equal(rpc.operation, 'resolve_common_directory');
+    assert.equal(rpc.tool_name, 'resolve_common_directory');
+    assert.deepEqual(rpc.payload, { directory: 'desktop' });
+  });
+});
+
+test('sendDeviceRPCRequest preserves execute_shell operations used by server grants', async () => {
+  await withBot((ws, msg) => ack(ws, msg, 200, 'ok', {
+    request_id: msg.device_rpc.request_id,
+    operation: msg.device_rpc.operation,
+    device_id: 'alice-laptop',
+  }), async ({ bot, messages }) => {
+    const shellAck = await bot.sendDeviceRPCRequest({
+      grant_id: 'grant-shell',
+      operation: 'execute_shell',
+      tool_name: 'execute_shell',
+      payload: { args: { command: 'echo remote-shell' } },
+      session_key: 'session:v2:catscompany:p2p:p2p_7_43:agent:usr43',
+      topic_id: 'p2p_7_43',
+      topic_type: 'p2p',
+    });
+
+    assert.equal(shellAck.operation, 'execute_shell');
+    assert.equal(shellAck.device_id, 'alice-laptop');
+
+    const rpc = latestDeviceRPC(messages);
+    assert.equal(rpc.operation, 'execute_shell');
+    assert.equal(rpc.tool_name, 'execute_shell');
+    assert.deepEqual(rpc.payload, { args: { command: 'echo remote-shell' } });
+  });
+});
+
 test('sendDeviceRPCResult sends result and error payloads', async () => {
   await withBot((ws, msg) => ack(ws, msg), async ({ bot, messages }) => {
     await bot.sendDeviceRPCResult({

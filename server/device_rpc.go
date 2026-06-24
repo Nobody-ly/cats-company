@@ -549,17 +549,56 @@ func (h *Hub) auditDeviceRPC(ownerUID int64, phase string, result string, reason
 	if h == nil || ownerUID <= 0 || msg == nil {
 		return
 	}
-	h.addDeviceAudit(ownerUID, DeviceAuditEvent{
+	operation := firstNonEmpty(msg.Operation, string(DeviceGrantOperation(msg.Operation)))
+	event := DeviceAuditEvent{
 		ActorUserID: grant.ActorUserID,
 		AgentID:     grant.AgentID,
 		DeviceID:    firstNonEmpty(grant.DeviceID, msg.DeviceID),
 		SessionKey:  firstNonEmpty(grant.SessionKey, msg.SessionKey),
-		Operation:   firstNonEmpty(msg.Operation, string(DeviceGrantOperation(msg.Operation))),
+		Operation:   operation,
 		ToolName:    strings.TrimSpace(msg.ToolName),
 		Phase:       phase,
 		Result:      result,
 		Reason:      reason,
-	})
+	}
+	if DeviceGrantOperation(operation) == DeviceGrantExecuteShell {
+		event.Command = deviceRPCShellCommand(msg.Payload)
+	}
+	h.addDeviceAudit(ownerUID, event)
+}
+
+func deviceRPCShellCommand(payload map[string]interface{}) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if command := deviceRPCShellCommandFromMap(payload); command != "" {
+		return command
+	}
+	for _, key := range []string{"args", "input", "tool_input"} {
+		nested, ok := payload[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if command := deviceRPCShellCommandFromMap(nested); command != "" {
+			return command
+		}
+	}
+	return ""
+}
+
+func deviceRPCShellCommandFromMap(values map[string]interface{}) string {
+	for _, key := range []string{"command", "cmd"} {
+		command, ok := values[key].(string)
+		if !ok {
+			continue
+		}
+		command = strings.TrimSpace(command)
+		if len(command) > maxDeviceAuditCommandLen {
+			return command[:maxDeviceAuditCommandLen]
+		}
+		return command
+	}
+	return ""
 }
 
 func (h *Hub) pendingMatchesDeviceClient(pending deviceRPCPending, client *Client) bool {
@@ -622,10 +661,12 @@ func validateDeviceRPCGrant(client *Client, msg *MsgDeviceRPC, grant ScopedDevic
 func isAllowedDeviceRPCOperation(operation DeviceGrantOperation) bool {
 	switch operation {
 	case DeviceGrantReadFile,
+		DeviceGrantResolveDir,
 		DeviceGrantGlob,
 		DeviceGrantGrep,
 		DeviceGrantWriteFile,
-		DeviceGrantEditFile:
+		DeviceGrantEditFile,
+		DeviceGrantExecuteShell:
 		return true
 	default:
 		return false

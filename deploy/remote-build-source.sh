@@ -18,7 +18,9 @@ mkdir -p "$source_root"
 tar -xzf "$source_bundle" -C "$source_root"
 
 cd "$source_root"
-docker build \
+server_build_timeout="${REMOTE_SERVER_BUILD_TIMEOUT_SECONDS:-900}"
+echo "Building server image: ghcr.io/${owner}/cats-company-server:${revision} (timeout ${server_build_timeout}s)"
+timeout "$server_build_timeout" docker build --progress=plain \
   --build-arg GOPROXY="${REMOTE_GOPROXY:-https://goproxy.cn,direct}" \
   -f deploy/Dockerfile.server \
   -t "ghcr.io/${owner}/cats-company-server:${revision}" \
@@ -36,8 +38,9 @@ if docker image inspect "$web_image" >/dev/null 2>&1; then
 else
   echo "Pulling web image: ${web_image}"
   if ! timeout "$pull_timeout" docker pull "$web_image"; then
-    echo "Web image pull failed or timed out after ${pull_timeout}s; building locally from source."
-    docker build \
+    fallback_build_timeout="${REMOTE_WEB_BUILD_TIMEOUT_SECONDS:-900}"
+    echo "Web image pull failed or timed out after ${pull_timeout}s; building locally from source (timeout ${fallback_build_timeout}s)."
+    timeout "$fallback_build_timeout" docker build --progress=plain \
       --build-arg REACT_APP_API_BASE="${REMOTE_WEB_REACT_APP_API_BASE:-}" \
       -f deploy/Dockerfile.nginx \
       -t "$web_image" \

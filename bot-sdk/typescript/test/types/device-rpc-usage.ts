@@ -32,6 +32,11 @@ const writeInput: DeviceRPCRequestInput = {
   operation: 'write_file',
   payload: { path: 'quote.xlsx', content: 'updated' },
 };
+const resolveDirectoryInput: DeviceRPCRequestInput = {
+  grant_id: 'grant-resolve-directory',
+  operation: 'resolve_common_directory',
+  payload: { directory: 'desktop' },
+};
 const editInput: DeviceRPCRequestInput = {
   grant_id: 'grant-edit',
   operation: 'edit_file',
@@ -39,10 +44,18 @@ const editInput: DeviceRPCRequestInput = {
   identity_source: 'metadata.catsco_identity',
   payload: { path: 'quote.xlsx', old_string: 'old', new_string: 'new' },
 };
+const shellInput: DeviceRPCRequestInput = {
+  grant_id: 'grant-shell',
+  operation: 'execute_shell',
+  tool_name: 'execute_shell',
+  payload: { args: { command: 'echo remote-shell' } },
+};
 
 void bot.sendDeviceRPCRequest(input).then((ack: DeviceRPCRequestAck) => ack.request_id);
 void bot.sendDeviceRPCRequest(writeInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
+void bot.sendDeviceRPCRequest(resolveDirectoryInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
 void bot.sendDeviceRPCRequest(editInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
+void bot.sendDeviceRPCRequest(shellInput).then((ack: DeviceRPCRequestAck) => ack.request_id);
 void bot.sendDeviceRPC({
   type: 'result',
   request_id: 'rpc-1',
