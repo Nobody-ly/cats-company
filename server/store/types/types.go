@@ -346,6 +346,7 @@ type ChannelGroupBinding struct {
 	TopicID                 string     `json:"topic_id"`
 	Status                  string     `json:"status"`
 	BoundAt                 time.Time  `json:"bound_at"`
+	SelectedAt              time.Time  `json:"selected_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
 	LastUsedAt              *time.Time `json:"last_used_at,omitempty"`
 }

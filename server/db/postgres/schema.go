@@ -39,6 +39,7 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentBindingsAddActorUID,
 		migrateChannelAgentBindingsAddCanonicalUID,
 		migrateChannelAgentBindingsAddDeviceAccessEnabled,
+		migrateChannelGroupBindingsAddSelectedAt,
 		migrateMessagesAddCodeMode,
 		migrateMessagesAddClientMsgID,
 		migrateGroupsAddCreatedAtColumn,
@@ -360,12 +361,13 @@ CREATE TABLE IF NOT EXISTS channel_group_bindings (
     actor_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
     canonical_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     group_id BIGINT NOT NULL REFERENCES "groups"(id) ON DELETE CASCADE,
-    topic_id VARCHAR(128) NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'active',
-    bound_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_used_at TIMESTAMPTZ DEFAULT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uk_channel_group_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type)
+	topic_id VARCHAR(128) NOT NULL,
+	status VARCHAR(16) NOT NULL DEFAULT 'active',
+	bound_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	last_used_at TIMESTAMPTZ DEFAULT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT uk_channel_group_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type)
 );
 `
 
@@ -382,6 +384,7 @@ const migrateChannelAgentEntriesDefaultAccessMode = `ALTER TABLE channel_agent_e
 const migrateChannelAgentBindingsAddActorUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS actor_uid BIGINT DEFAULT NULL;`
 const migrateChannelAgentBindingsAddCanonicalUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS canonical_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL;`
 const migrateChannelAgentBindingsAddDeviceAccessEnabled = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS device_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;`
+const migrateChannelGroupBindingsAddSelectedAt = `ALTER TABLE channel_group_bindings ADD COLUMN IF NOT EXISTS selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;`
 const migrateChannelAgentBindingsUniqueIncludesAgent = `
 ALTER TABLE channel_agent_bindings DROP CONSTRAINT IF EXISTS uk_channel_agent_binding_identity;
 ALTER TABLE channel_agent_bindings ADD CONSTRAINT uk_channel_agent_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, agent_uid);

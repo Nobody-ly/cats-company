@@ -246,6 +246,93 @@ func TestWeixinMobileIdentityLinkReusesExistingCatsCoFriend(t *testing.T) {
 	}
 }
 
+func TestWeixinMobileAgentScanOverridesExistingGroupBinding(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[99] = &types.User{ID: 99, Username: "Annika", DisplayName: "Annika", AccountType: types.AccountHuman}
+	db.users[223] = &types.User{ID: 223, Username: channelActorUsername("weixin", "wx_app", "openid-mobile"), DisplayName: "Weixin User", AccountType: types.AccountHuman}
+	db.users[255] = &types.User{ID: 255, Username: "Gauz Mem", DisplayName: "Gauz Mem", AccountType: types.AccountHuman}
+	db.users[256] = &types.User{ID: 256, Username: "bot-virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[256] = 255
+	db.friends[friendKey(99, 256)] = types.FriendAccepted
+	db.friends[friendKey(256, 99)] = types.FriendAccepted
+	db.groups[505] = &types.Group{ID: 505, Name: "Gauz Mobile Group", OwnerID: 255}
+	db.groupMembers[505] = map[int64]*types.GroupMember{
+		255: &types.GroupMember{GroupID: 505, UserID: 255, Role: "owner"},
+		256: &types.GroupMember{GroupID: 505, UserID: 256, Role: "member"},
+	}
+	if _, err := db.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+		Channel:       "weixin",
+		ChannelAppID:  "wx_app",
+		ChannelUserID: "openid-mobile",
+		ActorUID:      223,
+		CanonicalUID:  255,
+		GroupID:       505,
+		TopicID:       "grp_505",
+		Status:        types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed group binding: %v", err)
+	}
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-virtual-catsco",
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     255,
+		AgentUID:     256,
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	link, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.annika-virtual-catsco",
+		EntryID:      entry.ID,
+		Channel:      "weixin",
+		ChannelAppID: "wx_app",
+		CanonicalUID: 99,
+		ExpiresAt:    time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("create mobile link: %v", err)
+	}
+	handler := NewWeixinChannelHandler(db, nil, WeixinChannelConfig{
+		AppID:      "wx_app",
+		EventToken: "token-1",
+	}, &fakeWeixinAPI{appID: "wx_app"})
+
+	scanBody := `<xml><ToUserName><![CDATA[gh_app]]></ToUserName><FromUserName><![CDATA[openid-mobile]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[subscribe]]></Event><EventKey><![CDATA[qrscene_` + link.SceneKey + `]]></EventKey></xml>`
+	scanReq := httptest.NewRequest(http.MethodPost, "/api/channels/weixin/events?timestamp=1&nonce=2&signature="+weixinTestSignature("token-1", "1", "2"), strings.NewReader(scanBody))
+	scanRec := httptest.NewRecorder()
+	handler.HandleEvents(scanRec, scanReq)
+	if scanRec.Code != http.StatusOK {
+		t.Fatalf("scan status=%d body=%s", scanRec.Code, scanRec.Body.String())
+	}
+	route, err := db.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
+		Channel:                 "weixin",
+		ChannelAppID:            "wx_app",
+		ChannelUserID:           "openid-mobile",
+		ChannelConversationType: "p2p",
+		ActorUID:                223,
+	})
+	if err != nil || route == nil || route.AgentUID != 256 {
+		t.Fatalf("agent scan should select Virtual Catsco route=%+v err=%v", route, err)
+	}
+
+	textBody := `<xml><ToUserName><![CDATA[gh_app]]></ToUserName><FromUserName><![CDATA[openid-mobile]]></FromUserName><CreateTime>2</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[你是谁]]></Content><MsgId>msg-after-agent-scan</MsgId></xml>`
+	textReq := httptest.NewRequest(http.MethodPost, "/api/channels/weixin/events?timestamp=2&nonce=3&signature="+weixinTestSignature("token-1", "2", "3"), strings.NewReader(textBody))
+	textRec := httptest.NewRecorder()
+	handler.HandleEvents(textRec, textReq)
+	if textRec.Code != http.StatusOK {
+		t.Fatalf("text status=%d body=%s", textRec.Code, textRec.Body.String())
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	if db.messages[0].TopicID != p2pTopicID(99, 256) || db.messages[0].FromUID != 99 {
+		t.Fatalf("text should route to Annika's private agent topic, got %+v", db.messages[0])
+	}
+}
+
 func TestWeixinApprovalRequiredScanCreatesPendingAccess(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}

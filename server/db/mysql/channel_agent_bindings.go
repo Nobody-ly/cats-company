@@ -875,15 +875,16 @@ func (a *Adapter) UpsertChannelGroupBinding(binding *types.ChannelGroupBinding) 
 	_, err := a.db.Exec(
 		`INSERT INTO channel_group_bindings (
 		     channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
-		     actor_uid, canonical_uid, group_id, topic_id, status, bound_at, last_used_at
+		     actor_uid, canonical_uid, group_id, topic_id, status, bound_at, selected_at, last_used_at
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		 ON DUPLICATE KEY UPDATE
 		     actor_uid = COALESCE(VALUES(actor_uid), actor_uid),
 		     canonical_uid = VALUES(canonical_uid),
 		     group_id = VALUES(group_id),
 		     topic_id = VALUES(topic_id),
 		     status = 'active',
+		     selected_at = CURRENT_TIMESTAMP,
 		     last_used_at = CURRENT_TIMESTAMP,
 		     updated_at = CURRENT_TIMESTAMP`,
 		binding.Channel,
@@ -915,7 +916,7 @@ func (a *Adapter) ResolveChannelGroupBinding(query types.ChannelGroupBindingQuer
 	conversationType := normalizeGroupBindingConversationType(query.ChannelConversationType)
 	row := a.db.QueryRow(
 		`SELECT id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
-		        COALESCE(actor_uid, 0), canonical_uid, group_id, topic_id, status, bound_at, updated_at, last_used_at
+		        COALESCE(actor_uid, 0), canonical_uid, group_id, topic_id, status, bound_at, selected_at, updated_at, last_used_at
 		 FROM channel_group_bindings
 		 WHERE channel = ? AND channel_app_id = ? AND channel_user_id = ? AND channel_conversation_id = ?
 		   AND channel_conversation_type = ?
@@ -947,7 +948,7 @@ func (a *Adapter) ListChannelGroupBindingsForTopic(topicID string) ([]*types.Cha
 	}
 	rows, err := a.db.Query(
 		`SELECT id, channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type,
-		        COALESCE(actor_uid, 0), canonical_uid, group_id, topic_id, status, bound_at, updated_at, last_used_at
+		        COALESCE(actor_uid, 0), canonical_uid, group_id, topic_id, status, bound_at, selected_at, updated_at, last_used_at
 		 FROM channel_group_bindings
 		 WHERE topic_id = ? AND status = 'active'
 		 ORDER BY updated_at DESC`,
@@ -1212,6 +1213,7 @@ func scanChannelGroupBinding(row channelGroupBindingScanner) (*types.ChannelGrou
 		&binding.TopicID,
 		&binding.Status,
 		&binding.BoundAt,
+		&binding.SelectedAt,
 		&binding.UpdatedAt,
 		&lastUsedAt,
 	); err != nil {
