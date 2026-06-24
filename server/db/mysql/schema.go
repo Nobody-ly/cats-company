@@ -65,6 +65,8 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentRoutesLookupIndex,
 		migrateChannelAgentRoutesActorIndex,
 		migrateChannelGroupBindingsAddSelectedAt,
+		migrateChannelGroupBindingsBackfillSelectedAt,
+		migrateChannelGroupBindingsSelectedAtNotNull,
 		migrateChannelAgentAccessOwnerAgentIndex,
 		migrateChannelAgentAccessActorAgentIndex,
 		migrateChannelAgentAccessLookupIndex,
@@ -600,7 +602,15 @@ ALTER TABLE channel_agent_routes ADD INDEX idx_channel_agent_routes_actor (chann
 `
 
 const migrateChannelGroupBindingsAddSelectedAt = `
-ALTER TABLE channel_group_bindings ADD COLUMN selected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE channel_group_bindings ADD COLUMN selected_at TIMESTAMP NULL DEFAULT NULL;
+`
+
+const migrateChannelGroupBindingsBackfillSelectedAt = `
+UPDATE channel_group_bindings SET selected_at = COALESCE(bound_at, updated_at, CURRENT_TIMESTAMP) WHERE selected_at IS NULL;
+`
+
+const migrateChannelGroupBindingsSelectedAtNotNull = `
+ALTER TABLE channel_group_bindings MODIFY COLUMN selected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
 `
 
 const migrateChannelAgentAccessOwnerAgentIndex = `

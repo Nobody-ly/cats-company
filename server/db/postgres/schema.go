@@ -40,6 +40,9 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentBindingsAddCanonicalUID,
 		migrateChannelAgentBindingsAddDeviceAccessEnabled,
 		migrateChannelGroupBindingsAddSelectedAt,
+		migrateChannelGroupBindingsBackfillSelectedAt,
+		migrateChannelGroupBindingsSelectedAtDefault,
+		migrateChannelGroupBindingsSelectedAtNotNull,
 		migrateMessagesAddCodeMode,
 		migrateMessagesAddClientMsgID,
 		migrateGroupsAddCreatedAtColumn,
@@ -384,7 +387,10 @@ const migrateChannelAgentEntriesDefaultAccessMode = `ALTER TABLE channel_agent_e
 const migrateChannelAgentBindingsAddActorUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS actor_uid BIGINT DEFAULT NULL;`
 const migrateChannelAgentBindingsAddCanonicalUID = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS canonical_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL;`
 const migrateChannelAgentBindingsAddDeviceAccessEnabled = `ALTER TABLE channel_agent_bindings ADD COLUMN IF NOT EXISTS device_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;`
-const migrateChannelGroupBindingsAddSelectedAt = `ALTER TABLE channel_group_bindings ADD COLUMN IF NOT EXISTS selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;`
+const migrateChannelGroupBindingsAddSelectedAt = `ALTER TABLE channel_group_bindings ADD COLUMN IF NOT EXISTS selected_at TIMESTAMPTZ DEFAULT NULL;`
+const migrateChannelGroupBindingsBackfillSelectedAt = `UPDATE channel_group_bindings SET selected_at = COALESCE(bound_at, updated_at, CURRENT_TIMESTAMP) WHERE selected_at IS NULL;`
+const migrateChannelGroupBindingsSelectedAtDefault = `ALTER TABLE channel_group_bindings ALTER COLUMN selected_at SET DEFAULT CURRENT_TIMESTAMP;`
+const migrateChannelGroupBindingsSelectedAtNotNull = `ALTER TABLE channel_group_bindings ALTER COLUMN selected_at SET NOT NULL;`
 const migrateChannelAgentBindingsUniqueIncludesAgent = `
 ALTER TABLE channel_agent_bindings DROP CONSTRAINT IF EXISTS uk_channel_agent_binding_identity;
 ALTER TABLE channel_agent_bindings ADD CONSTRAINT uk_channel_agent_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, agent_uid);
