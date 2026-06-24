@@ -269,6 +269,13 @@ func (h *WeixinChannelHandler) handleScanEvent(w http.ResponseWriter, ctx contex
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "保存虚拟员工绑定失败，请稍后重试。")
 		return
 	}
+	if binding != nil {
+		if _, err := h.upsertWeixinRoute(appID, openID, "", "p2p", actorUID, binding.AgentUID, "scan"); err != nil {
+			log.Printf("save weixin agent route failed: %v", err)
+			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "保存虚拟员工会话路由失败，请稍后重试。")
+			return
+		}
+	}
 	if isMobileIdentityLink && canonicalUIDHint > 0 {
 		if _, _, err := h.resolveWeixinEntryScene(sceneKey, appID, true); err != nil {
 			log.Printf("consume weixin mobile link failed: %v", err)
@@ -322,13 +329,19 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		return
 	}
 	appID := h.effectiveAppID(msg.ToUserName)
+	agentRoute, err := h.resolveWeixinRoute(appID, openID, "", "p2p", 0)
+	if err != nil {
+		log.Printf("resolve weixin agent route failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取虚拟员工会话路由失败，请稍后重试。")
+		return
+	}
 	groupBinding, err := h.resolveWeixinGroupBinding(appID, openID, "", "p2p")
 	if err != nil {
 		log.Printf("resolve weixin group binding failed: %v", err)
 		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取群聊移动端绑定失败，请稍后重试。")
 		return
 	}
-	if groupBinding != nil {
+	if groupBinding != nil && !weixinAgentRouteSelectedAfterGroup(agentRoute, groupBinding) {
 		clientMsgID := weixinClientMsgID(msg)
 		if err := deliverInboundChannelTextToGroup(h.db, h.hub, groupBinding.CanonicalUID, groupBinding, text, clientMsgID, "weixin", map[string]interface{}{
 			"source_channel":                    "weixin",
@@ -349,7 +362,14 @@ func (h *WeixinChannelHandler) handleTextMessage(w http.ResponseWriter, ctx cont
 		writeWeixinSuccess(w)
 		return
 	}
-	appID, binding, actorUID, ok := h.resolveDeliverableWeixinBinding(w, msg)
+	var binding *types.ChannelAgentBinding
+	var actorUID int64
+	var ok bool
+	if agentRoute != nil {
+		appID, binding, actorUID, ok = h.resolveDeliverableWeixinRouteBinding(w, msg, agentRoute)
+	} else {
+		appID, binding, actorUID, ok = h.resolveDeliverableWeixinBinding(w, msg)
+	}
 	if !ok {
 		return
 	}
@@ -458,6 +478,56 @@ func (h *WeixinChannelHandler) resolveDeliverableWeixinBinding(w http.ResponseWr
 	return appID, binding, actorUID, true
 }
 
+func (h *WeixinChannelHandler) resolveDeliverableWeixinRouteBinding(w http.ResponseWriter, msg *weixinEventMessage, route *types.ChannelAgentRoute) (string, *types.ChannelAgentBinding, int64, bool) {
+	openID := strings.TrimSpace(msg.FromUserName)
+	appID := h.effectiveAppID(msg.ToUserName)
+	if route == nil || route.AgentUID <= 0 {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "请先扫描虚拟员工入口二维码完成绑定，然后再回到公众号聊天框提问。")
+		return appID, nil, 0, false
+	}
+	binding, err := h.resolveWeixinBindingForAgent(appID, openID, "", "p2p", route.AgentUID, route.ActorUID)
+	if err != nil {
+		log.Printf("resolve weixin routed binding failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "读取虚拟员工绑定失败，请稍后重试。")
+		return appID, nil, 0, false
+	}
+	if binding == nil {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "当前虚拟员工绑定已失效，请重新扫描虚拟员工入口二维码。")
+		return appID, nil, 0, false
+	}
+	actorUID := binding.ActorUID
+	if actorUID <= 0 {
+		actorUID, err = h.ensureWeixinActor(appID, openID)
+		if err != nil {
+			log.Printf("ensure legacy weixin actor failed: %v", err)
+			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "创建微信用户身份失败，请稍后重试。")
+			return appID, nil, 0, false
+		}
+		if _, err = h.bindWeixinIdentity(bindingAsEntry(binding), actorUID, appID, openID, binding.ChannelConversationID, binding.ChannelConversationType); err != nil {
+			log.Printf("upgrade legacy weixin binding failed: %v", err)
+			writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "更新微信用户身份失败，请稍后重试。")
+			return appID, nil, 0, false
+		}
+	}
+	if channelBindingNeedsCatsCoLogin(binding) {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, channelBindingDeviceLinkGuidance(h.db, nil, binding))
+		return appID, nil, 0, false
+	}
+	if channelBindingRejected(binding) {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请暂未通过，请联系虚拟员工管理员。")
+		return appID, nil, 0, false
+	}
+	if pending, err := channelBindingPendingFriendApproval(h.db, binding); err != nil {
+		log.Printf("check weixin channel access failed: %v", err)
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "检查虚拟员工好友关系失败，请稍后重试。")
+		return appID, nil, 0, false
+	} else if pending {
+		writeWeixinTextReply(w, msg.FromUserName, msg.ToUserName, "你的好友申请正在等待管理员通过。通过后，我会在这里继续为你服务。")
+		return appID, nil, 0, false
+	}
+	return appID, binding, actorUID, true
+}
+
 func (h *WeixinChannelHandler) weixinInboundMetadata(appID, openID string, binding *types.ChannelAgentBinding, msg *weixinEventMessage) map[string]interface{} {
 	return map[string]interface{}{
 		"source_channel":                 "weixin",
@@ -487,6 +557,54 @@ func (h *WeixinChannelHandler) resolveWeixinBinding(appID, channelUserID, conver
 		ChannelUserID:           channelUserID,
 		ChannelConversationID:   conversationID,
 		ChannelConversationType: normalizeConversationType(conversationType),
+	})
+}
+
+func (h *WeixinChannelHandler) resolveWeixinBindingForAgent(appID, channelUserID, conversationID, conversationType string, agentUID, actorUID int64) (*types.ChannelAgentBinding, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:                 "weixin",
+		ChannelAppID:            appID,
+		ChannelUserID:           channelUserID,
+		ChannelConversationID:   conversationID,
+		ChannelConversationType: normalizeConversationType(conversationType),
+		AgentUID:                agentUID,
+		ActorUID:                actorUID,
+	})
+}
+
+func (h *WeixinChannelHandler) upsertWeixinRoute(appID, channelUserID, conversationID, conversationType string, actorUID, agentUID int64, source string) (*types.ChannelAgentRoute, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "weixin",
+		ChannelAppID:            strings.TrimSpace(appID),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationType: normalizeConversationType(conversationType),
+		ActorUID:                actorUID,
+		AgentUID:                agentUID,
+		Source:                  source,
+	})
+}
+
+func (h *WeixinChannelHandler) resolveWeixinRoute(appID, channelUserID, conversationID, conversationType string, actorUID int64) (*types.ChannelAgentRoute, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	return bindings.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
+		Channel:                 "weixin",
+		ChannelAppID:            strings.TrimSpace(appID),
+		ChannelUserID:           strings.TrimSpace(channelUserID),
+		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationType: normalizeConversationType(conversationType),
+		ActorUID:                actorUID,
 	})
 }
 
@@ -569,6 +687,33 @@ func (h *WeixinChannelHandler) resolveWeixinGroupBinding(appID, channelUserID, c
 		ChannelConversationID:   strings.TrimSpace(conversationID),
 		ChannelConversationType: normalizeConversationType(conversationType),
 	})
+}
+
+func weixinAgentRouteSelectedAfterGroup(route *types.ChannelAgentRoute, groupBinding *types.ChannelGroupBinding) bool {
+	if route == nil || groupBinding == nil {
+		return false
+	}
+	routeSelectedAt := route.SelectedAt
+	if routeSelectedAt.IsZero() {
+		routeSelectedAt = route.UpdatedAt
+	}
+	if routeSelectedAt.IsZero() && route.LastUsedAt != nil {
+		routeSelectedAt = *route.LastUsedAt
+	}
+	if routeSelectedAt.IsZero() {
+		return false
+	}
+	groupSelectedAt := groupBinding.SelectedAt
+	if groupSelectedAt.IsZero() {
+		groupSelectedAt = groupBinding.BoundAt
+	}
+	if groupSelectedAt.IsZero() {
+		groupSelectedAt = groupBinding.UpdatedAt
+	}
+	if groupSelectedAt.IsZero() && groupBinding.LastUsedAt != nil {
+		groupSelectedAt = *groupBinding.LastUsedAt
+	}
+	return !routeSelectedAt.Before(groupSelectedAt)
 }
 
 func (h *WeixinChannelHandler) resolveWeixinAccessRequest(appID, channelUserID, conversationID, conversationType string) (*types.ChannelAgentAccessRequest, error) {

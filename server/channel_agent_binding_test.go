@@ -2417,6 +2417,7 @@ func (s *channelAgentTestStore) UpsertChannelGroupBinding(binding *types.Channel
 	if next.Status == "" {
 		next.Status = types.ChannelAgentBindingActive
 	}
+	next.SelectedAt = now
 	if next.Status == types.ChannelAgentBindingActive {
 		next.LastUsedAt = &now
 	}
