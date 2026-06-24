@@ -789,6 +789,92 @@ func TestFeishuP2PBindingInheritsActivatedBaseBinding(t *testing.T) {
 	}
 }
 
+func TestFeishuOAuthBaseRouteOverridesOlderP2PRoute(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_user"), DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "dev-agent", DisplayName: "Dev Agent", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	db.friends[friendKey(8, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 8)] = types.FriendAccepted
+	db.friends[friendKey(8, 44)] = types.FriendAccepted
+	db.friends[friendKey(44, 8)] = types.FriendAccepted
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed old conversation binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                43,
+		Source:                  "manual",
+	}); err != nil {
+		t.Fatalf("seed old conversation route: %v", err)
+	}
+	oldRouteKey := routeKey("feishu", "cli_app", "ou_user", "oc_chat_1", "p2p")
+	if route := db.routes[oldRouteKey]; route != nil {
+		route.SelectedAt = time.Now().Add(-time.Hour)
+		route.UpdatedAt = route.SelectedAt
+	}
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            8,
+		OwnerUID:                7,
+		AgentUID:                44,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed newer oauth base binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		AgentUID:                44,
+		Source:                  "oauth",
+	}); err != nil {
+		t.Fatalf("seed newer oauth base route: %v", err)
+	}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, &fakeFeishuAPI{appID: "cli_app"})
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_user", "oc_chat_1", "p2p", "om_after_oauth_scan", "你是谁")
+	if len(db.messages) != 1 || db.messages[0].TopicID != "p2p_8_44" || db.messages[0].Content != "你是谁" {
+		t.Fatalf("message should follow newer oauth base route: %+v", db.messages)
+	}
+	route, err := db.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_user",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+	})
+	if err != nil || route == nil || route.AgentUID != 44 {
+		t.Fatalf("conversation route should be refreshed to scanned agent, got %+v err=%v", route, err)
+	}
+}
+
 func TestFeishuGatewaySwitchesCurrentAgentWithoutOverwritingBindings(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}

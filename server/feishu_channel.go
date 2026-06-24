@@ -979,7 +979,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 }
 
 func feishuBaseRouteShouldReplaceConversationRoute(route, baseRoute *types.ChannelAgentRoute) bool {
-	if baseRoute == nil {
+	if baseRoute == nil || baseRoute.AgentUID <= 0 {
 		return false
 	}
 	if route == nil {
@@ -988,25 +988,13 @@ func feishuBaseRouteShouldReplaceConversationRoute(route, baseRoute *types.Chann
 	if route.AgentUID == baseRoute.AgentUID {
 		return false
 	}
-	baseTime := feishuRouteFreshnessTime(baseRoute)
-	routeTime := feishuRouteFreshnessTime(route)
-	if baseTime.IsZero() {
+	if baseRoute.SelectedAt.IsZero() {
 		return false
 	}
-	if routeTime.IsZero() {
+	if route.SelectedAt.IsZero() {
 		return true
 	}
-	return baseTime.After(routeTime)
-}
-
-func feishuRouteFreshnessTime(route *types.ChannelAgentRoute) time.Time {
-	if route == nil {
-		return time.Time{}
-	}
-	if !route.UpdatedAt.IsZero() {
-		return route.UpdatedAt
-	}
-	return route.SelectedAt
+	return baseRoute.SelectedAt.After(route.SelectedAt)
 }
 
 func feishuBindingShouldInheritBase(binding, baseBinding *types.ChannelAgentBinding) bool {
