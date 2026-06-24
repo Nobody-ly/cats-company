@@ -681,18 +681,19 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		return nil, errors.New("channel binding store not configured")
 	}
 	conversationType = normalizeFeishuChatType(conversationType)
+	conversationID = strings.TrimSpace(conversationID)
 	route, err := bindings.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
 		Channel:                 "feishu",
 		ChannelAppID:            appID,
 		ChannelUserID:           channelUserID,
-		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationID:   conversationID,
 		ChannelConversationType: conversationType,
 		ActorUID:                actorUID,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if route == nil && conversationType == "p2p" && strings.TrimSpace(conversationID) != "" {
+	if conversationType == "p2p" && conversationID != "" {
 		baseRoute, err := bindings.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
 			Channel:                 "feishu",
 			ChannelAppID:            appID,
@@ -703,7 +704,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		if err != nil {
 			return nil, err
 		}
-		if baseRoute != nil {
+		if baseRoute != nil && (route == nil || feishuBaseRouteShouldOverrideConversation(route, baseRoute)) {
 			route, err = h.upsertFeishuRoute(appID, channelUserID, conversationID, "p2p", actorUID, baseRoute.AgentUID, "oauth")
 			if err != nil {
 				return nil, err
@@ -717,7 +718,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		Channel:                 "feishu",
 		ChannelAppID:            appID,
 		ChannelUserID:           channelUserID,
-		ChannelConversationID:   strings.TrimSpace(conversationID),
+		ChannelConversationID:   conversationID,
 		ChannelConversationType: conversationType,
 		AgentUID:                route.AgentUID,
 		ActorUID:                actorUID,
@@ -727,7 +728,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		return binding, err
 	}
 	var baseBinding *types.ChannelAgentBinding
-	if conversationType == "p2p" && strings.TrimSpace(conversationID) != "" {
+	if conversationType == "p2p" && conversationID != "" {
 		baseBinding, err = bindings.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
 			Channel:                 "feishu",
 			ChannelAppID:            appID,
@@ -741,7 +742,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		}
 	}
 	if binding != nil {
-		if baseBinding != nil && conversationType == "p2p" && strings.TrimSpace(conversationID) != "" && feishuBindingShouldInheritBase(binding, baseBinding) {
+		if baseBinding != nil && conversationType == "p2p" && conversationID != "" && feishuBindingShouldInheritBase(binding, baseBinding) {
 			return bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
 				Channel:                 binding.Channel,
 				ChannelAppID:            binding.ChannelAppID,
@@ -759,7 +760,7 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		}
 		return binding, nil
 	}
-	if conversationType != "p2p" || strings.TrimSpace(conversationID) == "" || baseBinding == nil {
+	if conversationType != "p2p" || conversationID == "" || baseBinding == nil {
 		return baseBinding, nil
 	}
 	return bindings.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
@@ -776,6 +777,22 @@ func (h *FeishuChannelHandler) resolveCurrentFeishuBinding(appID, channelUserID,
 		Status:                  baseBinding.Status,
 		DeviceAccessEnabled:     baseBinding.DeviceAccessEnabled,
 	})
+}
+
+func feishuBaseRouteShouldOverrideConversation(route, baseRoute *types.ChannelAgentRoute) bool {
+	if route == nil || baseRoute == nil || baseRoute.AgentUID <= 0 {
+		return false
+	}
+	if baseRoute.AgentUID == route.AgentUID {
+		return false
+	}
+	if route.SelectedAt.IsZero() {
+		return true
+	}
+	if baseRoute.SelectedAt.IsZero() {
+		return false
+	}
+	return baseRoute.SelectedAt.After(route.SelectedAt)
 }
 
 func feishuBindingShouldInheritBase(binding, baseBinding *types.ChannelAgentBinding) bool {
