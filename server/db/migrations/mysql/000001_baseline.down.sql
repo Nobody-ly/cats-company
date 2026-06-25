@@ -1,2 +1,0 @@
--- Baseline migrations are intentionally not reversible.
--- Do not drop production schema from a baseline down migration.

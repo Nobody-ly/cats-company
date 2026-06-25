@@ -1,6 +1,6 @@
 # CatsCompany 数据库迁移
 
-CatsCompany 现在采用“代码内置 schema + SQL migration 基线”的过渡方案。
+CatsCompany 现在采用“代码内置 PostgreSQL schema + SQL migration 基线”的过渡方案。生产环境使用腾讯云托管 PostgreSQL；MySQL 不纳入这套 migration 流程。
 
 ## 放进公开仓库的内容
 
@@ -31,16 +31,17 @@ export CATS_DB_DRIVER=postgres
 export CATS_MIGRATION_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DB?sslmode=require'
 ```
 
-真实值只在服务器上维护，不提交。
+真实值只在服务器上维护，不提交。服务器本地 env 可以从部署 env 读取应用 DSN，但需要输出 migration CLI 可识别的 PostgreSQL DSN；如果应用驱动支持而 `migrate/migrate` 不支持某些参数，应在服务器本地 env 中规范化，不要把真实转换结果提交到仓库。
 
 ## 当前基线
 
 `000001_baseline` 表示当前生产 schema 仍由 Go 代码里的 `CreateSchema()` 创建和补齐：
 
 - `server/db/postgres/schema.go`
-- `server/db/mysql/schema.go`
 
 服务启动时会确保 `schema_migrations` 表存在，并在空表时写入版本 `1`。这只是版本标记，不会修改业务数据。
+
+`server/db/mysql/schema.go` 仍可保留历史兼容代码，但不维护 migration 文件，也不会写入 migration 版本表。
 
 ## 之后怎么加迁移
 
@@ -49,18 +50,16 @@ export CATS_MIGRATION_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DB?sslmod
 ```text
 server/db/migrations/postgres/000002_xxx.up.sql
 server/db/migrations/postgres/000002_xxx.down.sql
-server/db/migrations/mysql/000002_xxx.up.sql
-server/db/migrations/mysql/000002_xxx.down.sql
 ```
 
-如果某次变更只支持 PostgreSQL，也要在 PR 说明里写清楚 MySQL 是否仍需兼容。
+如果某次变更需要兼容 MySQL，也在应用代码里单独说明；生产 schema 迁移以 PostgreSQL migration 为准。
 
 ## 服务器执行
 
 `scripts/db-migrate.sh` 会优先使用本机 `migrate` CLI；如果没有，会回退到 Docker 镜像 `migrate/migrate`。如果希望直接安装 CLI：
 
 ```bash
-go install -tags 'postgres,mysql' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 export PATH="$PATH:$HOME/go/bin"
 ```
 
