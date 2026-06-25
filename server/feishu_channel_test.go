@@ -344,7 +344,7 @@ func TestFeishuOAuthShortLinkRedirectsToStart(t *testing.T) {
 	}
 }
 
-func TestFeishuNativeEntryShortLinkRedirectsToNativeEntry(t *testing.T) {
+func TestFeishuNativeEntryShortLinkRedirectsToOAuthStart(t *testing.T) {
 	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
 	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
 	t.Setenv("CATSCO_FEISHU_ENTRY_URL_TEMPLATE", "https://applink.feishu.cn/client/app/open?app_id={app_id}&scene={scene_key}&oauth={oauth_url_encoded}")
@@ -370,13 +370,13 @@ func TestFeishuNativeEntryShortLinkRedirectsToNativeEntry(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	want := "https://applink.feishu.cn/client/app/open?app_id=cli_app&scene=scene-feishu&oauth=https%3A%2F%2Fapp.catsco.cc%2Fapi%2Fchannel-agent-bindings%2Foauth%2Ffeishu%2Fstart%3Fscene_key%3Dscene-feishu"
+	want := "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/start?scene_key=scene-feishu"
 	if got := rec.Header().Get("Location"); got != want {
 		t.Fatalf("redirect=%s", got)
 	}
 }
 
-func TestFeishuNativeEntryShortLinkRequiresTemplate(t *testing.T) {
+func TestFeishuNativeEntryShortLinkDoesNotRequireTemplate(t *testing.T) {
 	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
 	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
 	db := newChannelAgentTestStore()
@@ -398,11 +398,12 @@ func TestFeishuNativeEntryShortLinkRequiresTemplate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.HandleNativeEntryShortLink(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
+	if rec.Code != http.StatusFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "feishu native entry is not ready") {
-		t.Fatalf("body=%s", rec.Body.String())
+	want := "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/start?scene_key=scene-feishu"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Fatalf("redirect=%s", got)
 	}
 }
 
