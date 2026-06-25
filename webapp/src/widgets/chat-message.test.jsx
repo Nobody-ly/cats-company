@@ -187,6 +187,59 @@ describe('ChatMessage rich file rendering', () => {
     expect(menu.textContent).toContain('已复制');
   });
 
+  it('renders update_plan working tools as a plan card fallback', async () => {
+    await act(async () => {
+      root.render(
+        <ChatMessage
+          message={{
+            id: 21,
+            from_uid: 2,
+            content: '',
+            created_at: '2026-06-09T00:00:00Z',
+          }}
+          workingMessages={[
+            {
+              type: 'tool_use',
+              content: 'update_plan',
+              metadata: {
+                id: 'plan-1',
+                input: {
+                  steps: [
+                    { status: 'in_progress', step: '创建临时工作目录' },
+                    { status: 'pending', step: '设计 analyzeReply 函数' },
+                    { status: 'pending', step: '写测试用例' },
+                  ],
+                },
+              },
+            },
+            {
+              type: 'tool_result',
+              content: '计划已更新：0/3 已完成\n进行中：创建临时工作目录\n1. 进行中 - 创建临时工作目录\n2. 待处理 - 设计 analyzeReply 函数\n3. 待处理 - 写测试用例',
+              metadata: {
+                tool_use_id: 'plan-1',
+              },
+            },
+          ]}
+          isSelf={false}
+          isGroup={false}
+          senderName="CatsCo"
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      Simulate.click(container.querySelector('.v3-working-toggle'));
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.v3-wpi-plan')).not.toBeNull();
+    expect(container.querySelector('.v3-wpi-plan').textContent).toContain('计划已更新');
+    expect(container.querySelector('.v3-wpi-plan').textContent).toContain('创建临时工作目录');
+    expect(container.querySelector('.v3-wpi-plan').textContent).toContain('设计 analyzeReply 函数');
+    expect(container.querySelector('.v3-wpi-tool-name')).toBeNull();
+  });
+
   it('opens external HTML files instead of fetching them into the preview panel', async () => {
     await act(async () => {
       root.render(

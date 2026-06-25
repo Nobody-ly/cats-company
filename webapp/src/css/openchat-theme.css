@@ -4372,6 +4372,76 @@ button.catsco-download-action:disabled {
   min-width: 0;
 }
 
+.v3-wpi-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 680px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 7px;
+  background: rgba(16, 185, 129, 0.06);
+  color: var(--v3-text-main);
+}
+
+.v3-wpi-plan-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.v3-wpi-plan-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.v3-wpi-plan-count {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  color: var(--v3-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.v3-wpi-plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 20px;
+}
+
+.v3-wpi-plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.v3-wpi-plan-step svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.v3-wpi-plan-step.completed {
+  color: rgba(139, 148, 158, 0.8);
+}
+
+.v3-wpi-plan-step.in_progress {
+  color: var(--v3-text-main);
+}
+
+.v3-wpi-plan-step span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .v3-wpi-code-block {
   background: #1e1e1e;
   border: 1px solid var(--v3-border);

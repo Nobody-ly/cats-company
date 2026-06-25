@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Terminal, Brain, FileText, Download, CornerUpLeft, MoreHorizontal, X, Eye, Copy } from 'lucide-react';
+import { ChevronDown, ChevronRight, Terminal, Brain, FileText, Download, CornerUpLeft, MoreHorizontal, X, Eye, Copy, CheckCircle2, CircleDot, Circle } from 'lucide-react';
 import t from '../i18n';
 import Avatar from './avatar';
 import { resolveMediaURL } from '../api';
@@ -38,6 +38,68 @@ function truncateResult(text, max = 300) {
   if (typeof text !== 'string') text = JSON.stringify(text);
   if (text.length <= max) return text;
   return text.slice(0, max) + '...';
+}
+
+function normalizePlanStatus(status) {
+  const value = String(status || '').trim().toLowerCase();
+  if (value === 'completed' || value === 'complete' || value === 'done' || value.includes('已完成') || value === '完成') {
+    return 'completed';
+  }
+  if (value === 'in_progress' || value === 'in-progress' || value === 'running' || value.includes('进行中')) {
+    return 'in_progress';
+  }
+  return 'pending';
+}
+
+function planStepText(step) {
+  if (!step) return '';
+  if (typeof step === 'string') return step.trim();
+  return String(step.text || step.step || step.title || step.name || '').trim();
+}
+
+function planFromUpdatePlanInput(input) {
+  const rawSteps = Array.isArray(input?.steps)
+    ? input.steps
+    : Array.isArray(input?.plan)
+      ? input.plan
+      : [];
+  const steps = rawSteps
+    .map((step) => ({
+      status: normalizePlanStatus(typeof step === 'object' ? step.status : ''),
+      text: planStepText(step),
+    }))
+    .filter((step) => step.text);
+  return steps.length > 0 ? { steps } : null;
+}
+
+function planFromUpdatePlanResult(result) {
+  if (!result) return null;
+  const text = typeof result === 'string' ? result : JSON.stringify(result);
+  const steps = [];
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const numbered = line.match(/^\d+[.)、]?\s*(已完成|完成|进行中|待处理|pending|in_progress|completed|done)\s*[-:：]\s*(.+)$/i);
+    if (numbered) {
+      steps.push({
+        status: normalizePlanStatus(numbered[1]),
+        text: numbered[2].trim(),
+      });
+      continue;
+    }
+    const current = line.match(/^进行中[:：]\s*(.+)$/);
+    if (current && !steps.some((step) => step.status === 'in_progress')) {
+      steps.push({
+        status: 'in_progress',
+        text: current[1].trim(),
+      });
+    }
+  }
+  return steps.length > 0 ? { steps } : null;
+}
+
+function planFromUpdatePlanTool(item) {
+  if (String(item?.name || '').trim() !== 'update_plan') return null;
+  return planFromUpdatePlanInput(item.input) || planFromUpdatePlanResult(item.result);
 }
 
 function contentBlockCopyText(block) {
@@ -519,6 +581,34 @@ function SubAgentWorkingGroup({ item }) {
   );
 }
 
+function WorkingPlanCard({ item }) {
+  const plan = planFromUpdatePlanTool(item);
+  if (!plan) return null;
+  const completed = plan.steps.filter((step) => step.status === 'completed').length;
+
+  return (
+    <div className="v3-wpi-plan" role="status">
+      <div className="v3-wpi-plan-header">
+        <FileText size={14} className="v3-wpi-icon" />
+        <span className="v3-wpi-plan-title">计划已更新</span>
+        <span className="v3-wpi-plan-count">{completed}/{plan.steps.length}</span>
+      </div>
+      <div className="v3-wpi-plan-steps">
+        {plan.steps.map((step, index) => (
+          <div className={`v3-wpi-plan-step ${step.status}`} key={`${index}-${step.text}`}>
+            {step.status === 'completed'
+              ? <CheckCircle2 size={14} />
+              : step.status === 'in_progress'
+                ? <CircleDot size={14} />
+                : <Circle size={14} />}
+            <span>{step.text}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WorkingProcess({ blocks }) {
   const [open, setOpen] = useState(false);
   if (!blocks || blocks.length === 0) return null;
@@ -553,6 +643,10 @@ function WorkingProcess({ blocks }) {
               return <SubAgentWorkingGroup key={i} item={item} />;
             }
             if (item.type === 'tool_pair') {
+              const plan = planFromUpdatePlanTool(item);
+              if (plan) {
+                return <WorkingPlanCard key={i} item={item} />;
+              }
               return (
                 <div key={i} className="v3-wpi-tool">
                   <div className="v3-wpi-tool-header">
