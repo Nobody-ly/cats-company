@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	defaultFeishuAuthorizeURL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+	defaultFeishuAuthorizeURL = "https://open.feishu.cn/open-apis/authen/v1/index"
 	defaultFeishuAPIBase      = "https://open.feishu.cn"
 	feishuOAuthStateTTL       = 10 * time.Minute
 )
@@ -75,9 +75,7 @@ func NewFeishuChannelHandlerFromEnv(db store.Store, hub *Hub) *FeishuChannelHand
 }
 
 func NewFeishuChannelHandler(db store.Store, hub *Hub, cfg FeishuChannelConfig, api feishuAPI) *FeishuChannelHandler {
-	if strings.TrimSpace(cfg.OAuthAuthorizeURL) == "" {
-		cfg.OAuthAuthorizeURL = defaultFeishuAuthorizeURL
-	}
+	cfg.OAuthAuthorizeURL = normalizeFeishuAuthorizeURL(cfg.OAuthAuthorizeURL)
 	if strings.TrimSpace(cfg.APIBaseURL) == "" {
 		cfg.APIBaseURL = defaultFeishuAPIBase
 	}
@@ -85,6 +83,21 @@ func NewFeishuChannelHandler(db store.Store, hub *Hub, cfg FeishuChannelConfig, 
 		api = newFeishuAPIClient(cfg)
 	}
 	return &FeishuChannelHandler{db: db, hub: hub, config: cfg, api: api}
+}
+
+func normalizeFeishuAuthorizeURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultFeishuAuthorizeURL
+	}
+	parsed, err := url.Parse(value)
+	if err == nil && strings.EqualFold(parsed.Host, "accounts.feishu.cn") && strings.Trim(parsed.Path, "/") == "open-apis/authen/v1/authorize" {
+		parsed.Scheme = "https"
+		parsed.Host = "open.feishu.cn"
+		parsed.Path = "/open-apis/authen/v1/index"
+		return parsed.String()
+	}
+	return value
 }
 
 func (h *FeishuChannelHandler) InstallOutboundDispatcher() {
