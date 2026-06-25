@@ -61,6 +61,8 @@ func (a *Adapter) CreateSchema() error {
 		createAuthServicesIndexes,
 		createChannelAgentIndexes,
 		createUpdatedAtTriggers,
+		createSchemaMigrationsTable,
+		createSchemaMigrationsBaseline,
 	}
 	for _, statement := range statements {
 		if _, err := a.db.Exec(statement); err != nil {
@@ -372,6 +374,19 @@ CREATE TABLE IF NOT EXISTS channel_group_bindings (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	CONSTRAINT uk_channel_group_binding_identity UNIQUE (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type)
 );
+`
+
+const createSchemaMigrationsTable = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version BIGINT NOT NULL PRIMARY KEY,
+    dirty BOOLEAN NOT NULL
+);
+`
+
+const createSchemaMigrationsBaseline = `
+INSERT INTO schema_migrations (version, dirty)
+SELECT 1, FALSE
+WHERE NOT EXISTS (SELECT 1 FROM schema_migrations);
 `
 
 const migrateUsersAddBotDisclose = `ALTER TABLE users ADD COLUMN IF NOT EXISTS bot_disclose BOOLEAN NOT NULL DEFAULT FALSE;`

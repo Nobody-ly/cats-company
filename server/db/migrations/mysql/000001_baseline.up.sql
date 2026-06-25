@@ -1,0 +1,9 @@
+-- CatsCompany baseline migration.
+--
+-- The current schema is still bootstrapped by server/db/mysql/schema.go.
+-- This file exists so external migration tooling has a stable version-1
+-- starting point for existing databases.
+--
+-- New schema changes must use later files, for example:
+-- 000002_add_organization_tables.up.sql
+-- 000002_add_organization_tables.down.sql

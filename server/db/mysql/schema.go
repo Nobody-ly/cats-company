@@ -70,6 +70,8 @@ func (a *Adapter) CreateSchema() error {
 		migrateChannelAgentAccessOwnerAgentIndex,
 		migrateChannelAgentAccessActorAgentIndex,
 		migrateChannelAgentAccessLookupIndex,
+		createSchemaMigrationsTable,
+		createSchemaMigrationsBaseline,
 	}
 	for _, m := range migrations {
 		if _, err := a.db.Exec(m); err != nil {
@@ -460,6 +462,19 @@ CREATE TABLE IF NOT EXISTS channel_group_bindings (
     FOREIGN KEY (canonical_uid) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES ` + "`groups`" + `(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createSchemaMigrationsTable = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version BIGINT NOT NULL PRIMARY KEY,
+    dirty BOOLEAN NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createSchemaMigrationsBaseline = `
+INSERT INTO schema_migrations (version, dirty)
+SELECT 1, FALSE
+WHERE NOT EXISTS (SELECT 1 FROM schema_migrations);
 `
 
 // Migration: add reply_to column to messages table.
