@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -341,6 +342,62 @@ func TestFeishuOAuthShortLinkRedirectsToStart(t *testing.T) {
 	}
 	if got := rec.Header().Get("Location"); got != "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/start?scene_key=scene-feishu" {
 		t.Fatalf("redirect=%s", got)
+	}
+}
+
+func TestFeishuOAuthStartUsesIndexAuthorizeURL(t *testing.T) {
+	tests := []struct {
+		name         string
+		authorizeURL string
+	}{
+		{name: "default"},
+		{name: "legacy accounts authorize url", authorizeURL: "https://accounts.feishu.cn/open-apis/authen/v1/authorize"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := newChannelAgentTestStore()
+			if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+				SceneKey:     "scene-feishu",
+				Channel:      "feishu",
+				ChannelAppID: "cli_app",
+				AccessMode:   types.ChannelAgentAccessApprovalRequired,
+				OwnerUID:     7,
+				AgentUID:     43,
+				Status:       "active",
+			}); err != nil {
+				t.Fatalf("seed entry: %v", err)
+			}
+			handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{
+				AppID:             "cli_app",
+				AppSecret:         "secret",
+				OAuthAuthorizeURL: tt.authorizeURL,
+			}, &fakeFeishuAPI{appID: "cli_app"})
+			req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/start?scene_key=scene-feishu", nil)
+			rec := httptest.NewRecorder()
+			handler.HandleOAuthStart(rec, req)
+
+			if rec.Code != http.StatusFound {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			loc := rec.Header().Get("Location")
+			parsed, err := url.Parse(loc)
+			if err != nil {
+				t.Fatalf("parse location %q: %v", loc, err)
+			}
+			if got := parsed.Scheme + "://" + parsed.Host + parsed.Path; got != "https://open.feishu.cn/open-apis/authen/v1/index" {
+				t.Fatalf("authorize url=%s", got)
+			}
+			q := parsed.Query()
+			if q.Get("app_id") != "cli_app" {
+				t.Fatalf("app_id=%s", q.Get("app_id"))
+			}
+			if q.Get("redirect_uri") != "https://app.catsco.cc/api/channel-agent-bindings/oauth/feishu/callback" {
+				t.Fatalf("redirect_uri=%s", q.Get("redirect_uri"))
+			}
+			if q.Get("state") == "" {
+				t.Fatalf("state is empty")
+			}
+		})
 	}
 }
 
