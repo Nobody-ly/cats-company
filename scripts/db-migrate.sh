@@ -7,14 +7,14 @@ Usage:
   scripts/db-migrate.sh [version|up|down|steps|force|goto] [args...]
 
 Environment:
-  CATS_DB_DRIVER                 postgres|mysql, default: postgres
+  CATS_DB_DRIVER                 postgres, default: postgres
   CATS_MIGRATION_DATABASE_URL    required database URL/DSN
   CATS_DB_MIGRATIONS_DIR         optional migration directory override
 
 Examples:
   CATS_MIGRATION_DATABASE_URL='postgres://user:pass@host:5432/db?sslmode=require' scripts/db-migrate.sh version
-  CATS_DB_DRIVER=postgres scripts/db-migrate.sh up
-  CATS_DB_DRIVER=postgres scripts/db-migrate.sh force 1
+  scripts/db-migrate.sh up
+  scripts/db-migrate.sh force 1
 
 The real database URL should live in a server-local env file, not in git.
 USAGE
@@ -33,12 +33,8 @@ case "$driver" in
     migration_driver="postgres"
     migrations_dir="${CATS_DB_MIGRATIONS_DIR:-$repo_root/server/db/migrations/postgres}"
     ;;
-  mysql)
-    migration_driver="mysql"
-    migrations_dir="${CATS_DB_MIGRATIONS_DIR:-$repo_root/server/db/migrations/mysql}"
-    ;;
   *)
-    echo "unsupported CATS_DB_DRIVER: $driver" >&2
+    echo "unsupported CATS_DB_DRIVER: $driver; migrations currently support PostgreSQL only." >&2
     exit 2
     ;;
 esac
