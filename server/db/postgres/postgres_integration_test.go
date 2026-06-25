@@ -39,6 +39,14 @@ func TestPostgresStoreContract(t *testing.T) {
 	if err := db.CreateSchema(); err != nil {
 		t.Fatalf("create schema should be idempotent: %v", err)
 	}
+	var migrationVersion int64
+	var migrationDirty bool
+	if err := db.db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&migrationVersion, &migrationDirty); err != nil {
+		t.Fatalf("query schema migration baseline: %v", err)
+	}
+	if migrationVersion != 1 || migrationDirty {
+		t.Fatalf("schema migration baseline mismatch: version=%d dirty=%v", migrationVersion, migrationDirty)
+	}
 	if health := db.HealthCheck(); health["status"] != "healthy" {
 		t.Fatalf("expected healthy database, got %#v", health)
 	}

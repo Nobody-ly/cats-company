@@ -23,6 +23,8 @@ Thumbs.db
 # Environment
 .env
 .env.local
+*.local.env
+db-migration.env
 local.tinode.conf
 deploy/.env
 *.pem
