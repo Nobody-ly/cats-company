@@ -16,6 +16,12 @@ const CHANNEL_AGENT_ACCESS_MODES = {
   PUBLIC: 'public',
 };
 
+const CHANNEL_OPTIONS = [
+  { value: 'weixin', label: '微信公众号', shortLabel: '公众号' },
+  { value: 'feishu', label: '飞书', shortLabel: '飞书' },
+  { value: 'weixin_clawbot', label: '微信 ClawBot', shortLabel: 'ClawBot' },
+];
+
 const normalizeChannelAgentAccessMode = (value) => (
   value === CHANNEL_AGENT_ACCESS_MODES.PUBLIC
     ? CHANNEL_AGENT_ACCESS_MODES.PUBLIC
@@ -24,9 +30,26 @@ const normalizeChannelAgentAccessMode = (value) => (
 
 const normalizeChannel = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'wechat') return 'weixin';
-  return normalized;
+  const safe = normalized.replace(/[-\s]+/g, '_');
+  if (['wechat', 'weixin_mp', 'wechat_mp', 'weixin_official', 'wechat_official', 'weixin_official_account', 'wechat_official_account'].includes(safe)) return 'weixin';
+  if (['clawbot', 'weixinclawbot', 'wechatclawbot', 'weixin_clawbot', 'wechat_clawbot'].includes(safe)) return 'weixin_clawbot';
+  if (safe === 'lark') return 'feishu';
+  return safe;
 };
+
+const channelLabel = (value) => (
+  CHANNEL_OPTIONS.find((item) => item.value === normalizeChannel(value))?.label
+  || value
+  || '渠道'
+);
+
+const isManagedChannel = (value) => ['feishu', 'weixin', 'weixin_clawbot'].includes(normalizeChannel(value));
+
+const isWeixinOfficialChannel = (value) => normalizeChannel(value) === 'weixin';
+
+const isWeixinClawBotChannel = (value) => normalizeChannel(value) === 'weixin_clawbot';
+
+const isFeishuChannel = (value) => normalizeChannel(value) === 'feishu';
 
 const initialForm = {
   display_name: '',
@@ -581,7 +604,7 @@ function mergeManageableBots(rawBots, rawAgents, rawFriends = []) {
 
 function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const [channel, setChannel] = useState('weixin');
-  const [channelAppIds, setChannelAppIds] = useState({ weixin: '', feishu: '' });
+  const [channelAppIds, setChannelAppIds] = useState({ weixin: '', feishu: '', weixin_clawbot: '' });
   const [entries, setEntries] = useState([]);
   const [accessMode, setAccessMode] = useState(CHANNEL_AGENT_ACCESS_MODES.APPROVAL_REQUIRED);
   const [loading, setLoading] = useState(true);
@@ -637,11 +660,11 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   }, [loadPendingRequests]);
 
   const channelAppId = channelAppIds[channel] || '';
-  const managedChannelAppID = channel === 'feishu' || channel === 'weixin';
+  const managedChannelAppID = isManagedChannel(channel);
   const normalizedChannelAppId = managedChannelAppID ? '' : channelAppId.trim();
   const entryScopeMatches = (entry, targetChannel = channel, targetAppId = normalizedChannelAppId) => (
-    entry.channel === targetChannel
-    && (targetChannel === 'feishu' || targetChannel === 'weixin' || (entry.channel_app_id || '') === targetAppId)
+    normalizeChannel(entry.channel) === normalizeChannel(targetChannel)
+    && (isManagedChannel(targetChannel) || (entry.channel_app_id || '') === targetAppId)
   );
   const selected = entries.find((entry) => (
     entryScopeMatches(entry)
@@ -653,15 +676,19 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const qrKind = selected?.qr_kind || '';
   const feishuOAuthUrl = selected?.feishu_oauth_url || '';
   const feishuEntryStatus = selected?.feishu_entry_status || null;
+  const clawBotEntryStatus = selected?.clawbot_entry_status || null;
   const feishuEntryReasons = Array.isArray(feishuEntryStatus?.reasons) ? feishuEntryStatus.reasons : [];
-  const isFeishuOAuthEntry = channel === 'feishu' && qrKind === 'feishu_oauth_entry' && qrValue;
-  const isFeishuNativeEntry = channel === 'feishu' && qrKind === 'feishu_native_entry' && qrValue;
+  const clawBotEntryReasons = Array.isArray(clawBotEntryStatus?.reasons) ? clawBotEntryStatus.reasons : [];
+  const isFeishuOAuthEntry = isFeishuChannel(channel) && qrKind === 'feishu_oauth_entry' && qrValue;
+  const isFeishuNativeEntry = isFeishuChannel(channel) && qrKind === 'feishu_native_entry' && qrValue;
   const hasFeishuEntryQRCode = isFeishuOAuthEntry || isFeishuNativeEntry;
-  const displayQrUrl = channel === 'weixin' && channelQrUrl ? channelQrUrl : '';
-  const displayUrl = displayQrUrl || (hasFeishuEntryQRCode ? qrValue : (channel === 'feishu' ? '' : qrValue || entryUrl));
+  const isClawBotEntry = isWeixinClawBotChannel(channel) && qrKind === 'weixin_clawbot_entry' && qrValue;
+  const displayQrUrl = isWeixinOfficialChannel(channel) && channelQrUrl ? channelQrUrl : '';
+  const displayUrl = displayQrUrl || (hasFeishuEntryQRCode ? qrValue : isClawBotEntry ? qrValue : (isFeishuChannel(channel) || isWeixinClawBotChannel(channel) ? '' : qrValue || entryUrl));
   const usesLocalEntryUrl = isPotentiallyPrivateEntryUrl(displayUrl);
-  const needsWeixinConfig = channel === 'weixin' && selected && !displayQrUrl;
-  const needsFeishuNativeConfig = channel === 'feishu' && selected && !hasFeishuEntryQRCode;
+  const needsWeixinConfig = isWeixinOfficialChannel(channel) && selected && !displayQrUrl;
+  const needsFeishuNativeConfig = isFeishuChannel(channel) && selected && !hasFeishuEntryQRCode;
+  const needsClawBotConfig = isWeixinClawBotChannel(channel) && selected && !isClawBotEntry;
 
   useEffect(() => {
     setQrImageError(false);
@@ -675,7 +702,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
       const next = res.entry;
       setEntries((prev) => [next, ...prev.filter((entry) => (
         !(
-          entryScopeMatches(entry, next.channel, next.channel === 'feishu' || next.channel === 'weixin' ? '' : (next.channel_app_id || ''))
+          entryScopeMatches(entry, next.channel, isManagedChannel(next.channel) ? '' : (next.channel_app_id || ''))
           && normalizeChannelAgentAccessMode(entry.access_mode) === normalizeChannelAgentAccessMode(next.access_mode)
         )
       ))]);
@@ -698,7 +725,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
       setEntries((prev) => [next, ...prev.filter((entry) => (
         entry.id !== selected.id
         && !(
-          entryScopeMatches(entry, next.channel, next.channel === 'feishu' || next.channel === 'weixin' ? '' : (next.channel_app_id || ''))
+          entryScopeMatches(entry, next.channel, isManagedChannel(next.channel) ? '' : (next.channel_app_id || ''))
           && normalizeChannelAgentAccessMode(entry.access_mode) === normalizeChannelAgentAccessMode(next.access_mode)
         )
       ))]);
@@ -763,10 +790,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
 
         <div className="oc-modal-body" style={{ padding: 22 }}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-            {[
-              ['weixin', '微信公众号'],
-              ['feishu', '飞书'],
-            ].map(([value, label]) => (
+            {CHANNEL_OPTIONS.map(({ value, label }) => (
               <button
                 key={value}
                 type="button"
@@ -815,9 +839,11 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
             <div style={{ color: 'var(--v3-text-muted)', fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>
               {accessMode === CHANNEL_AGENT_ACCESS_MODES.PUBLIC
                 ? '扫码后仍需登录 CatsCo 账号；账号验证通过后可直接对话，不需要管理员审批。设备操作只会使用申请人自己授权的设备。'
-                : channel === 'feishu'
+                : isFeishuChannel(channel)
                   ? '用户用飞书扫码后会打开该虚拟员工的飞书应用或机器人入口；首次进入会提交好友申请，通过后可直接在飞书对话。需要账号或设备授权时，再按提示完成绑定。'
-                  : '扫码后需要登录 CatsCo 并发送好友申请，通过后才能对话；设备操作只会使用申请人自己授权的设备。'}
+                  : isWeixinClawBotChannel(channel)
+                    ? '用户用微信 ClawBot 扫码后会进入独立的 ClawBot 入口；首次进入会提交好友申请，通过后可直接在 ClawBot 对话。'
+                    : '扫码后需要登录 CatsCo 并发送好友申请，通过后才能对话；设备操作只会使用申请人自己授权的设备。'}
             </div>
           </div>
 
@@ -888,13 +914,41 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
                 </button>
               </div>
             </div>
+          ) : selected && needsClawBotConfig ? (
+            <div style={{ padding: 24, border: '1px dashed var(--v3-border)', borderRadius: 8 }}>
+              <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, marginBottom: 10 }}>微信 ClawBot 入口尚未配置</div>
+              <div style={{ color: 'var(--v3-text-muted)', fontSize: 13, lineHeight: 1.7, marginBottom: 14 }}>
+                配置 ClawBot 入口模板后，这里会显示独立于公众号的微信 ClawBot 移动端使用码。
+              </div>
+              {clawBotEntryReasons.length > 0 && (
+                <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
+                  {clawBotEntryReasons.map((reason, index) => (
+                    <div key={`${reason}-${index}`} style={{ background: 'rgba(250,81,81,0.1)', color: '#fca5a5', border: '1px solid rgba(250,81,81,0.18)', borderRadius: 8, padding: '8px 10px', fontSize: 12, lineHeight: 1.45 }}>
+                      {reason}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+                必填环境变量：CATSCO_WEIXIN_CLAWBOT_ENTRY_URL_TEMPLATE<br />
+                模板必须携带 {'{scene_key}'}、{'{entry_url}'} 或 {'{entry_url_encoded}'}，用于把扫码用户带回对应虚拟员工。
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`entry_${selected.id}`, entryUrl)}>
+                  <Copy size={14} /> {copiedField === `entry_${selected.id}` ? 'Copied!' : '复制测试链接'}
+                </button>
+                <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={handleRegenerate} disabled={saving}>
+                  <RefreshCw size={14} /> 重新生成
+                </button>
+              </div>
+            </div>
           ) : selected ? (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: '196px 1fr', gap: 18, alignItems: 'center' }}>
                 {displayQrUrl && !qrImageError ? (
                   <img
                     src={displayQrUrl}
-                    alt="微信入口码"
+                    alt={`${channelLabel(channel)}入口码`}
                     width={196}
                     height={196}
                     onError={() => setQrImageError(true)}
@@ -905,19 +959,24 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
                 )}
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 8 }}>
-                    {qrKind === 'feishu_oauth_entry' ? '飞书 OAuth 绑定入口' : qrKind === 'feishu_native_entry' ? '飞书应用入口码' : displayQrUrl ? '微信公众号参数二维码' : '网页入口链接'}
+                    {qrKind === 'feishu_oauth_entry' ? '飞书 OAuth 绑定入口' : qrKind === 'feishu_native_entry' ? '飞书应用入口码' : qrKind === 'weixin_clawbot_entry' ? '微信 ClawBot 入口码' : displayQrUrl ? '微信公众号参数二维码' : '网页入口链接'}
                   </div>
                   <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
                     {displayUrl}
                   </div>
-                  {channel === 'weixin' && qrImageError && (
+                  {isWeixinOfficialChannel(channel) && qrImageError && (
                     <div style={{ background: 'rgba(250,81,81,0.1)', color: '#FA5151', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
                       微信二维码加载失败，请检查 AppID/AppSecret、公众号接口权限、服务器 IP 白名单和微信后台消息加解密模式。
                     </div>
                   )}
-                  {channel === 'feishu' && hasFeishuEntryQRCode && feishuEntryStatus?.native_url && (
+                  {isFeishuChannel(channel) && hasFeishuEntryQRCode && feishuEntryStatus?.native_url && (
                     <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-muted)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
                       飞书原生入口：{feishuEntryStatus.native_url}
+                    </div>
+                  )}
+                  {isWeixinClawBotChannel(channel) && clawBotEntryStatus?.native_url && (
+                    <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-muted)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
+                      ClawBot 原生入口：{clawBotEntryStatus.native_url}
                     </div>
                   )}
                   {usesLocalEntryUrl && (
@@ -1014,7 +1073,7 @@ function BindingStatusRow({ item, note }) {
   const binding = item?.binding || {};
   const user = item?.user || {};
   const name = user.display_name || user.username || binding.channel_user_id || `绑定 ${binding.id || ''}`;
-  const channel = binding.channel === 'feishu' ? '飞书' : binding.channel === 'weixin' ? '微信' : binding.channel || '渠道';
+  const channel = channelLabel(binding.channel || item?.channel);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8, border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10 }}>
       <div style={{ minWidth: 0 }}>

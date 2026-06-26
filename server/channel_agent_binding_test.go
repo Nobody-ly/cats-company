@@ -29,6 +29,23 @@ func TestNormalizeChannelAgentAccessModeAcceptsPublic(t *testing.T) {
 	}
 }
 
+func TestNormalizeChannelSeparatesWeixinOfficialAndClawBot(t *testing.T) {
+	cases := map[string]string{
+		"weixin":                  "weixin",
+		"wechat_official":         "weixin",
+		"weixin_official_account": "weixin",
+		"clawbot":                 "weixin_clawbot",
+		"weixin-clawbot":          "weixin_clawbot",
+		"WeChat ClawBot":          "weixin_clawbot",
+		"lark":                    "feishu",
+	}
+	for input, want := range cases {
+		if got := normalizeChannel(input); got != want {
+			t.Fatalf("normalizeChannel(%q)=%q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestChannelAgentEntryAndBindingFlow(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
@@ -332,6 +349,69 @@ func TestCreateFeishuChannelIdentityMobileLinkUsesOAuthShortQRCode(t *testing.T)
 	}
 	if resp.Entry.FeishuEntryStatus == nil || resp.Entry.FeishuEntryStatus.NativeShortURL != "https://app.catsco.cc/api/fn/"+url.PathEscape(resp.SceneKey) {
 		t.Fatalf("unexpected feishu status: %+v", resp.Entry.FeishuEntryStatus)
+	}
+}
+
+func TestCreateClawBotChannelIdentityMobileLinkUsesClawBotEntry(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ENTRY_URL_TEMPLATE", "weixin://clawbot/open?scene={scene_key}&entry={entry_url_encoded}")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-official",
+		Channel:    "weixin",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	}); err != nil {
+		t.Fatalf("seed official entry: %v", err)
+	}
+	clawBotEntry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed clawbot entry: %v", err)
+	}
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "https://app.catsco.cc/api/channel-agent-bindings/mobile-link", strings.NewReader(`{"agent_uid":43,"channel":"clawbot"}`))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp channelAgentMobileLinkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Entry.ID != clawBotEntry.ID || resp.Entry.Channel != "weixin_clawbot" {
+		t.Fatalf("expected clawbot entry, got %+v want id=%d", resp.Entry.ChannelAgentEntry, clawBotEntry.ID)
+	}
+	if resp.QRKind != "weixin_clawbot_entry" || !strings.Contains(resp.QRValue, "scene="+url.QueryEscape(resp.SceneKey)) {
+		t.Fatalf("unexpected clawbot QR metadata: %+v", resp)
+	}
+	if resp.Entry.ClawBotEntryStatus == nil || !resp.Entry.ClawBotEntryStatus.Ready {
+		t.Fatalf("unexpected clawbot status: %+v", resp.Entry.ClawBotEntryStatus)
+	}
+	if wrong, _, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin", "", false); err != nil || wrong != nil {
+		t.Fatalf("official channel must not resolve clawbot link, entry=%+v err=%v", wrong, err)
+	}
+	resolved, canonicalUID, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin_clawbot", "", false)
+	if err != nil || resolved == nil || resolved.ID != clawBotEntry.ID || canonicalUID != 9 {
+		t.Fatalf("resolve clawbot mobile link entry=%+v canonical=%d err=%v", resolved, canonicalUID, err)
 	}
 }
 
@@ -995,6 +1075,42 @@ func TestChannelAgentEntryRejectsNonOwner(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelAgentEntryKeepsWeixinOfficialAndClawBotSeparate(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	create := func(body string) channelAgentEntryResponse {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(body))
+		req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
+		rec := httptest.NewRecorder()
+		handler.HandleAgentEntries(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("create %s status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+		var payload struct {
+			Entry channelAgentEntryResponse `json:"entry"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode create response: %v", err)
+		}
+		return payload.Entry
+	}
+
+	official := create(`{"agent_uid":43,"channel":"weixin"}`)
+	clawBot := create(`{"agent_uid":43,"channel":"weixin_clawbot"}`)
+	clawBotAgain := create(`{"agent_uid":43,"channel":"clawbot"}`)
+
+	if official.ID == clawBot.ID || official.Channel != "weixin" || clawBot.Channel != "weixin_clawbot" {
+		t.Fatalf("entries should be separate official=%+v clawbot=%+v", official.ChannelAgentEntry, clawBot.ChannelAgentEntry)
+	}
+	if clawBotAgain.ID != clawBot.ID || clawBotAgain.Channel != "weixin_clawbot" {
+		t.Fatalf("clawbot alias should reuse clawbot entry, got %+v want id=%d", clawBotAgain.ChannelAgentEntry, clawBot.ID)
 	}
 }
 

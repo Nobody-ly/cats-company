@@ -1215,6 +1215,38 @@ func TestFeishuEntryResponseUsesOAuthShortLinkForQRCode(t *testing.T) {
 	}
 }
 
+func TestClawBotEntryResponseRequiresEntryTemplate(t *testing.T) {
+	handler := NewChannelAgentBindingHandler(newChannelAgentTestStore(), nil)
+	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/agent-entries", nil)
+	resp := handler.entryResponse(req, &types.ChannelAgentEntry{
+		SceneKey: "scene-clawbot",
+		Channel:  "weixin_clawbot",
+	})
+	if resp.ChannelQRURL != "" || resp.QRValue != "" || resp.QRKind != "weixin_clawbot_unconfigured" {
+		t.Fatalf("clawbot entry should not expose web qr without template: %+v", resp)
+	}
+	if resp.ClawBotEntryStatus == nil || resp.ClawBotEntryStatus.Ready || resp.ClawBotEntryStatus.Status != "missing_entry_template" {
+		t.Fatalf("unexpected clawbot status: %+v", resp.ClawBotEntryStatus)
+	}
+}
+
+func TestClawBotEntryResponseUsesConfiguredTemplate(t *testing.T) {
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ENTRY_URL_TEMPLATE", "weixin://clawbot/open?scene={scene_key}&entry={entry_url_encoded}")
+	handler := NewChannelAgentBindingHandler(newChannelAgentTestStore(), nil)
+	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/agent-entries", nil)
+	resp := handler.entryResponse(req, &types.ChannelAgentEntry{
+		SceneKey: "scene-clawbot",
+		Channel:  "weixin_clawbot",
+	})
+	want := "weixin://clawbot/open?scene=scene-clawbot&entry=https%3A%2F%2Fapp.catsco.cc%2Fe%2Fscene-clawbot"
+	if resp.ChannelQRURL != want || resp.QRValue != want || resp.QRKind != "weixin_clawbot_entry" {
+		t.Fatalf("unexpected clawbot qr metadata: %+v want=%s", resp, want)
+	}
+	if resp.ClawBotEntryStatus == nil || !resp.ClawBotEntryStatus.Ready || resp.ClawBotEntryStatus.NativeURL != want {
+		t.Fatalf("unexpected clawbot status: %+v", resp.ClawBotEntryStatus)
+	}
+}
+
 func TestFeishuEntryResponseRejectsNativeEntryForAppIDMismatch(t *testing.T) {
 	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
 	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
