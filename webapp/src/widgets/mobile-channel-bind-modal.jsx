@@ -73,7 +73,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
       return '微信 ClawBot 授权二维码暂时不可用，请稍后刷新重试。';
     }
     if (channel === 'weixin_clawbot') {
-      return '扫码会完成微信 ClawBot 授权；它不会像公众号一样直接进入该机器人聊天框，之后请在微信里打开 ClawBot 对话继续使用。';
+      return '扫码会进入微信 ClawBot 授权流程；它不会像公众号一样直接进入该机器人聊天框，之后请在微信里打开 ClawBot 对话继续使用。';
     }
     if (isGroupTarget) {
       return `扫码后会把你的${activeChannel.displayName}身份绑定到当前 CatsCo 账号，之后可直接在移动端进入这个群聊。`;
