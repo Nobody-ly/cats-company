@@ -20,6 +20,7 @@ type ClientMessage struct {
 	Note      *MsgClientNote   `json:"note,omitempty"`
 	Friend    *MsgClientFriend `json:"friend,omitempty"`
 	DeviceRPC *MsgDeviceRPC    `json:"device_rpc,omitempty"`
+	ThinToolRPC *MsgThinToolRPC `json:"thin_tool_rpc,omitempty"`
 }
 
 // ServerMessage is the top-level server-to-client message envelope.
@@ -31,6 +32,7 @@ type ServerMessage struct {
 	Info      *MsgServerInfo   `json:"info,omitempty"`
 	Friend    *MsgServerFriend `json:"friend,omitempty"`
 	DeviceRPC *MsgDeviceRPC    `json:"device_rpc,omitempty"`
+	ThinToolRPC *MsgThinToolRPC `json:"thin_tool_rpc,omitempty"`
 }
 
 // --- Client messages ---
@@ -149,6 +151,24 @@ type MsgDeviceRPC struct {
 type MsgDeviceRPCError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// MsgThinToolRPC carries a direct tool request/result between two connected
+// runtimes. Cats Company only routes this message; tool permissions, argument
+// validity, and execution errors are returned by the target runtime as-is.
+type MsgThinToolRPC struct {
+	ID                string                 `json:"id,omitempty"`
+	Type              string                 `json:"type"` // "request" or "result"
+	RequestID         string                 `json:"request_id"`
+	TargetOwnerUserID string                 `json:"target_owner_user_id,omitempty"`
+	TargetDeviceID    string                 `json:"target_device_id,omitempty"`
+	DeviceID          string                 `json:"device_id,omitempty"`
+	ToolName          string                 `json:"tool_name,omitempty"`
+	Payload           map[string]interface{} `json:"payload,omitempty"`
+	Result            interface{}            `json:"result,omitempty"`
+	Error             *MsgDeviceRPCError     `json:"error,omitempty"`
+	CreatedAt         int64                  `json:"created_at,omitempty"`
+	ExpiresAt         int64                  `json:"expires_at,omitempty"`
 }
 
 // --- Server messages ---

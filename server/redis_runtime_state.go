@@ -182,6 +182,26 @@ func (s *RedisRuntimeState) deliverDeviceRPC(route runtimeRoute, msg *MsgDeviceR
 	return s.client.Publish(s.ctx, s.nodeInboxChannel(route.NodeID), payload).Err() == nil
 }
 
+func (s *RedisRuntimeState) deliverThinToolRPC(route runtimeRoute, msg *MsgThinToolRPC, now time.Time) bool {
+	if s == nil || s.client == nil || msg == nil || route.NodeID == "" || route.ConnectionID == "" {
+		return false
+	}
+	if !s.routeConnected(route, now) {
+		return false
+	}
+	if hub := s.localHub(route.NodeID); hub != nil {
+		return hub.sendThinToolRPCToLocalRoute(route, msg)
+	}
+	payload, err := json.Marshal(redisThinToolRPCEnvelope{
+		Route: redisRouteFromRuntime(route),
+		Msg:   msg,
+	})
+	if err != nil {
+		return false
+	}
+	return s.client.Publish(s.ctx, s.nodeInboxChannel(route.NodeID), payload).Err() == nil
+}
+
 func (s *RedisRuntimeState) routeConnected(route runtimeRoute, now time.Time) bool {
 	if s == nil || s.client == nil || !route.validAt(now) {
 		return false
@@ -896,8 +916,8 @@ func (s *RedisRuntimeState) runDeviceRPCInbox(nodeID string) {
 			if !ok {
 				return
 			}
-			var envelope redisDeviceRPCEnvelope
-			if err := json.Unmarshal([]byte(item.Payload), &envelope); err != nil || envelope.Msg == nil {
+			var envelope redisRuntimeEnvelope
+			if err := json.Unmarshal([]byte(item.Payload), &envelope); err != nil {
 				continue
 			}
 			route := envelope.Route.toRuntimeRoute()
@@ -905,7 +925,11 @@ func (s *RedisRuntimeState) runDeviceRPCInbox(nodeID string) {
 				continue
 			}
 			if hub := s.localHub(nodeID); hub != nil {
-				hub.sendDeviceRPCToLocalRoute(route, envelope.Msg)
+				if envelope.DeviceRPC != nil || envelope.Msg != nil {
+					hub.sendDeviceRPCToLocalRoute(route, firstDeviceRPCMessage(envelope.DeviceRPC, envelope.Msg))
+				} else if envelope.ThinToolRPC != nil {
+					hub.sendThinToolRPCToLocalRoute(route, envelope.ThinToolRPC)
+				}
 			}
 		}
 	}
@@ -1219,6 +1243,28 @@ func (l redisBotBodyLease) toRuntimeLease() botBodyLease {
 type redisDeviceRPCEnvelope struct {
 	Route redisRuntimeRoute `json:"route"`
 	Msg   *MsgDeviceRPC     `json:"msg"`
+	DeviceRPC *MsgDeviceRPC `json:"device_rpc,omitempty"`
+}
+
+type redisThinToolRPCEnvelope struct {
+	Route redisRuntimeRoute `json:"route"`
+	Msg   *MsgThinToolRPC   `json:"thin_tool_rpc"`
+}
+
+type redisRuntimeEnvelope struct {
+	Route       redisRuntimeRoute `json:"route"`
+	Msg         *MsgDeviceRPC     `json:"msg,omitempty"`
+	DeviceRPC   *MsgDeviceRPC     `json:"device_rpc,omitempty"`
+	ThinToolRPC *MsgThinToolRPC   `json:"thin_tool_rpc,omitempty"`
+}
+
+func firstDeviceRPCMessage(values ...*MsgDeviceRPC) *MsgDeviceRPC {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 type redisDeviceRPCPending struct {

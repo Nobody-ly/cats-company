@@ -801,6 +801,7 @@ func (h *Hub) runDeviceRPCTimeouts() {
 			now = h.deviceRPC.now()
 		}
 		h.expireDeviceRPCRequests(now)
+		h.expireThinToolRPCRequests(now)
 	}
 }
 

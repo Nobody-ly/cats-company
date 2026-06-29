@@ -43,6 +43,7 @@ type Hub struct {
 	deviceRevokes *deviceConnectorRevocationList
 	deviceClients map[int64]map[string]*Client
 	deviceRPC     *deviceRPCRouter
+	thinToolRPC  *thinToolRPCRouter
 	channelOut    *ChannelOutboundDispatcher
 }
 
@@ -99,6 +100,7 @@ func NewHubWithRuntime(db store.Store, rl *RateLimiter, shared sharedRuntimeStat
 		deviceRevokes: newDeviceConnectorRevocationList(),
 		deviceClients: make(map[int64]map[string]*Client),
 		deviceRPC:     newDeviceRPCRouter(defaultDeviceRPCTTL).withSharedRuntime(shared),
+		thinToolRPC:  newThinToolRPCRouter(defaultThinToolRPCTTL),
 	}
 	if shared != nil {
 		shared.registerRuntimeNode(nodeID, hub)
@@ -878,6 +880,8 @@ func (h *Hub) handleMessage(client *Client, msg *ClientMessage) {
 		h.handleGet(client, msg.Get)
 	case msg.DeviceRPC != nil:
 		h.handleDeviceRPC(client, msg.DeviceRPC)
+	case msg.ThinToolRPC != nil:
+		h.handleThinToolRPC(client, msg.ThinToolRPC)
 	}
 }
 
@@ -895,6 +899,12 @@ func deviceConnectorMessageAllowed(msg *ClientMessage) bool {
 	if msg.DeviceRPC != nil {
 		actions++
 		if strings.ToLower(strings.TrimSpace(msg.DeviceRPC.Type)) != deviceRPCTypeResult {
+			return false
+		}
+	}
+	if msg.ThinToolRPC != nil {
+		actions++
+		if strings.ToLower(strings.TrimSpace(msg.ThinToolRPC.Type)) != thinToolRPCTypeResult {
 			return false
 		}
 	}
@@ -917,7 +927,7 @@ func (h *Hub) handleHi(client *Client, displayName string, msg *MsgClientHi) {
 	params := map[string]interface{}{
 		"ver":      "0.1.0",
 		"build":    "catscompany",
-		"features": []string{"client_msg_id", "device_rpc"},
+		"features": []string{"client_msg_id", "device_rpc", "thin_tool_rpc"},
 		"uid":      formatUID(client.uid),
 		"name":     displayName,
 	}
