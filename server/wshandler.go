@@ -1678,12 +1678,14 @@ func (h *Hub) broadcastToGroupWithMentions(groupID int64, msg *ServerMessage, ex
 
 		out := msg
 		if msg != nil && msg.Data != nil && senderUID > 0 {
+			metadata := withCatscoIdentityMetadata(
+				msg.Data.Metadata,
+				h.buildCatscoIdentityMetadata(senderUID, m.UserID, msg.Data.Topic, int64(msg.Data.SeqID), normalizeContentText(msg.Data.Content), catscoIdentityMetadataOptions{SourceMetadata: msg.Data.Metadata}),
+			)
+			metadata = withXiaobaRuntimeMetadata(metadata, h.buildXiaobaRuntimeMetadata(senderUID, m.UserID, msg.Data.Topic))
 			out = cloneDataMessageWithMetadata(
 				msg,
-				withCatscoIdentityMetadata(
-					msg.Data.Metadata,
-					h.buildCatscoIdentityMetadata(senderUID, m.UserID, msg.Data.Topic, int64(msg.Data.SeqID), normalizeContentText(msg.Data.Content), catscoIdentityMetadataOptions{SourceMetadata: msg.Data.Metadata}),
-				),
+				metadata,
 			)
 		}
 		h.SendToUser(m.UserID, out)

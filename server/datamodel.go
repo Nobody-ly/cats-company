@@ -50,6 +50,7 @@ type MsgClientHiDevice struct {
 	DisplayName    string   `json:"display_name,omitempty"`
 	BodyID         string   `json:"body_id,omitempty"`
 	InstallationID string   `json:"installation_id,omitempty"`
+	OS             string   `json:"os,omitempty"`
 	Status         string   `json:"status,omitempty"`
 	Capabilities   []string `json:"capabilities,omitempty"`
 }

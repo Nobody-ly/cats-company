@@ -24,6 +24,7 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	device, err := registry.register(7, RegisterUserDeviceRequest{
 		DeviceID:       " laptop-main ",
 		DisplayName:    " Alice Laptop ",
+		OS:             "win32",
 		BodyID:         " body-main ",
 		InstallationID: " install-main ",
 		Capabilities:   []string{"read_file", "unknown", "resolve_common_directory", "write_file", "edit_file", "send_file", "read_file"},
@@ -33,6 +34,9 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	}
 	if device.DeviceID != "laptop-main" || device.DisplayName != "Alice Laptop" {
 		t.Fatalf("unexpected registered device: %#v", device)
+	}
+	if device.OS != "windows" {
+		t.Fatalf("device OS = %q, want windows", device.OS)
 	}
 	if got := device.Capabilities; len(got) != 5 || got[0] != DeviceGrantReadFile || got[1] != DeviceGrantResolveDir || got[2] != DeviceGrantWriteFile || got[3] != DeviceGrantEditFile || got[4] != DeviceGrantSendFile {
 		t.Fatalf("unexpected capabilities: %#v", got)
@@ -323,6 +327,7 @@ func TestBotRecipientIdentityIncludesCurrentActorDeviceGrants(t *testing.T) {
 	device, err := hub.userDevices.register(7, RegisterUserDeviceRequest{
 		DeviceID:       "alice-laptop",
 		DisplayName:    "Alice Laptop",
+		OS:             "windows",
 		BodyID:         "body-device",
 		InstallationID: "install-device",
 		Capabilities:   []string{"read_file", "send_file"},
@@ -376,6 +381,21 @@ func TestBotRecipientIdentityIncludesCurrentActorDeviceGrants(t *testing.T) {
 	if !ok || selectedDevice["deviceId"] != "alice-laptop" {
 		t.Fatalf("unexpected selected device: %#v", selection["selectedDevice"])
 	}
+	runtime := metadataMapFromServerMessage(t, &msg, "xiaoba_runtime")
+	if runtime["schema"] != "xiaoba.runtime.v1" {
+		t.Fatalf("unexpected xiaoba runtime schema: %#v", runtime)
+	}
+	devices, ok := runtime["devices"].([]interface{})
+	if !ok || len(devices) != 1 {
+		t.Fatalf("xiaoba runtime devices = %#v, want one device", runtime["devices"])
+	}
+	runtimeDevice, ok := devices[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("xiaoba runtime device = %#v, want object", devices[0])
+	}
+	if runtimeDevice["userId"] != "usr7" || runtimeDevice["userName"] != "Alice" || runtimeDevice["deviceId"] != "alice-laptop" || runtimeDevice["label"] != "Alice Laptop" || runtimeDevice["os"] != "windows" {
+		t.Fatalf("unexpected xiaoba runtime device: %#v", runtimeDevice)
+	}
 
 	humanMsg := hub.messageForRecipient(7, 50, "p2p_7_50", 0, payload, 100)
 	humanIdentity := metadataMapFromServerMessage(t, humanMsg, "catsco_identity")
@@ -384,6 +404,63 @@ func TestBotRecipientIdentityIncludesCurrentActorDeviceGrants(t *testing.T) {
 	}
 	if _, ok := humanIdentity["device_selection"]; ok {
 		t.Fatalf("human recipient should not receive device selection: %#v", humanIdentity["device_selection"])
+	}
+	if _, ok := humanMsg.Data.Metadata["xiaoba_runtime"]; ok {
+		t.Fatalf("human recipient should not receive xiaoba runtime facts: %#v", humanMsg.Data.Metadata["xiaoba_runtime"])
+	}
+}
+
+func TestXiaobaRuntimeMetadataIncludesGroupHumanReadyDevices(t *testing.T) {
+	store := &identityMessageStore{
+		users: map[int64]*types.User{
+			42: {ID: 42, Username: "agent", DisplayName: "Agent", AccountType: types.AccountBot},
+		},
+		groupMembers: []*types.GroupMember{
+			{GroupID: 80, UserID: 7, Username: "alice", DisplayName: "Alice"},
+			{GroupID: 80, UserID: 9, Username: "bob", DisplayName: "Bob"},
+			{GroupID: 80, UserID: 42, Username: "agent", DisplayName: "Agent", IsBot: true},
+		},
+	}
+	hub := NewHub(store, nil)
+	hub.userDevices.now = func() time.Time { return time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC) }
+	aliceDevice, err := hub.userDevices.register(7, RegisterUserDeviceRequest{
+		DeviceID:    "alice-laptop",
+		DisplayName: "Alice Laptop",
+		OS:          "windows",
+	})
+	if err != nil {
+		t.Fatalf("register Alice device: %v", err)
+	}
+	bobDevice, err := hub.userDevices.register(9, RegisterUserDeviceRequest{
+		DeviceID:    "bob-mac",
+		DisplayName: "Bob Mac",
+		OS:          "darwin",
+	})
+	if err != nil {
+		t.Fatalf("register Bob device: %v", err)
+	}
+	aliceClient := &Client{uid: 7, accountType: types.AccountHuman, deviceOwnerUID: 7, deviceID: "alice-laptop", send: make(chan []byte, 1)}
+	bobClient := &Client{uid: 9, accountType: types.AccountHuman, deviceOwnerUID: 9, deviceID: "bob-mac", send: make(chan []byte, 1)}
+	botClient := &Client{uid: 42, accountType: types.AccountBot, bodyID: "body-agent", send: make(chan []byte, 1)}
+	hub.addClient(aliceClient)
+	hub.addClient(bobClient)
+	hub.addClient(botClient)
+	hub.bindDeviceClient(7, aliceDevice, aliceClient)
+	hub.bindDeviceClient(9, bobDevice, bobClient)
+
+	runtime := hub.buildXiaobaRuntimeMetadata(7, 42, "grp_80")
+	if runtime["schema"] != "xiaoba.runtime.v1" {
+		t.Fatalf("unexpected xiaoba runtime schema: %#v", runtime)
+	}
+	devices, ok := runtime["devices"].([]map[string]interface{})
+	if !ok || len(devices) != 2 {
+		t.Fatalf("runtime devices = %#v, want two devices", runtime["devices"])
+	}
+	if devices[0]["userId"] != "usr7" || devices[0]["userName"] != "Alice" || devices[0]["deviceId"] != "alice-laptop" || devices[0]["os"] != "windows" {
+		t.Fatalf("unexpected Alice runtime device: %#v", devices[0])
+	}
+	if devices[1]["userId"] != "usr9" || devices[1]["userName"] != "Bob" || devices[1]["deviceId"] != "bob-mac" || devices[1]["os"] != "macos" {
+		t.Fatalf("unexpected Bob runtime device: %#v", devices[1])
 	}
 }
 
@@ -956,6 +1033,9 @@ func TestHistoryMessagesDoNotReissueDeviceGrantsForBotRecipient(t *testing.T) {
 	}
 	if _, ok := identity["device_selection"]; ok {
 		t.Fatalf("history message should not receive executable device selection: %#v", identity["device_selection"])
+	}
+	if _, ok := msg.Data.Metadata["xiaoba_runtime"]; ok {
+		t.Fatalf("history message should not receive xiaoba runtime facts: %#v", msg.Data.Metadata["xiaoba_runtime"])
 	}
 	permissions, ok := identity["permissions"].(map[string]interface{})
 	if !ok {

@@ -369,6 +369,7 @@ func (s *RedisRuntimeState) registerUserDevice(ownerUID int64, req RegisterUserD
 		OwnerUserID:    formatUID(ownerUID),
 		DeviceID:       deviceID,
 		DisplayName:    normalizeDeviceText(req.DisplayName),
+		OS:             normalizeDeviceOS(req.OS),
 		BodyID:         normalizeDeviceText(req.BodyID),
 		InstallationID: normalizeDeviceText(req.InstallationID),
 		Status:         normalizeDeviceStatus(req.Status),
