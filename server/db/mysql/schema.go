@@ -471,11 +471,9 @@ CREATE TABLE IF NOT EXISTS weixin_clawbot_tokens (
     token_last4 VARCHAR(8) NOT NULL DEFAULT '',
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     owner_uid BIGINT NOT NULL,
-    agent_uid BIGINT NULL DEFAULT NULL,
-    entry_id BIGINT NULL DEFAULT NULL,
-    canonical_uid BIGINT NOT NULL,
-    group_id BIGINT NULL DEFAULT NULL,
-    topic_id VARCHAR(128) NOT NULL DEFAULT '',
+    ilink_bot_id VARCHAR(128) NOT NULL DEFAULT '',
+    ilink_user_id VARCHAR(128) NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL,
     source_scene_key VARCHAR(64) NOT NULL DEFAULT '',
     get_updates_buf TEXT NOT NULL,
     context_tokens JSON NOT NULL,
@@ -486,13 +484,9 @@ CREATE TABLE IF NOT EXISTS weixin_clawbot_tokens (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_weixin_clawbot_tokens_active (status, updated_at),
-    INDEX idx_weixin_clawbot_tokens_agent (agent_uid, canonical_uid, status),
-    INDEX idx_weixin_clawbot_tokens_group (group_id, topic_id, status),
-    FOREIGN KEY (owner_uid) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (agent_uid) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (entry_id) REFERENCES channel_agent_entries(id) ON DELETE SET NULL,
-    FOREIGN KEY (canonical_uid) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (group_id) REFERENCES ` + "`groups`" + `(id) ON DELETE CASCADE
+    INDEX idx_weixin_clawbot_tokens_owner (owner_uid, status),
+    INDEX idx_weixin_clawbot_tokens_ilink (ilink_bot_id, ilink_user_id),
+    FOREIGN KEY (owner_uid) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 

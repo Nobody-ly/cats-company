@@ -374,11 +374,9 @@ type WeixinClawBotToken struct {
 	TokenLast4     string                          `json:"token_last4,omitempty"`
 	Status         string                          `json:"status"`
 	OwnerUID       int64                           `json:"owner_uid"`
-	AgentUID       int64                           `json:"agent_uid,omitempty"`
-	EntryID        int64                           `json:"entry_id,omitempty"`
-	CanonicalUID   int64                           `json:"canonical_uid"`
-	GroupID        int64                           `json:"group_id,omitempty"`
-	TopicID        string                          `json:"topic_id,omitempty"`
+	ILinkBotID     string                          `json:"ilink_bot_id,omitempty"`
+	ILinkUserID    string                          `json:"ilink_user_id,omitempty"`
+	BaseURL        string                          `json:"base_url,omitempty"`
 	SourceSceneKey string                          `json:"source_scene_key,omitempty"`
 	GetUpdatesBuf  string                          `json:"-"`
 	ContextTokens  map[string]WeixinClawBotContext `json:"-"`

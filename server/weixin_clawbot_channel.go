@@ -50,11 +50,14 @@ type weixinClawBotAPI interface {
 }
 
 type weixinClawBotQRCodeStatus struct {
-	Ret      int    `json:"ret,omitempty"`
-	ErrCode  int    `json:"errcode,omitempty"`
-	ErrMsg   string `json:"errmsg,omitempty"`
-	Status   string `json:"status,omitempty"`
-	BotToken string `json:"bot_token,omitempty"`
+	Ret         int    `json:"ret,omitempty"`
+	ErrCode     int    `json:"errcode,omitempty"`
+	ErrMsg      string `json:"errmsg,omitempty"`
+	Status      string `json:"status,omitempty"`
+	BotToken    string `json:"bot_token,omitempty"`
+	ILinkBotID  string `json:"ilink_bot_id,omitempty"`
+	ILinkUserID string `json:"ilink_user_id,omitempty"`
+	BaseURL     string `json:"baseurl,omitempty"`
 }
 
 type weixinClawBotUpdates struct {
@@ -207,7 +210,7 @@ func (h *WeixinClawBotHandler) HandleQRCodeStatus(w http.ResponseWriter, r *http
 		"token_received": strings.TrimSpace(status.BotToken) != "",
 	}
 	if strings.EqualFold(strings.TrimSpace(status.Status), "confirmed") && strings.TrimSpace(status.BotToken) != "" {
-		token, target, saveErr := h.saveAuthorizedTokenForScene(r, sceneKey, status.BotToken)
+		token, target, saveErr := h.saveAuthorizedTokenForScene(r, sceneKey, status)
 		if saveErr != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": saveErr.Error()})
 			return
@@ -222,7 +225,7 @@ func (h *WeixinClawBotHandler) HandleQRCodeStatus(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, sceneKey string, botToken string) (*types.WeixinClawBotToken, string, error) {
+func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, sceneKey string, status *weixinClawBotQRCodeStatus) (*types.WeixinClawBotToken, string, error) {
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
 	if !ok {
 		return nil, "", errors.New("channel binding store not configured")
@@ -231,13 +234,23 @@ func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, scen
 	if canonicalUID <= 0 {
 		return nil, "", errors.New("login required")
 	}
+	if status == nil || strings.TrimSpace(status.BotToken) == "" {
+		return nil, "", errors.New("ClawBot authorization did not return bot_token")
+	}
+	channelUserID := strings.TrimSpace(status.ILinkUserID)
+	if channelUserID == "" {
+		return nil, "", errors.New("ClawBot authorization did not return ilink_user_id")
+	}
+	botToken := strings.TrimSpace(status.BotToken)
 	tokenHash := hashWeixinClawBotToken(botToken)
 	token := &types.WeixinClawBotToken{
 		TokenHash:      tokenHash,
-		BotToken:       strings.TrimSpace(botToken),
-		TokenLast4:     last4(strings.TrimSpace(botToken)),
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
 		Status:         types.WeixinClawBotTokenActive,
-		CanonicalUID:   canonicalUID,
+		ILinkBotID:     strings.TrimSpace(status.ILinkBotID),
+		ILinkUserID:    channelUserID,
+		BaseURL:        strings.TrimSpace(status.BaseURL),
 		SourceSceneKey: sceneKey,
 		ContextTokens:  map[string]types.WeixinClawBotContext{},
 	}
@@ -256,17 +269,32 @@ func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, scen
 		if entry == nil || resolvedCanonicalUID != canonicalUID {
 			return nil, "", errors.New("ClawBot mobile link is no longer valid")
 		}
-		if existing, err := bindings.GetWeixinClawBotTokenByHash(tokenHash); err != nil {
-			return nil, "", err
-		} else if existing != nil && (existing.CanonicalUID != canonicalUID || existing.AgentUID != entry.AgentUID || existing.EntryID != entry.ID) {
-			return nil, "", errors.New("ClawBot bot_token is already bound to another CatsCo user or entry")
-		}
 		token.OwnerUID = entry.OwnerUID
-		token.AgentUID = entry.AgentUID
-		token.EntryID = entry.ID
 		saved, err := bindings.UpsertWeixinClawBotToken(token)
 		if err != nil {
 			return nil, "", err
+		}
+		actorUID, err := ensureChannelActor(h.db, "weixin_clawbot", tokenHash, channelUserID)
+		if err != nil {
+			return nil, "", err
+		}
+		binding, _, err := bindOrRequestChannelAgentAccessWithCanonical(
+			h.db,
+			bindings,
+			entry,
+			actorUID,
+			"weixin_clawbot",
+			tokenHash,
+			channelUserID,
+			"",
+			"p2p",
+			canonicalUID,
+		)
+		if err != nil {
+			return nil, "", err
+		}
+		if binding == nil {
+			return nil, "", errors.New("ClawBot binding was not created")
 		}
 		_, _, _ = resolveChannelIdentityMobileLink(h.db, sceneKey, "weixin_clawbot", "", true)
 		return saved, "agent", nil
@@ -279,20 +307,30 @@ func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, scen
 		if link == nil || link.CanonicalUID != canonicalUID {
 			return nil, "", errors.New("ClawBot group mobile link not found or expired")
 		}
-		if existing, err := bindings.GetWeixinClawBotTokenByHash(tokenHash); err != nil {
-			return nil, "", err
-		} else if existing != nil && (existing.CanonicalUID != canonicalUID || existing.GroupID != link.GroupID || strings.TrimSpace(existing.TopicID) != strings.TrimSpace(link.TopicID)) {
-			return nil, "", errors.New("ClawBot bot_token is already bound to another CatsCo user or group")
-		}
 		ownerUID := link.CanonicalUID
 		if group != nil && group.OwnerID > 0 {
 			ownerUID = group.OwnerID
 		}
 		token.OwnerUID = ownerUID
-		token.GroupID = link.GroupID
-		token.TopicID = link.TopicID
 		saved, err := bindings.UpsertWeixinClawBotToken(token)
 		if err != nil {
+			return nil, "", err
+		}
+		actorUID, err := ensureChannelActor(h.db, "weixin_clawbot", tokenHash, channelUserID)
+		if err != nil {
+			return nil, "", err
+		}
+		if _, err := bindings.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+			Channel:                 "weixin_clawbot",
+			ChannelAppID:            tokenHash,
+			ChannelUserID:           channelUserID,
+			ChannelConversationType: "p2p",
+			ActorUID:                actorUID,
+			CanonicalUID:            canonicalUID,
+			GroupID:                 link.GroupID,
+			TopicID:                 link.TopicID,
+			Status:                  types.ChannelAgentBindingActive,
+		}); err != nil {
 			return nil, "", err
 		}
 		_, _, _ = resolveChannelGroupMobileLink(h.db, sceneKey, "weixin_clawbot", "", true)
@@ -467,52 +505,35 @@ func (h *WeixinClawBotHandler) handleUpdateMessage(ctx context.Context, token *t
 	if text == "" {
 		return nil
 	}
-	if token.GroupID > 0 && strings.TrimSpace(token.TopicID) != "" {
-		return h.deliverGroupMessage(ctx, token, msg, text)
+	if delivered, err := h.deliverGroupMessage(ctx, token, msg, text); delivered || err != nil {
+		return err
 	}
 	return h.deliverAgentMessage(ctx, token, msg, text)
 }
 
 func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, text string) error {
-	if token.AgentUID <= 0 || token.EntryID <= 0 {
-		return errors.New("weixin clawbot token is not bound to an agent")
-	}
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
 	if !ok {
 		return errors.New("channel binding store not configured")
 	}
-	entry, err := bindings.GetChannelAgentEntryByID(token.EntryID)
-	if err != nil || entry == nil {
-		return errors.New("weixin clawbot entry is not available")
-	}
-	actorUID, err := ensureChannelActor(h.db, "weixin_clawbot", token.TokenHash, msg.FromUserID)
-	if err != nil {
-		return err
-	}
-	binding, _, err := bindOrRequestChannelAgentAccessWithCanonical(
-		h.db,
-		bindings,
-		entry,
-		actorUID,
-		"weixin_clawbot",
-		token.TokenHash,
-		msg.FromUserID,
-		"",
-		"p2p",
-		token.CanonicalUID,
-	)
+	binding, err := bindings.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:                 "weixin_clawbot",
+		ChannelAppID:            token.TokenHash,
+		ChannelUserID:           strings.TrimSpace(msg.FromUserID),
+		ChannelConversationType: "p2p",
+	})
 	if err != nil {
 		return err
 	}
 	if binding == nil {
-		return errors.New("weixin clawbot binding was not created")
+		return errors.New("weixin clawbot message user is not bound to an agent")
 	}
 	if _, err := bindings.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
 		Channel:                 "weixin_clawbot",
 		ChannelAppID:            token.TokenHash,
 		ChannelUserID:           strings.TrimSpace(msg.FromUserID),
 		ChannelConversationType: "p2p",
-		ActorUID:                actorUID,
+		ActorUID:                binding.ActorUID,
 		AgentUID:                binding.AgentUID,
 		Source:                  "weixin_clawbot_getupdates",
 	}); err != nil {
@@ -521,7 +542,7 @@ func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *t
 	return deliverInboundChannelTextToAgent(
 		h.db,
 		h.hub,
-		actorUID,
+		binding.ActorUID,
 		binding.AgentUID,
 		text,
 		weixinClawBotClientMsgID(token, msg),
@@ -530,39 +551,36 @@ func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *t
 	)
 }
 
-func (h *WeixinClawBotHandler) deliverGroupMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, text string) error {
+func (h *WeixinClawBotHandler) deliverGroupMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, text string) (bool, error) {
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
 	if !ok {
-		return errors.New("channel binding store not configured")
+		return false, errors.New("channel binding store not configured")
 	}
-	actorUID, err := ensureChannelActor(h.db, "weixin_clawbot", token.TokenHash, msg.FromUserID)
-	if err != nil {
-		return err
-	}
-	groupBinding, err := bindings.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+	groupBinding, err := bindings.ResolveChannelGroupBinding(types.ChannelGroupBindingQuery{
 		Channel:                 "weixin_clawbot",
 		ChannelAppID:            token.TokenHash,
 		ChannelUserID:           strings.TrimSpace(msg.FromUserID),
 		ChannelConversationType: "p2p",
-		ActorUID:                actorUID,
-		CanonicalUID:            token.CanonicalUID,
-		GroupID:                 token.GroupID,
-		TopicID:                 token.TopicID,
-		Status:                  types.ChannelAgentBindingActive,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return deliverInboundChannelTextToGroup(
+	if groupBinding == nil || groupBinding.Status != types.ChannelAgentBindingActive {
+		return false, nil
+	}
+	if err := deliverInboundChannelTextToGroup(
 		h.db,
 		h.hub,
-		token.CanonicalUID,
+		groupBinding.CanonicalUID,
 		groupBinding,
 		text,
 		weixinClawBotClientMsgID(token, msg),
 		"weixin_clawbot",
 		h.groupInboundMetadata(token, groupBinding, msg),
-	)
+	); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (h *WeixinClawBotHandler) inboundMetadata(token *types.WeixinClawBotToken, binding *types.ChannelAgentBinding, msg weixinClawBotMessage) map[string]interface{} {

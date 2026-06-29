@@ -11,13 +11,12 @@ import (
 )
 
 const weixinClawBotTokenColumns = `
-	id, token_hash, bot_token, token_last4, status, owner_uid, COALESCE(agent_uid, 0),
-	COALESCE(entry_id, 0), canonical_uid, COALESCE(group_id, 0), topic_id,
-	source_scene_key, get_updates_buf, context_tokens, last_poll_at, last_used_at,
+	id, token_hash, bot_token, token_last4, status, owner_uid, ilink_bot_id,
+	ilink_user_id, base_url, source_scene_key, get_updates_buf, context_tokens, last_poll_at, last_used_at,
 	last_error_at, last_error, created_at, updated_at`
 
 func (a *Adapter) UpsertWeixinClawBotToken(token *types.WeixinClawBotToken) (*types.WeixinClawBotToken, error) {
-	if token == nil || strings.TrimSpace(token.TokenHash) == "" || strings.TrimSpace(token.BotToken) == "" || token.OwnerUID <= 0 || token.CanonicalUID <= 0 {
+	if token == nil || strings.TrimSpace(token.TokenHash) == "" || strings.TrimSpace(token.BotToken) == "" || token.OwnerUID <= 0 {
 		return nil, fmt.Errorf("invalid weixin clawbot token")
 	}
 	status := strings.TrimSpace(token.Status)
@@ -31,20 +30,18 @@ func (a *Adapter) UpsertWeixinClawBotToken(token *types.WeixinClawBotToken) (*ty
 	var id int64
 	if err := a.db.QueryRow(
 		`INSERT INTO weixin_clawbot_tokens (
-		     token_hash, bot_token, token_last4, status, owner_uid, agent_uid, entry_id,
-		     canonical_uid, group_id, topic_id, source_scene_key, get_updates_buf, context_tokens
+		     token_hash, bot_token, token_last4, status, owner_uid, ilink_bot_id,
+		     ilink_user_id, base_url, source_scene_key, get_updates_buf, context_tokens
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
 		 ON CONFLICT (token_hash) DO UPDATE SET
 		     bot_token = EXCLUDED.bot_token,
 		     token_last4 = EXCLUDED.token_last4,
 		     status = EXCLUDED.status,
 		     owner_uid = EXCLUDED.owner_uid,
-		     agent_uid = EXCLUDED.agent_uid,
-		     entry_id = EXCLUDED.entry_id,
-		     canonical_uid = EXCLUDED.canonical_uid,
-		     group_id = EXCLUDED.group_id,
-		     topic_id = EXCLUDED.topic_id,
+		     ilink_bot_id = EXCLUDED.ilink_bot_id,
+		     ilink_user_id = EXCLUDED.ilink_user_id,
+		     base_url = EXCLUDED.base_url,
 		     source_scene_key = EXCLUDED.source_scene_key,
 		     context_tokens = CASE WHEN EXCLUDED.context_tokens = '{}'::jsonb THEN weixin_clawbot_tokens.context_tokens ELSE EXCLUDED.context_tokens END,
 		     last_error = '',
@@ -55,11 +52,9 @@ func (a *Adapter) UpsertWeixinClawBotToken(token *types.WeixinClawBotToken) (*ty
 		strings.TrimSpace(token.TokenLast4),
 		status,
 		token.OwnerUID,
-		pgNullableInt64(token.AgentUID),
-		pgNullableInt64(token.EntryID),
-		token.CanonicalUID,
-		pgNullableInt64(token.GroupID),
-		strings.TrimSpace(token.TopicID),
+		strings.TrimSpace(token.ILinkBotID),
+		strings.TrimSpace(token.ILinkUserID),
+		strings.TrimSpace(token.BaseURL),
 		strings.TrimSpace(token.SourceSceneKey),
 		strings.TrimSpace(token.GetUpdatesBuf),
 		string(contextJSON),
@@ -183,11 +178,9 @@ func scanWeixinClawBotToken(row weixinClawBotTokenScanner) (*types.WeixinClawBot
 		&token.TokenLast4,
 		&token.Status,
 		&token.OwnerUID,
-		&token.AgentUID,
-		&token.EntryID,
-		&token.CanonicalUID,
-		&token.GroupID,
-		&token.TopicID,
+		&token.ILinkBotID,
+		&token.ILinkUserID,
+		&token.BaseURL,
 		&token.SourceSceneKey,
 		&token.GetUpdatesBuf,
 		&contextRaw,
