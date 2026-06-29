@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -123,7 +124,9 @@ func (h *Hub) handleThinToolRPCRequest(client *Client, msg *MsgThinToolRPC) {
 	ownerUID := parseFormattedUID(msg.TargetOwnerUserID)
 	deviceID := strings.TrimSpace(msg.TargetDeviceID)
 	toolName := strings.TrimSpace(msg.ToolName)
+	log.Printf("[thin_tool_rpc] request received: request_id=%s msg_id=%s requester_uid=%s requester_conn=%s target_owner=%s target_device=%s tool=%s", requestID, msg.ID, formatUID(clientUID(client)), clientConnectionID(client), msg.TargetOwnerUserID, deviceID, toolName)
 	if ownerUID <= 0 || deviceID == "" || toolName == "" {
+		log.Printf("[thin_tool_rpc] request invalid target: request_id=%s target_owner=%s target_device=%s tool=%s", requestID, msg.TargetOwnerUserID, deviceID, toolName)
 		h.sendThinToolRPCResultToRequester(client, requestID, msg, "invalid_target", "thin_tool_rpc requires target_owner_user_id, target_device_id, and tool_name")
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID})
 		return
@@ -131,10 +134,12 @@ func (h *Hub) handleThinToolRPCRequest(client *Client, msg *MsgThinToolRPC) {
 
 	route, _ := h.findDeviceRPCTarget(ownerUID, UserDevice{DeviceID: deviceID})
 	if !route.validAt(nowForRoute(h)) || !h.routeConnected(route) {
+		log.Printf("[thin_tool_rpc] target unavailable: request_id=%s target_owner=%s target_device=%s route=%s route_connected=%t", requestID, formatUID(ownerUID), deviceID, describeRuntimeRoute(route), h.routeConnected(route))
 		h.sendThinToolRPCResultToRequester(client, requestID, msg, "target_device_unavailable", fmt.Sprintf("target device %s for %s is not online or has no route", deviceID, formatUID(ownerUID)))
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID})
 		return
 	}
+	log.Printf("[thin_tool_rpc] target route selected: request_id=%s target_owner=%s target_device=%s route=%s requester_route=%s", requestID, formatUID(ownerUID), deviceID, describeRuntimeRoute(route), describeRuntimeRoute(h.clientRoute(client)))
 
 	now := h.thinToolRPC.now()
 	expiresAt := now.Add(h.thinToolRPC.ttl)
@@ -166,17 +171,20 @@ func (h *Hub) handleThinToolRPCRequest(client *Client, msg *MsgThinToolRPC) {
 		createdAt:      now,
 		expiresAt:      expiresAt,
 	}) {
+		log.Printf("[thin_tool_rpc] request duplicate: request_id=%s target_owner=%s target_device=%s tool=%s", requestID, formatUID(ownerUID), deviceID, toolName)
 		h.sendThinToolRPCResultToRequester(client, requestID, msg, "request_id_duplicate", "thin_tool_rpc request_id is already pending")
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID})
 		return
 	}
 
 	if !h.sendThinToolRPCToRoute(route, &forward) {
+		log.Printf("[thin_tool_rpc] forward failed: request_id=%s target_owner=%s target_device=%s route=%s", requestID, formatUID(ownerUID), deviceID, describeRuntimeRoute(route))
 		h.thinToolRPC.finish(requestID)
 		h.sendThinToolRPCResultToRequester(client, requestID, msg, "target_device_unavailable", fmt.Sprintf("target device %s route disappeared before forwarding", deviceID))
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID})
 		return
 	}
+	log.Printf("[thin_tool_rpc] forward accepted: request_id=%s target_owner=%s target_device=%s tool=%s route=%s expires_at=%d", requestID, formatUID(ownerUID), deviceID, toolName, describeRuntimeRoute(route), forward.ExpiresAt)
 	h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID, "target_device_id": deviceID})
 }
 
@@ -190,12 +198,15 @@ func (h *Hub) handleThinToolRPCResult(client *Client, msg *MsgThinToolRPC) {
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusBadRequest, "request_id required", nil)
 		return
 	}
+	log.Printf("[thin_tool_rpc] result received: request_id=%s msg_id=%s source_uid=%s source_conn=%s device_id=%s target_owner=%s target_device=%s tool=%s has_error=%t has_result=%t", requestID, msg.ID, formatUID(clientUID(client)), clientConnectionID(client), msg.DeviceID, msg.TargetOwnerUserID, msg.TargetDeviceID, msg.ToolName, msg.Error != nil, msg.Result != nil)
 	pending, ok := h.thinToolRPC.get(requestID)
 	if !ok {
+		log.Printf("[thin_tool_rpc] result not pending: request_id=%s source_uid=%s source_conn=%s", requestID, formatUID(clientUID(client)), clientConnectionID(client))
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusNotFound, "request not pending", map[string]interface{}{"request_id": requestID})
 		return
 	}
 	if !h.thinToolRPCResultMatchesTarget(pending, client) {
+		log.Printf("[thin_tool_rpc] result source mismatch: request_id=%s source_uid=%s source_conn=%s expected_owner=%s expected_device=%s expected_route=%s actual_route=%s", requestID, formatUID(clientUID(client)), clientConnectionID(client), formatUID(pending.targetOwnerUID), pending.targetDeviceID, describeRuntimeRoute(pending.targetRoute), describeRuntimeRoute(h.clientRoute(client)))
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusForbidden, "result source does not match target device", map[string]interface{}{"request_id": requestID})
 		return
 	}
@@ -213,6 +224,7 @@ func (h *Hub) handleThinToolRPCResult(client *Client, msg *MsgThinToolRPC) {
 	forward.DeviceID = firstNonEmpty(forward.DeviceID, pending.targetDeviceID)
 	forward.ToolName = firstNonEmpty(forward.ToolName, pending.toolName)
 	if !h.sendThinToolRPCToRoute(pending.requesterRoute, &forward) {
+		log.Printf("[thin_tool_rpc] result forward failed: request_id=%s requester_route=%s requester_registered=%t", requestID, describeRuntimeRoute(pending.requesterRoute), h.isClientRegistered(pending.requester))
 		if h.isClientRegistered(pending.requester) {
 			h.SendToClient(pending.requester, &ServerMessage{ThinToolRPC: &forward})
 		} else {
@@ -220,6 +232,7 @@ func (h *Hub) handleThinToolRPCResult(client *Client, msg *MsgThinToolRPC) {
 			return
 		}
 	}
+	log.Printf("[thin_tool_rpc] result forwarded: request_id=%s requester_route=%s target_owner=%s target_device=%s tool=%s", requestID, describeRuntimeRoute(pending.requesterRoute), formatUID(pending.targetOwnerUID), pending.targetDeviceID, pending.toolName)
 	h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID})
 }
 
@@ -255,6 +268,7 @@ func (h *Hub) notifyThinToolRPCTimeout(pending thinToolRPCPending) {
 	if h == nil || pending.requestID == "" {
 		return
 	}
+	log.Printf("[thin_tool_rpc] pending timeout: request_id=%s target_owner=%s target_device=%s tool=%s target_route=%s requester_route=%s", pending.requestID, formatUID(pending.targetOwnerUID), pending.targetDeviceID, pending.toolName, describeRuntimeRoute(pending.targetRoute), describeRuntimeRoute(pending.requesterRoute))
 	msg := &MsgThinToolRPC{
 		Type:              thinToolRPCTypeResult,
 		RequestID:         pending.requestID,
@@ -276,6 +290,7 @@ func (h *Hub) sendThinToolRPCResultToRequester(client *Client, requestID string,
 	if client == nil || requestID == "" {
 		return
 	}
+	log.Printf("[thin_tool_rpc] synthetic result to requester: request_id=%s requester_uid=%s code=%s message=%q target_owner=%s target_device=%s tool=%s", requestID, formatUID(clientUID(client)), code, message, request.TargetOwnerUserID, request.TargetDeviceID, request.ToolName)
 	h.SendToClient(client, &ServerMessage{ThinToolRPC: &MsgThinToolRPC{
 		Type:              thinToolRPCTypeResult,
 		RequestID:         requestID,
@@ -290,27 +305,65 @@ func (h *Hub) sendThinToolRPCResultToRequester(client *Client, requestID string,
 
 func (h *Hub) sendThinToolRPCToLocalRoute(route runtimeRoute, msg *MsgThinToolRPC) bool {
 	if h == nil || route.ConnectionID == "" {
+		log.Printf("[thin_tool_rpc] local route missing connection: request_id=%s type=%s route=%s", thinToolRPCRequestID(msg), thinToolRPCMessageType(msg), describeRuntimeRoute(route))
 		return false
 	}
 	client := h.getClientByConnectionID(route.ConnectionID)
 	if client == nil {
+		log.Printf("[thin_tool_rpc] local route client not found: request_id=%s type=%s route=%s", thinToolRPCRequestID(msg), thinToolRPCMessageType(msg), describeRuntimeRoute(route))
 		return false
 	}
+	log.Printf("[thin_tool_rpc] local forward: request_id=%s type=%s to_uid=%s to_conn=%s route=%s target_owner=%s target_device=%s tool=%s", thinToolRPCRequestID(msg), thinToolRPCMessageType(msg), formatUID(clientUID(client)), clientConnectionID(client), describeRuntimeRoute(route), msg.TargetOwnerUserID, msg.TargetDeviceID, msg.ToolName)
 	h.SendToClient(client, &ServerMessage{ThinToolRPC: msg})
 	return true
 }
 
 func (h *Hub) sendThinToolRPCToRoute(route runtimeRoute, msg *MsgThinToolRPC) bool {
 	if h == nil || !route.validAt(nowForRoute(h)) || msg == nil {
+		log.Printf("[thin_tool_rpc] route invalid: request_id=%s type=%s route=%s", thinToolRPCRequestID(msg), thinToolRPCMessageType(msg), describeRuntimeRoute(route))
 		return false
 	}
 	if route.NodeID == "" || route.NodeID == h.nodeID {
 		return h.sendThinToolRPCToLocalRoute(route, msg)
 	}
 	if h.sharedRuntime != nil {
+		log.Printf("[thin_tool_rpc] shared forward: request_id=%s type=%s route=%s", thinToolRPCRequestID(msg), thinToolRPCMessageType(msg), describeRuntimeRoute(route))
 		return h.sharedRuntime.deliverThinToolRPC(route, msg, nowForRoute(h))
 	}
+	log.Printf("[thin_tool_rpc] route is remote but shared runtime missing: request_id=%s type=%s route=%s hub_node=%s", thinToolRPCRequestID(msg), thinToolRPCMessageType(msg), describeRuntimeRoute(route), h.nodeID)
 	return false
+}
+
+func clientUID(client *Client) int64 {
+	if client == nil {
+		return 0
+	}
+	return client.uid
+}
+
+func clientConnectionID(client *Client) string {
+	if client == nil {
+		return ""
+	}
+	return client.connectionID
+}
+
+func describeRuntimeRoute(route runtimeRoute) string {
+	return fmt.Sprintf("node=%s conn=%s expires=%d", route.NodeID, route.ConnectionID, unixMillis(route.ExpiresAt))
+}
+
+func thinToolRPCRequestID(msg *MsgThinToolRPC) string {
+	if msg == nil {
+		return ""
+	}
+	return msg.RequestID
+}
+
+func thinToolRPCMessageType(msg *MsgThinToolRPC) string {
+	if msg == nil {
+		return ""
+	}
+	return msg.Type
 }
 
 func (h *Hub) sendThinToolRPCAck(client *Client, id string, code int, text string, params map[string]interface{}) {
