@@ -231,6 +231,7 @@ func (h *Hub) messageForRecipient(uid int64, recipientUID int64, topicID string,
 	sourceMetadata := payload.Metadata
 	publicMetadata := withoutInternalChannelBindingDeliveryMetadata(payload.Metadata)
 	metadata := withCatscoIdentityMetadata(publicMetadata, h.buildCatscoIdentityMetadata(uid, recipientUID, topicID, msgID, normalizeContentText(payload.DisplayContent), catscoIdentityMetadataOptions{SourceMetadata: sourceMetadata}))
+	metadata = withXiaobaRuntimeMetadata(metadata, h.buildXiaobaRuntimeMetadata(uid, recipientUID, topicID))
 	return &ServerMessage{
 		Data: &MsgServerData{
 			Topic:         topicID,
@@ -311,6 +312,128 @@ func withCatscoIdentityMetadata(metadata map[string]interface{}, identity map[st
 		next["catsco_identity"] = identity
 	}
 	return next
+}
+
+func withXiaobaRuntimeMetadata(metadata map[string]interface{}, runtime map[string]interface{}) map[string]interface{} {
+	if runtime == nil {
+		return metadata
+	}
+	next := make(map[string]interface{}, len(metadata)+1)
+	for key, value := range metadata {
+		next[key] = value
+	}
+	next["xiaoba_runtime"] = runtime
+	return next
+}
+
+func (h *Hub) buildXiaobaRuntimeMetadata(actorUID int64, recipientUID int64, topicID string) map[string]interface{} {
+	if h == nil || h.userDevices == nil || recipientUID <= 0 || !h.isBotUser(recipientUID) {
+		return nil
+	}
+	users := h.xiaobaRuntimeRelevantHumanUsers(actorUID, recipientUID, topicID)
+	if len(users) == 0 {
+		return nil
+	}
+	devices := make([]map[string]interface{}, 0, len(users))
+	for _, user := range users {
+		if user == nil || user.AccountType == types.AccountBot || user.AccountType == types.AccountService {
+			continue
+		}
+		device, ok := h.xiaobaRuntimeReadyDevice(user.ID)
+		if !ok {
+			continue
+		}
+		userName := firstNonEmpty(user.DisplayName, user.Username, formatUID(user.ID))
+		label := firstNonEmpty(device.DisplayName, userName+" 的电脑", formatUID(user.ID)+" 的电脑")
+		devices = append(devices, map[string]interface{}{
+			"userId":   formatUID(user.ID),
+			"userName": userName,
+			"deviceId": device.DeviceID,
+			"label":    label,
+			"os":       normalizeDeviceOS(device.OS),
+		})
+	}
+	if len(devices) == 0 {
+		return nil
+	}
+	return map[string]interface{}{
+		"schema":  "xiaoba.runtime.v1",
+		"devices": devices,
+	}
+}
+
+func (h *Hub) xiaobaRuntimeRelevantHumanUsers(actorUID int64, recipientUID int64, topicID string) []*types.User {
+	if h == nil || h.db == nil {
+		return nil
+	}
+	seen := make(map[int64]bool)
+	addUser := func(uid int64, out *[]*types.User) {
+		if uid <= 0 || uid == recipientUID || seen[uid] {
+			return
+		}
+		seen[uid] = true
+		user, err := h.db.GetUser(uid)
+		if err != nil || user == nil {
+			return
+		}
+		if user.AccountType == types.AccountBot || user.AccountType == types.AccountService {
+			return
+		}
+		*out = append(*out, user)
+	}
+
+	users := make([]*types.User, 0, 4)
+	if isGroupTopic(topicID) {
+		groupID := extractGroupID(topicID)
+		if groupID > 0 {
+			members, err := h.db.GetGroupMembers(groupID)
+			if err == nil {
+				for _, member := range members {
+					if member == nil || member.UserID <= 0 || member.UserID == recipientUID || seen[member.UserID] || member.IsBot {
+						continue
+					}
+					seen[member.UserID] = true
+					users = append(users, &types.User{
+						ID:          member.UserID,
+						Username:    member.Username,
+						DisplayName: member.DisplayName,
+						AccountType: types.AccountHuman,
+					})
+				}
+			}
+		}
+		return users
+	}
+
+	addUser(actorUID, &users)
+	peerUID := extractPeerUID(topicID, actorUID)
+	addUser(peerUID, &users)
+	return users
+}
+
+func (h *Hub) xiaobaRuntimeReadyDevice(ownerUID int64) (UserDevice, bool) {
+	if h == nil || ownerUID <= 0 {
+		return UserDevice{}, false
+	}
+	routable, _ := h.userDeviceRouteCandidates(ownerUID)
+	if len(routable) == 0 {
+		return UserDevice{}, false
+	}
+	return routable[0], true
+}
+
+func (h *Hub) isBotUser(uid int64) bool {
+	if h == nil || uid <= 0 {
+		return false
+	}
+	if client := h.getClient(uid); client != nil && client.accountType == types.AccountBot {
+		return true
+	}
+	if h.db != nil {
+		user, err := h.db.GetUser(uid)
+		return err == nil && user != nil && user.AccountType == types.AccountBot
+	}
+	return false
 }
 
 type catscoIdentityMetadataOptions struct {

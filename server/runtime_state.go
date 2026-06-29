@@ -58,6 +58,7 @@ type sharedRuntimeState interface {
 	bindRuntimeRoute(route runtimeRoute, now time.Time)
 	clearRuntimeRoute(route runtimeRoute)
 	deliverDeviceRPC(route runtimeRoute, msg *MsgDeviceRPC, now time.Time) bool
+	deliverThinToolRPC(route runtimeRoute, msg *MsgThinToolRPC, now time.Time) bool
 	routeConnected(route runtimeRoute, now time.Time) bool
 
 	acquireBotBodyLease(botUID int64, bodyID string, connectionID string, nodeID string, now time.Time, ttl time.Duration) (botBodyLeaseResult, error)
@@ -173,6 +174,19 @@ func (s *sharedMemoryRuntimeState) deliverDeviceRPC(route runtimeRoute, msg *Msg
 		return false
 	}
 	return hub.sendDeviceRPCToLocalRoute(route, msg)
+}
+
+func (s *sharedMemoryRuntimeState) deliverThinToolRPC(route runtimeRoute, msg *MsgThinToolRPC, now time.Time) bool {
+	if s == nil || !route.validAt(now) {
+		return false
+	}
+	s.mu.Lock()
+	hub := s.nodes[route.NodeID]
+	s.mu.Unlock()
+	if hub == nil {
+		return false
+	}
+	return hub.sendThinToolRPCToLocalRoute(route, msg)
 }
 
 func (s *sharedMemoryRuntimeState) routeConnected(route runtimeRoute, now time.Time) bool {
@@ -298,6 +312,7 @@ func (s *sharedMemoryRuntimeState) registerUserDevice(ownerUID int64, req Regist
 		OwnerUserID:    formatUID(ownerUID),
 		DeviceID:       deviceID,
 		DisplayName:    normalizeDeviceText(req.DisplayName),
+		OS:             normalizeDeviceOS(req.OS),
 		BodyID:         normalizeDeviceText(req.BodyID),
 		InstallationID: normalizeDeviceText(req.InstallationID),
 		Status:         normalizeDeviceStatus(req.Status),

@@ -637,6 +637,7 @@ func (h *DeviceConnectorHandler) HandleEnroll(w http.ResponseWriter, r *http.Req
 		DeviceID       string   `json:"device_id"`
 		InstallationID string   `json:"installation_id"`
 		DeviceName     string   `json:"device_name"`
+		OS             string   `json:"os"`
 		Capabilities   []string `json:"capabilities"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -663,6 +664,7 @@ func (h *DeviceConnectorHandler) HandleEnroll(w http.ResponseWriter, r *http.Req
 	device, err := h.hub.userDevices.register(pairing.OwnerUID, RegisterUserDeviceRequest{
 		DeviceID:       deviceID,
 		DisplayName:    deviceName,
+		OS:             req.OS,
 		BodyID:         deviceID,
 		InstallationID: installationID,
 		Status:         "online",

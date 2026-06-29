@@ -256,6 +256,7 @@ func (h *Hub) bindClientDeviceFromHi(client *Client, msg *MsgClientHi) (map[stri
 	req := RegisterUserDeviceRequest{
 		DeviceID:       msg.Device.DeviceID,
 		DisplayName:    msg.Device.DisplayName,
+		OS:             msg.Device.OS,
 		BodyID:         firstNonEmpty(msg.Device.BodyID, client.bodyID),
 		InstallationID: firstNonEmpty(msg.Device.InstallationID, client.installationID),
 		Status:         msg.Device.Status,
@@ -801,6 +802,7 @@ func (h *Hub) runDeviceRPCTimeouts() {
 			now = h.deviceRPC.now()
 		}
 		h.expireDeviceRPCRequests(now)
+		h.expireThinToolRPCRequests(now)
 	}
 }
 

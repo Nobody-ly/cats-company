@@ -49,6 +49,7 @@ type UserDevice struct {
 	OwnerUserID       string                 `json:"ownerUserId"`
 	DeviceID          string                 `json:"deviceId"`
 	DisplayName       string                 `json:"displayName,omitempty"`
+	OS                string                 `json:"os"`
 	BodyID            string                 `json:"bodyId,omitempty"`
 	InstallationID    string                 `json:"installationId,omitempty"`
 	Status            string                 `json:"status"`
@@ -154,6 +155,7 @@ type deviceSelectionPreference struct {
 type RegisterUserDeviceRequest struct {
 	DeviceID       string   `json:"device_id"`
 	DisplayName    string   `json:"display_name,omitempty"`
+	OS             string   `json:"os,omitempty"`
 	BodyID         string   `json:"body_id,omitempty"`
 	InstallationID string   `json:"installation_id,omitempty"`
 	Status         string   `json:"status,omitempty"`
@@ -214,6 +216,7 @@ func (r *userDeviceRegistry) register(ownerUID int64, req RegisterUserDeviceRequ
 		OwnerUserID:    formatUID(ownerUID),
 		DeviceID:       deviceID,
 		DisplayName:    normalizeDeviceText(req.DisplayName),
+		OS:             normalizeDeviceOS(req.OS),
 		BodyID:         normalizeDeviceText(req.BodyID),
 		InstallationID: normalizeDeviceText(req.InstallationID),
 		Status:         normalizeDeviceStatus(req.Status),
@@ -817,6 +820,23 @@ func normalizeDeviceStatus(value string) string {
 		return "offline"
 	case "online", "":
 		return "online"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeDeviceOS(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "windows":
+		return "windows"
+	case "macos":
+		return "macos"
+	case "linux":
+		return "linux"
+	case "win32":
+		return "windows"
+	case "darwin":
+		return "macos"
 	default:
 		return "unknown"
 	}
