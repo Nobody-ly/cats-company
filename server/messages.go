@@ -446,7 +446,7 @@ func (h *Hub) actorLooksLikeChannelIdentity(actorUID int64) bool {
 		return false
 	}
 	username := strings.TrimSpace(user.Username)
-	return strings.HasPrefix(username, "ch_weixin_") || strings.HasPrefix(username, "ch_feishu_")
+	return strings.HasPrefix(username, "ch_weixin_") || strings.HasPrefix(username, "ch_weixin_clawbot_") || strings.HasPrefix(username, "ch_feishu_")
 }
 
 func channelAgentBindingQueryFromMessageMetadata(metadata map[string]interface{}, actorUID, agentUID int64) (types.ChannelAgentBindingQuery, bool) {

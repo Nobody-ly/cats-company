@@ -29,6 +29,23 @@ func TestNormalizeChannelAgentAccessModeAcceptsPublic(t *testing.T) {
 	}
 }
 
+func TestNormalizeChannelSeparatesWeixinOfficialAndClawBot(t *testing.T) {
+	cases := map[string]string{
+		"weixin":                  "weixin",
+		"wechat_official":         "weixin",
+		"weixin_official_account": "weixin",
+		"clawbot":                 "weixin_clawbot",
+		"weixin-clawbot":          "weixin_clawbot",
+		"WeChat ClawBot":          "weixin_clawbot",
+		"lark":                    "feishu",
+	}
+	for input, want := range cases {
+		if got := normalizeChannel(input); got != want {
+			t.Fatalf("normalizeChannel(%q)=%q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestChannelAgentEntryAndBindingFlow(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
@@ -332,6 +349,83 @@ func TestCreateFeishuChannelIdentityMobileLinkUsesOAuthShortQRCode(t *testing.T)
 	}
 	if resp.Entry.FeishuEntryStatus == nil || resp.Entry.FeishuEntryStatus.NativeShortURL != "https://app.catsco.cc/api/fn/"+url.PathEscape(resp.SceneKey) {
 		t.Fatalf("unexpected feishu status: %+v", resp.Entry.FeishuEntryStatus)
+	}
+}
+
+func TestCreateClawBotChannelIdentityMobileLinkUsesClawBotEntry(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	ilinkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ilink/bot/get_bot_qrcode" {
+			t.Fatalf("unexpected iLink path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("bot_type"); got != "3" {
+			t.Fatalf("bot_type=%s, want 3", got)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ret":                0,
+			"qrcode":             "qr-clawbot-1",
+			"qrcode_img_content": "https://liteapp.weixin.qq.com/q/test-clawbot?qrcode=qr-clawbot-1&bot_type=3",
+		})
+	}))
+	defer ilinkServer.Close()
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL", ilinkServer.URL)
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-official",
+		Channel:    "weixin",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	}); err != nil {
+		t.Fatalf("seed official entry: %v", err)
+	}
+	clawBotEntry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed clawbot entry: %v", err)
+	}
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "https://app.catsco.cc/api/channel-agent-bindings/mobile-link", strings.NewReader(`{"agent_uid":43,"channel":"clawbot"}`))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp channelAgentMobileLinkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Entry.ID != clawBotEntry.ID || resp.Entry.Channel != "weixin_clawbot" {
+		t.Fatalf("expected clawbot entry, got %+v want id=%d", resp.Entry.ChannelAgentEntry, clawBotEntry.ID)
+	}
+	if resp.QRKind != "weixin_clawbot_ilink_qr" || resp.QRValue != "https://liteapp.weixin.qq.com/q/test-clawbot?qrcode=qr-clawbot-1&bot_type=3" {
+		t.Fatalf("unexpected clawbot QR metadata: %+v", resp)
+	}
+	if resp.Entry.ClawBotEntryStatus == nil || !resp.Entry.ClawBotEntryStatus.Ready || resp.Entry.ClawBotEntryStatus.QRCode != "qr-clawbot-1" {
+		t.Fatalf("unexpected clawbot status: %+v", resp.Entry.ClawBotEntryStatus)
+	}
+	if wrong, _, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin", "", false); err != nil || wrong != nil {
+		t.Fatalf("official channel must not resolve clawbot link, entry=%+v err=%v", wrong, err)
+	}
+	resolved, canonicalUID, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin_clawbot", "", false)
+	if err != nil || resolved == nil || resolved.ID != clawBotEntry.ID || canonicalUID != 9 {
+		t.Fatalf("resolve clawbot mobile link entry=%+v canonical=%d err=%v", resolved, canonicalUID, err)
 	}
 }
 
@@ -995,6 +1089,42 @@ func TestChannelAgentEntryRejectsNonOwner(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelAgentEntryKeepsWeixinOfficialAndClawBotSeparate(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "contract-agent", DisplayName: "Contract Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	create := func(body string) channelAgentEntryResponse {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent-entries", bytes.NewBufferString(body))
+		req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
+		rec := httptest.NewRecorder()
+		handler.HandleAgentEntries(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("create %s status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+		var payload struct {
+			Entry channelAgentEntryResponse `json:"entry"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode create response: %v", err)
+		}
+		return payload.Entry
+	}
+
+	official := create(`{"agent_uid":43,"channel":"weixin"}`)
+	clawBot := create(`{"agent_uid":43,"channel":"weixin_clawbot"}`)
+	clawBotAgain := create(`{"agent_uid":43,"channel":"clawbot"}`)
+
+	if official.ID == clawBot.ID || official.Channel != "weixin" || clawBot.Channel != "weixin_clawbot" {
+		t.Fatalf("entries should be separate official=%+v clawbot=%+v", official.ChannelAgentEntry, clawBot.ChannelAgentEntry)
+	}
+	if clawBotAgain.ID != clawBot.ID || clawBotAgain.Channel != "weixin_clawbot" {
+		t.Fatalf("clawbot alias should reuse clawbot entry, got %+v want id=%d", clawBotAgain.ChannelAgentEntry, clawBot.ID)
 	}
 }
 
@@ -1941,6 +2071,8 @@ type channelAgentTestStore struct {
 	groupLinks     map[string]*types.ChannelGroupMobileLink
 	groupBindings  map[string]*types.ChannelGroupBinding
 	routes         map[string]*types.ChannelAgentRoute
+	clawBotTokens  map[int64]*types.WeixinClawBotToken
+	clawBotByHash  map[string]int64
 	friends        map[string]types.FriendStatus
 	messages       []*types.Message
 	clientIDs      map[string]int64
@@ -1971,6 +2103,8 @@ func newChannelAgentTestStore() *channelAgentTestStore {
 		groupLinks:     map[string]*types.ChannelGroupMobileLink{},
 		groupBindings:  map[string]*types.ChannelGroupBinding{},
 		routes:         map[string]*types.ChannelAgentRoute{},
+		clawBotTokens:  map[int64]*types.WeixinClawBotToken{},
+		clawBotByHash:  map[string]int64{},
 		friends:        map[string]types.FriendStatus{},
 		messages:       []*types.Message{},
 		clientIDs:      map[string]int64{},
@@ -2841,12 +2975,124 @@ func (s *channelAgentTestStore) ResolveChannelAgentRoute(query types.ChannelAgen
 	return cloneRoute(route), nil
 }
 
+func (s *channelAgentTestStore) UpsertWeixinClawBotToken(token *types.WeixinClawBotToken) (*types.WeixinClawBotToken, error) {
+	if token == nil || strings.TrimSpace(token.TokenHash) == "" || strings.TrimSpace(token.BotToken) == "" {
+		return nil, errors.New("invalid weixin clawbot token")
+	}
+	now := time.Now()
+	next := cloneWeixinClawBotToken(token)
+	if next.Status == "" {
+		next.Status = types.WeixinClawBotTokenActive
+	}
+	if id := s.clawBotByHash[next.TokenHash]; id > 0 {
+		if existing := s.clawBotTokens[id]; existing != nil {
+			next.ID = existing.ID
+			next.CreatedAt = existing.CreatedAt
+			if next.GetUpdatesBuf == "" {
+				next.GetUpdatesBuf = existing.GetUpdatesBuf
+			}
+			if len(next.ContextTokens) == 0 {
+				next.ContextTokens = copyTestClawBotContexts(existing.ContextTokens)
+			}
+		}
+	} else {
+		next.ID = s.nextID
+		s.nextID++
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	s.clawBotTokens[next.ID] = next
+	s.clawBotByHash[next.TokenHash] = next.ID
+	return cloneWeixinClawBotToken(next), nil
+}
+
+func (s *channelAgentTestStore) GetWeixinClawBotTokenByID(id int64) (*types.WeixinClawBotToken, error) {
+	return cloneWeixinClawBotToken(s.clawBotTokens[id]), nil
+}
+
+func (s *channelAgentTestStore) GetWeixinClawBotTokenByHash(tokenHash string) (*types.WeixinClawBotToken, error) {
+	id := s.clawBotByHash[strings.TrimSpace(tokenHash)]
+	if id <= 0 {
+		return nil, nil
+	}
+	return cloneWeixinClawBotToken(s.clawBotTokens[id]), nil
+}
+
+func (s *channelAgentTestStore) ListActiveWeixinClawBotTokens() ([]*types.WeixinClawBotToken, error) {
+	var out []*types.WeixinClawBotToken
+	for _, token := range s.clawBotTokens {
+		if token.Status == types.WeixinClawBotTokenActive {
+			out = append(out, cloneWeixinClawBotToken(token))
+		}
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) UpdateWeixinClawBotTokenPollState(id int64, getUpdatesBuf string, contextTokens map[string]types.WeixinClawBotContext) error {
+	token := s.clawBotTokens[id]
+	if token == nil {
+		return nil
+	}
+	now := time.Now()
+	token.GetUpdatesBuf = strings.TrimSpace(getUpdatesBuf)
+	token.ContextTokens = copyTestClawBotContexts(contextTokens)
+	token.LastPollAt = &now
+	token.LastError = ""
+	token.LastErrorAt = nil
+	token.UpdatedAt = now
+	return nil
+}
+
+func (s *channelAgentTestStore) MarkWeixinClawBotTokenError(id int64, status string, message string) error {
+	token := s.clawBotTokens[id]
+	if token == nil {
+		return nil
+	}
+	now := time.Now()
+	if strings.TrimSpace(status) != "" {
+		token.Status = strings.TrimSpace(status)
+	}
+	token.LastError = strings.TrimSpace(message)
+	token.LastErrorAt = &now
+	token.UpdatedAt = now
+	return nil
+}
+
 func cloneEntry(entry *types.ChannelAgentEntry) *types.ChannelAgentEntry {
 	if entry == nil {
 		return nil
 	}
 	next := *entry
 	return &next
+}
+
+func cloneWeixinClawBotToken(token *types.WeixinClawBotToken) *types.WeixinClawBotToken {
+	if token == nil {
+		return nil
+	}
+	next := *token
+	next.ContextTokens = copyTestClawBotContexts(token.ContextTokens)
+	if token.LastPollAt != nil {
+		lastPollAt := *token.LastPollAt
+		next.LastPollAt = &lastPollAt
+	}
+	if token.LastUsedAt != nil {
+		lastUsedAt := *token.LastUsedAt
+		next.LastUsedAt = &lastUsedAt
+	}
+	if token.LastErrorAt != nil {
+		lastErrorAt := *token.LastErrorAt
+		next.LastErrorAt = &lastErrorAt
+	}
+	return &next
+}
+
+func copyTestClawBotContexts(contexts map[string]types.WeixinClawBotContext) map[string]types.WeixinClawBotContext {
+	next := map[string]types.WeixinClawBotContext{}
+	for key, value := range contexts {
+		next[key] = value
+	}
+	return next
 }
 
 func cloneMobileLink(link *types.ChannelIdentityMobileLink) *types.ChannelIdentityMobileLink {

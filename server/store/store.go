@@ -144,6 +144,12 @@ type ChannelAgentBindingStore interface {
 	ListChannelGroupBindingsForTopic(topicID string) ([]*types.ChannelGroupBinding, error)
 	UpsertChannelAgentRoute(route *types.ChannelAgentRoute) (*types.ChannelAgentRoute, error)
 	ResolveChannelAgentRoute(query types.ChannelAgentRouteQuery) (*types.ChannelAgentRoute, error)
+	UpsertWeixinClawBotToken(token *types.WeixinClawBotToken) (*types.WeixinClawBotToken, error)
+	GetWeixinClawBotTokenByID(id int64) (*types.WeixinClawBotToken, error)
+	GetWeixinClawBotTokenByHash(tokenHash string) (*types.WeixinClawBotToken, error)
+	ListActiveWeixinClawBotTokens() ([]*types.WeixinClawBotToken, error)
+	UpdateWeixinClawBotTokenPollState(id int64, getUpdatesBuf string, contextTokens map[string]types.WeixinClawBotContext) error
+	MarkWeixinClawBotTokenError(id int64, status string, message string) error
 }
 
 // Store is the complete persistence boundary required by the current server.

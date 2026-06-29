@@ -3,12 +3,23 @@ import { Copy, RefreshCw, X } from 'lucide-react';
 import { api } from '../api';
 import QRCode from './qr-code';
 
+const MOBILE_CHANNELS = [
+  { value: 'weixin', label: '公众号', displayName: '微信公众号' },
+  { value: 'feishu', label: '飞书', displayName: '飞书' },
+  { value: 'weixin_clawbot', label: 'ClawBot', displayName: '微信 ClawBot' },
+];
+
+const channelMeta = (value) => (
+  MOBILE_CHANNELS.find((item) => item.value === value) || MOBILE_CHANNELS[0]
+);
+
 export default function MobileChannelBindModal({ agentUid, agentName, groupId, topicId, groupName, onClose }) {
   const [channel, setChannel] = useState('weixin');
   const [linkInfo, setLinkInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [clawBotAuthStatus, setClawBotAuthStatus] = useState(null);
   const requestSeqRef = useRef(0);
   const isGroupTarget = Boolean(groupId || topicId);
   const targetName = isGroupTarget ? (groupName || '群聊') : agentName;
@@ -21,6 +32,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
       setLoading(true);
       setError('');
       setCopied(false);
+      setClawBotAuthStatus(null);
       setLinkInfo(null);
       const res = isGroupTarget
         ? await api.createChannelGroupMobileLink(groupId, topicId, channel)
@@ -43,27 +55,67 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
   }, [loadLink]);
 
   const qrKind = linkInfo?.qr_kind || linkInfo?.entry?.qr_kind || '';
+  const activeChannel = channelMeta(channel);
   const isWeixinOfficialQR = channel === 'weixin' && qrKind === 'weixin_official_qr';
   const isFeishuNativeUnconfigured = channel === 'feishu' && qrKind === 'feishu_native_unconfigured';
-  const qrValue = channel === 'weixin' && !isWeixinOfficialQR
-    ? ''
-    : (linkInfo?.qr_value || linkInfo?.channel_qr_url || '');
-  const weixinImageURL = isWeixinOfficialQR ? (linkInfo?.channel_qr_url || '') : '';
+  const isClawBotIlinkQR = channel === 'weixin_clawbot' && qrKind === 'weixin_clawbot_ilink_qr';
+  const isClawBotUnavailable = channel === 'weixin_clawbot' && linkInfo && !isClawBotIlinkQR;
+  const shouldSuppressQRCode = (channel === 'weixin' && !isWeixinOfficialQR) || isFeishuNativeUnconfigured || isClawBotUnavailable;
+  const qrValue = shouldSuppressQRCode ? '' : (linkInfo?.qr_value || linkInfo?.channel_qr_url || '');
+  const channelImageURL = isWeixinOfficialQR ? (linkInfo?.channel_qr_url || '') : '';
   const copyValue = qrValue || '';
+  const clawBotQRCode = linkInfo?.entry?.clawbot_entry_status?.qrcode || '';
+  const sceneKey = linkInfo?.scene_key || '';
+
+  useEffect(() => {
+    if (channel !== 'weixin_clawbot' || !sceneKey || !clawBotQRCode || !qrValue) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      try {
+        const res = await api.getWeixinClawBotQRCodeStatus(sceneKey, clawBotQRCode);
+        if (cancelled) return;
+        if (res?.token_saved) {
+          setClawBotAuthStatus({ status: 'saved', target: res.target || 'agent' });
+          return;
+        }
+        setClawBotAuthStatus({ status: res?.status || 'waiting' });
+        timer = window.setTimeout(poll, 2000);
+      } catch (err) {
+        if (cancelled) return;
+        setClawBotAuthStatus({ status: 'error', message: err.message || '授权状态检查失败' });
+        timer = window.setTimeout(poll, 3000);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [channel, sceneKey, clawBotQRCode, qrValue]);
+
   const channelCopy = (() => {
     if (channel === 'weixin' && linkInfo && !isWeixinOfficialQR) {
-      return '微信公众号参数二维码尚未配置，暂时不能生成微信移动端绑定二维码。';
+      return '微信公众号参数二维码尚未配置，暂时不能生成公众号移动端绑定二维码。';
     }
     if (isFeishuNativeUnconfigured) {
       return '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码。';
     }
-    if (isGroupTarget) {
-      return `扫码后会把你的${channel === 'weixin' ? '微信' : '飞书'}身份绑定到当前 CatsCo 账号，之后可直接在移动端进入这个群聊。`;
+    if (isClawBotUnavailable) {
+      return '微信 ClawBot 授权二维码暂时不可用，请稍后刷新重试。';
     }
-    return `扫码后会把你的${channel === 'weixin' ? '微信' : '飞书'}身份绑定到当前 CatsCo 账号，之后可直接在移动端继续和这个虚拟员工对话。`;
+    if (channel === 'weixin_clawbot') {
+      return '扫码会进入微信 ClawBot 授权流程；它不会像公众号一样直接进入该机器人聊天框，之后请在微信里打开 ClawBot 对话继续使用。';
+    }
+    if (isGroupTarget) {
+      return `扫码后会把你的${activeChannel.displayName}身份绑定到当前 CatsCo 账号，之后可直接在移动端进入这个群聊。`;
+    }
+    return `扫码后会把你的${activeChannel.displayName}身份绑定到当前 CatsCo 账号，之后可直接在移动端继续和这个虚拟员工对话。`;
   })();
   const emptyQrText = isFeishuNativeUnconfigured
     ? '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码'
+    : isClawBotUnavailable
+      ? '微信 ClawBot 授权二维码暂时不可用'
     : channel === 'weixin' && linkInfo && !isWeixinOfficialQR
       ? '微信公众号参数二维码尚未配置'
       : '暂时没有可用二维码';
@@ -93,8 +145,11 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
         </div>
 
         <div className="mobile-channel-tabs">
-          <button type="button" className={channel === 'weixin' ? 'active' : ''} onClick={() => setChannel('weixin')}>微信</button>
-          <button type="button" className={channel === 'feishu' ? 'active' : ''} onClick={() => setChannel('feishu')}>飞书</button>
+          {MOBILE_CHANNELS.map((item) => (
+            <button key={item.value} type="button" className={channel === item.value ? 'active' : ''} onClick={() => setChannel(item.value)}>
+              {item.label}
+            </button>
+          ))}
         </div>
 
         <p className="mobile-channel-copy">{channelCopy}</p>
@@ -102,10 +157,10 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
         <div className="mobile-channel-qr-wrap">
           {loading && <div className="mobile-channel-placeholder">正在生成...</div>}
           {!loading && error && <div className="mobile-channel-error">{error}</div>}
-          {!loading && !error && weixinImageURL && (
-            <img className="mobile-channel-qr-img" src={weixinImageURL} alt={`${channel === 'weixin' ? '微信' : '飞书'}移动端绑定二维码`} />
+          {!loading && !error && channelImageURL && (
+            <img className="mobile-channel-qr-img" src={channelImageURL} alt={`${activeChannel.displayName}移动端绑定二维码`} />
           )}
-          {!loading && !error && !weixinImageURL && qrValue && (
+          {!loading && !error && !channelImageURL && qrValue && (
             <div className="mobile-channel-qr-box">
               <QRCode value={qrValue} size={210} />
             </div>
@@ -115,8 +170,18 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
           )}
         </div>
 
-        {!loading && !error && qrValue && (
+        {!loading && !error && qrValue && channel !== 'weixin_clawbot' && (
           <p className="mobile-channel-expiry">二维码 10 分钟内有效，完成绑定后会自动失效。</p>
+        )}
+
+        {!loading && !error && channel === 'weixin_clawbot' && qrValue && (
+          <p className="mobile-channel-expiry">
+            {clawBotAuthStatus?.status === 'saved'
+              ? 'ClawBot 授权已保存，服务端会持续接收这个 ClawBot 的消息。'
+              : clawBotAuthStatus?.status === 'error'
+                ? `正在重试授权状态检查：${clawBotAuthStatus.message}`
+                : '扫码后请保持这个窗口打开，授权确认后服务端会自动保存 token。'}
+          </p>
         )}
 
         <div className="mobile-channel-actions">

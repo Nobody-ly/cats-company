@@ -195,6 +195,8 @@ export const api = {
       topic_id: topicId,
       channel,
     }),
+  getWeixinClawBotQRCodeStatus: (sceneKey, qrcode) =>
+    request('GET', `/api/channel-agent-bindings/weixin-clawbot/qrcode-status?scene_key=${encodeURIComponent(sceneKey)}&qrcode=${encodeURIComponent(qrcode)}`),
 
   // Groups
   createGroup: (name, memberIds) => request('POST', '/api/groups/create', { name, member_ids: memberIds }),

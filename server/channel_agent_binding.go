@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -63,12 +64,13 @@ type channelAgentLinkTokenPayload struct {
 
 type channelAgentEntryResponse struct {
 	*types.ChannelAgentEntry
-	EntryURL          string                   `json:"entry_url"`
-	ChannelQRURL      string                   `json:"channel_qr_url,omitempty"`
-	FeishuOAuthURL    string                   `json:"feishu_oauth_url,omitempty"`
-	FeishuEntryStatus *feishuEntryConfigStatus `json:"feishu_entry_status,omitempty"`
-	QRValue           string                   `json:"qr_value,omitempty"`
-	QRKind            string                   `json:"qr_kind,omitempty"`
+	EntryURL           string                    `json:"entry_url"`
+	ChannelQRURL       string                    `json:"channel_qr_url,omitempty"`
+	FeishuOAuthURL     string                    `json:"feishu_oauth_url,omitempty"`
+	FeishuEntryStatus  *feishuEntryConfigStatus  `json:"feishu_entry_status,omitempty"`
+	ClawBotEntryStatus *clawBotEntryConfigStatus `json:"clawbot_entry_status,omitempty"`
+	QRValue            string                    `json:"qr_value,omitempty"`
+	QRKind             string                    `json:"qr_kind,omitempty"`
 }
 
 type channelAgentMobileLinkRequest struct {
@@ -92,15 +94,16 @@ type channelGroupMobileLinkRequest struct {
 }
 
 type channelGroupMobileLinkResponse struct {
-	GroupID           int64                    `json:"group_id"`
-	TopicID           string                   `json:"topic_id"`
-	GroupName         string                   `json:"group_name,omitempty"`
-	SceneKey          string                   `json:"scene_key"`
-	ExpiresAt         time.Time                `json:"expires_at"`
-	ChannelQRURL      string                   `json:"channel_qr_url,omitempty"`
-	QRValue           string                   `json:"qr_value,omitempty"`
-	QRKind            string                   `json:"qr_kind,omitempty"`
-	FeishuEntryStatus *feishuEntryConfigStatus `json:"feishu_entry_status,omitempty"`
+	GroupID            int64                     `json:"group_id"`
+	TopicID            string                    `json:"topic_id"`
+	GroupName          string                    `json:"group_name,omitempty"`
+	SceneKey           string                    `json:"scene_key"`
+	ExpiresAt          time.Time                 `json:"expires_at"`
+	ChannelQRURL       string                    `json:"channel_qr_url,omitempty"`
+	QRValue            string                    `json:"qr_value,omitempty"`
+	QRKind             string                    `json:"qr_kind,omitempty"`
+	FeishuEntryStatus  *feishuEntryConfigStatus  `json:"feishu_entry_status,omitempty"`
+	ClawBotEntryStatus *clawBotEntryConfigStatus `json:"clawbot_entry_status,omitempty"`
 }
 
 type feishuEntryConfigStatus struct {
@@ -119,6 +122,17 @@ type feishuEntryConfigStatus struct {
 	OAuthURL                   string   `json:"oauth_url,omitempty"`
 	OAuthCallbackURL           string   `json:"oauth_callback_url,omitempty"`
 	EventsCallbackURL          string   `json:"events_callback_url,omitempty"`
+}
+
+type clawBotEntryConfigStatus struct {
+	Ready        bool     `json:"ready"`
+	Status       string   `json:"status"`
+	Reasons      []string `json:"reasons,omitempty"`
+	ILinkBaseURL string   `json:"ilink_base_url,omitempty"`
+	BotType      string   `json:"bot_type,omitempty"`
+	QRCode       string   `json:"qrcode,omitempty"`
+	QRCodeURL    string   `json:"qrcode_url,omitempty"`
+	EntryURL     string   `json:"entry_url,omitempty"`
 }
 
 // HandleAgentEntries handles authenticated owner entry management.
@@ -1005,8 +1019,15 @@ func channelBindingManagementStatus(binding *types.ChannelAgentBinding) string {
 }
 
 func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelUserID string) (int64, error) {
+	return ensureChannelActor(h.db, channel, appID, channelUserID)
+}
+
+func ensureChannelActor(db store.Store, channel, appID, channelUserID string) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("channel actor store not configured")
+	}
 	username := channelActorUsername(channel, appID, channelUserID)
-	if user, err := h.db.GetUserByUsername(username); err == nil && user != nil {
+	if user, err := db.GetUserByUsername(username); err == nil && user != nil {
 		return user.ID, nil
 	} else if err != nil {
 		return 0, err
@@ -1016,9 +1037,11 @@ func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelU
 	case "feishu":
 		displayName = "Feishu User"
 	case "weixin":
-		displayName = "Weixin User"
+		displayName = "Weixin Official Account User"
+	case "weixin_clawbot":
+		displayName = "Weixin ClawBot User"
 	}
-	uid, err := h.db.CreateUser(&types.User{
+	uid, err := db.CreateUser(&types.User{
 		Username:    username,
 		DisplayName: displayName,
 		AccountType: types.AccountHuman,
@@ -1026,7 +1049,7 @@ func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelU
 		State:       0,
 	})
 	if err != nil {
-		if user, lookupErr := h.db.GetUserByUsername(username); lookupErr == nil && user != nil {
+		if user, lookupErr := db.GetUserByUsername(username); lookupErr == nil && user != nil {
 			return user.ID, nil
 		}
 		return 0, err
@@ -1097,6 +1120,20 @@ func (h *ChannelAgentBindingHandler) entryResponseWithScene(r *http.Request, ent
 		}
 		if appID == "" {
 			resp.FeishuOAuthURL = ""
+		}
+	}
+	if entry != nil && entry.Channel == "weixin_clawbot" {
+		resp.QRValue = ""
+		resp.QRKind = "weixin_clawbot_mobile_link_required"
+		clawBotStatus := buildClawBotEntryConfigStatusForScene(r, sceneKey)
+		if isMobileChannelSceneKey(sceneKey) {
+			clawBotStatus = buildClawBotMobileQRCodeStatusForScene(requestContext(r), r, sceneKey)
+		}
+		resp.ClawBotEntryStatus = clawBotStatus
+		if clawBotStatus.Ready {
+			resp.ChannelQRURL = clawBotStatus.QRCodeURL
+			resp.QRValue = clawBotStatus.QRCodeURL
+			resp.QRKind = "weixin_clawbot_ilink_qr"
 		}
 	}
 	return resp
@@ -1278,7 +1315,7 @@ func isUsableRedirectURL(value string) bool {
 		return false
 	}
 	switch strings.ToLower(parsed.Scheme) {
-	case "https", "http", "lark", "feishu":
+	case "https", "http", "lark", "feishu", "weixin", "wechat", "clawbot":
 		return true
 	default:
 		return false
@@ -1291,6 +1328,171 @@ func feishuNativeEntryShortURL(r *http.Request, sceneKey string) string {
 
 func configuredWeixinAppID() string {
 	return strings.TrimSpace(firstEnv("CATSCO_WEIXIN_APP_ID", "CATSCO_WECHAT_APP_ID", "WEIXIN_APP_ID", "WECHAT_APP_ID"))
+}
+
+func buildClawBotEntryConfigStatusForScene(r *http.Request, sceneKey string) *clawBotEntryConfigStatus {
+	status := newClawBotEntryConfigStatus(r, sceneKey)
+	if len(status.Reasons) == 0 {
+		status.Status = "mobile_link_required"
+		status.Reasons = append(status.Reasons, "微信 ClawBot 使用微信 iLink 一次性授权二维码，请在移动端使用面板中生成")
+	}
+	return status
+}
+
+func buildClawBotMobileQRCodeStatusForScene(ctx context.Context, r *http.Request, sceneKey string) *clawBotEntryConfigStatus {
+	status := newClawBotEntryConfigStatus(r, sceneKey)
+	if len(status.Reasons) > 0 {
+		return status
+	}
+	qr, err := fetchWeixinClawBotQRCode(ctx)
+	if err != nil {
+		status.Status = "qr_unavailable"
+		status.Reasons = append(status.Reasons, "微信 iLink 暂时无法生成 ClawBot 授权二维码："+err.Error())
+		return status
+	}
+	status.Ready = true
+	status.Status = "ready"
+	status.QRCode = qr.QRCode
+	status.QRCodeURL = qr.QRCodeURL
+	return status
+}
+
+func newClawBotEntryConfigStatus(r *http.Request, sceneKey string) *clawBotEntryConfigStatus {
+	baseURL := configuredWeixinClawBotILinkBaseURL()
+	botType := configuredWeixinClawBotBotType()
+	status := &clawBotEntryConfigStatus{
+		Status:       "unconfigured",
+		EntryURL:     entryURL(r, sceneKey),
+		ILinkBaseURL: baseURL,
+		BotType:      botType,
+	}
+	if sceneKey == "" {
+		status.Status = "missing_scene_key"
+		status.Reasons = append(status.Reasons, "缺少入口场景，无法生成微信 ClawBot 授权二维码")
+	}
+	if botType == "" {
+		status.Status = "missing_bot_type"
+		status.Reasons = append(status.Reasons, "缺少 CATSCO_WEIXIN_CLAWBOT_BOT_TYPE")
+	}
+	if !isValidHTTPBaseURL(baseURL) {
+		status.Status = "invalid_ilink_base_url"
+		status.Reasons = append(status.Reasons, "CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL 不是有效的 HTTP(S) 地址")
+	}
+	return status
+}
+
+type weixinClawBotQRCode struct {
+	QRCode    string
+	QRCodeURL string
+}
+
+func fetchWeixinClawBotQRCode(ctx context.Context) (*weixinClawBotQRCode, error) {
+	baseURL := strings.TrimRight(configuredWeixinClawBotILinkBaseURL(), "/")
+	botType := configuredWeixinClawBotBotType()
+	if baseURL == "" || botType == "" {
+		return nil, fmt.Errorf("missing iLink base url or bot type")
+	}
+	endpoint := baseURL + "/ilink/bot/get_bot_qrcode?bot_type=" + url.QueryEscape(botType)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: configuredWeixinClawBotHTTPTimeout()}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Ret              int    `json:"ret"`
+		ErrCode          int    `json:"errcode"`
+		ErrMsg           string `json:"errmsg"`
+		QRCode           string `json:"qrcode"`
+		QRCodeImgContent string `json:"qrcode_img_content"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if data.ErrMsg != "" {
+			return nil, errors.New(data.ErrMsg)
+		}
+		return nil, fmt.Errorf("iLink returned HTTP %d", resp.StatusCode)
+	}
+	if data.Ret != 0 || data.ErrCode != 0 {
+		if data.ErrMsg != "" {
+			return nil, errors.New(data.ErrMsg)
+		}
+		return nil, fmt.Errorf("iLink returned ret=%d errcode=%d", data.Ret, data.ErrCode)
+	}
+	qrURL := strings.TrimSpace(data.QRCodeImgContent)
+	if qrURL == "" {
+		return nil, fmt.Errorf("iLink response missing qrcode_img_content")
+	}
+	if !isUsableRedirectURL(qrURL) {
+		return nil, fmt.Errorf("iLink response qrcode_img_content is not a usable URL")
+	}
+	return &weixinClawBotQRCode{
+		QRCode:    strings.TrimSpace(data.QRCode),
+		QRCodeURL: qrURL,
+	}, nil
+}
+
+func configuredWeixinClawBotILinkBaseURL() string {
+	baseURL := strings.TrimSpace(firstEnv(
+		"CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL",
+		"CATSCO_CLAWBOT_ILINK_BASE_URL",
+		"WEIXIN_CLAWBOT_ILINK_BASE_URL",
+		"WEIXIN_BASE_URL",
+	))
+	if baseURL == "" {
+		baseURL = "https://ilinkai.weixin.qq.com"
+	}
+	return strings.TrimRight(baseURL, "/")
+}
+
+func configuredWeixinClawBotBotType() string {
+	botType := strings.TrimSpace(firstEnv("CATSCO_WEIXIN_CLAWBOT_BOT_TYPE", "WEIXIN_CLAWBOT_BOT_TYPE"))
+	if botType == "" {
+		return "3"
+	}
+	return botType
+}
+
+func configuredWeixinClawBotHTTPTimeout() time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(firstEnv("CATSCO_WEIXIN_CLAWBOT_QR_TIMEOUT_SECONDS", "WEIXIN_CLAWBOT_QR_TIMEOUT_SECONDS")))
+	if err != nil || seconds <= 0 {
+		return 10 * time.Second
+	}
+	if seconds > 60 {
+		seconds = 60
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func isValidHTTPBaseURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "https", "http":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMobileChannelSceneKey(sceneKey string) bool {
+	return strings.HasPrefix(sceneKey, "m.") || strings.HasPrefix(sceneKey, "g.")
+}
+
+func requestContext(r *http.Request) context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	return r.Context()
 }
 
 func canonicalEntryChannelAppID(channel, requested string) string {
@@ -1516,16 +1718,22 @@ func channelAgentAccessFriendMessage(channel string) string {
 	case "feishu":
 		return "通过飞书扫码申请添加该虚拟员工"
 	case "weixin":
-		return "通过微信扫码申请添加该虚拟员工"
+		return "通过微信公众号扫码申请添加该虚拟员工"
+	case "weixin_clawbot":
+		return "通过微信 ClawBot 扫码申请添加该虚拟员工"
 	default:
 		return "通过入口码申请添加该虚拟员工"
 	}
 }
 
 func normalizeChannel(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "weixin", "wechat":
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.NewReplacer("-", "_", " ", "_").Replace(normalized)
+	switch normalized {
+	case "weixin", "wechat", "weixin_mp", "wechat_mp", "weixin_official", "wechat_official", "weixin_official_account", "wechat_official_account":
 		return "weixin"
+	case "weixin_clawbot", "wechat_clawbot", "weixinclawbot", "wechatclawbot", "clawbot":
+		return "weixin_clawbot"
 	case "feishu", "lark":
 		return "feishu"
 	default:
@@ -1618,6 +1826,17 @@ func (h *ChannelAgentBindingHandler) groupMobileLinkResponse(r *http.Request, li
 			resp.ChannelQRURL = feishuOAuthShortURL(r, link.SceneKey)
 			resp.QRValue = resp.ChannelQRURL
 			resp.QRKind = "feishu_oauth_entry"
+		}
+	}
+	if link.Channel == "weixin_clawbot" {
+		resp.QRValue = ""
+		resp.QRKind = "weixin_clawbot_mobile_link_required"
+		clawBotStatus := buildClawBotMobileQRCodeStatusForScene(requestContext(r), r, link.SceneKey)
+		resp.ClawBotEntryStatus = clawBotStatus
+		if clawBotStatus.Ready {
+			resp.ChannelQRURL = clawBotStatus.QRCodeURL
+			resp.QRValue = clawBotStatus.QRCodeURL
+			resp.QRKind = "weixin_clawbot_ilink_qr"
 		}
 	}
 	return resp

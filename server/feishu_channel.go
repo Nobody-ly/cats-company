@@ -1757,8 +1757,13 @@ type ChannelOutboundDispatcher struct {
 	feishuAppID string
 	weixin      weixinAPI
 	weixinAppID string
+	clawBot     weixinClawBotOutbound
 	mu          sync.Mutex
 	replyRoutes map[string]channelOutboundReplyRoute
+}
+
+type weixinClawBotOutbound interface {
+	SendTextMessage(ctx context.Context, binding *types.ChannelAgentBinding, text string) error
 }
 
 type channelOutboundReplyRoute struct {
@@ -1788,6 +1793,14 @@ func (d *ChannelOutboundDispatcher) WithWeixin(weixin weixinAPI, appID string) *
 	}
 	d.weixin = weixin
 	d.weixinAppID = strings.TrimSpace(appID)
+	return d
+}
+
+func (d *ChannelOutboundDispatcher) WithWeixinClawBot(clawBot weixinClawBotOutbound) *ChannelOutboundDispatcher {
+	if d == nil {
+		return nil
+	}
+	d.clawBot = clawBot
 	return d
 }
 
@@ -1952,6 +1965,16 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 			return err
 		}
 	}
+	if d.clawBot != nil {
+		binding, err := bindings.ResolveChannelAgentBindingForActorAny(actorUID, agentUID)
+		if err != nil {
+			return err
+		}
+		if binding != nil && normalizeChannel(binding.Channel) == "weixin_clawbot" {
+			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1997,6 +2020,25 @@ func (d *ChannelOutboundDispatcher) ForwardGroupBotReply(ctx context.Context, se
 			}
 			if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
 				log.Printf("weixin group outbound reply failed topic=%s sender=%d binding=%d: %v", topicID, senderUID, binding.ID, err)
+			}
+		case "weixin_clawbot":
+			if d.clawBot == nil || strings.TrimSpace(binding.ChannelUserID) == "" {
+				continue
+			}
+			agentBinding := &types.ChannelAgentBinding{
+				Channel:                 binding.Channel,
+				ChannelAppID:            binding.ChannelAppID,
+				ChannelUserID:           binding.ChannelUserID,
+				ChannelConversationID:   binding.ChannelConversationID,
+				ChannelConversationType: binding.ChannelConversationType,
+				ActorUID:                binding.ActorUID,
+				CanonicalUID:            binding.CanonicalUID,
+				OwnerUID:                binding.CanonicalUID,
+				AgentUID:                senderUID,
+				Status:                  binding.Status,
+			}
+			if err := d.clawBot.SendTextMessage(ctx, agentBinding, text); err != nil {
+				log.Printf("weixin clawbot group outbound reply failed topic=%s sender=%d binding=%d: %v", topicID, senderUID, binding.ID, err)
 			}
 		}
 	}
@@ -2058,6 +2100,15 @@ func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context,
 		}
 		if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
 			log.Printf("weixin outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
+			return true, err
+		}
+		return true, nil
+	case "weixin_clawbot":
+		if d.clawBot == nil || binding.ChannelUserID == "" {
+			return false, nil
+		}
+		if err := d.clawBot.SendTextMessage(ctx, binding, text); err != nil {
+			log.Printf("weixin clawbot outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
 			return true, err
 		}
 		return true, nil

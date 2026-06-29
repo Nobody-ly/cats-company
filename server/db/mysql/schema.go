@@ -26,6 +26,7 @@ func (a *Adapter) CreateSchema() error {
 		createChannelIdentityMobileLinksTable,
 		createChannelGroupMobileLinksTable,
 		createChannelGroupBindingsTable,
+		createWeixinClawBotTokensTable,
 	}
 	for _, q := range tables {
 		if _, err := a.db.Exec(q); err != nil {
@@ -459,6 +460,33 @@ CREATE TABLE IF NOT EXISTS channel_group_bindings (
     FOREIGN KEY (actor_uid) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (canonical_uid) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES ` + "`groups`" + `(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+const createWeixinClawBotTokensTable = `
+CREATE TABLE IF NOT EXISTS weixin_clawbot_tokens (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    bot_token TEXT NOT NULL,
+    token_last4 VARCHAR(8) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    owner_uid BIGINT NOT NULL,
+    ilink_bot_id VARCHAR(128) NOT NULL DEFAULT '',
+    ilink_user_id VARCHAR(128) NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL,
+    source_scene_key VARCHAR(64) NOT NULL DEFAULT '',
+    get_updates_buf TEXT NOT NULL,
+    context_tokens JSON NOT NULL,
+    last_poll_at TIMESTAMP NULL DEFAULT NULL,
+    last_used_at TIMESTAMP NULL DEFAULT NULL,
+    last_error_at TIMESTAMP NULL DEFAULT NULL,
+    last_error TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_weixin_clawbot_tokens_active (status, updated_at),
+    INDEX idx_weixin_clawbot_tokens_owner (owner_uid, status),
+    INDEX idx_weixin_clawbot_tokens_ilink (ilink_bot_id, ilink_user_id),
+    FOREIGN KEY (owner_uid) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `
 
