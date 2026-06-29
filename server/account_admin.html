@@ -70,6 +70,48 @@
       font-weight: 650;
     }
 
+    .admin-nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 0 0 18px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(13, 17, 23, 0.92);
+      backdrop-filter: blur(10px);
+    }
+
+    .admin-nav button {
+      height: 42px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid transparent;
+    }
+
+    .admin-nav button:hover {
+      background: rgba(214, 168, 79, 0.1);
+      color: var(--accent-2);
+      border-color: rgba(214, 168, 79, 0.22);
+    }
+
+    .admin-nav button.active {
+      background: rgba(214, 168, 79, 0.16);
+      color: var(--accent-2);
+      border-color: rgba(214, 168, 79, 0.46);
+    }
+
+    .admin-view {
+      display: none;
+    }
+
+    .admin-view.active {
+      display: block;
+    }
+
     section {
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -617,6 +659,11 @@
         width: 100%;
       }
 
+      .admin-nav {
+        position: static;
+        grid-template-columns: 1fr 1fr;
+      }
+
       .account-type-filter {
         display: flex;
         width: 100%;
@@ -683,7 +730,14 @@
       <div class="badge">Tunnel only</div>
     </header>
 
-    <section>
+    <nav class="admin-nav" aria-label="后台模块">
+      <button type="button" class="active" data-admin-tab="accounts" aria-pressed="true">账号管理</button>
+      <button type="button" data-admin-tab="services" aria-pressed="false">Service Token</button>
+      <button type="button" data-admin-tab="commercial" aria-pressed="false">商业化</button>
+      <button type="button" data-admin-tab="access" aria-pressed="false">访问方式</button>
+    </nav>
+
+    <section class="admin-view active" data-admin-view="accounts">
       <h2>账号管理</h2>
       <form id="search-form">
         <input id="user-query" name="q" autocomplete="off" placeholder="搜索 UID、用户名、邮箱或昵称；留空显示全部" />
@@ -711,7 +765,7 @@
       <div id="result" class="result" aria-live="polite"></div>
     </section>
 
-    <section>
+    <section class="admin-view" data-admin-view="services">
       <h2>Service Token</h2>
       <form id="service-form">
         <input id="service-slug" name="slug" autocomplete="off" placeholder="服务标识，例如 internal-tool" />
@@ -738,7 +792,7 @@
       <div id="service-list" class="service-list"></div>
     </section>
 
-    <section>
+    <section class="admin-view" data-admin-view="commercial">
       <h2>中转商业化测试</h2>
       <p>先只建立套餐、邀请码和人工发放账本；现有 relay 默认额度、自动建 Key 和 Bifrost 转发仍继续保留。</p>
       <div class="commercial-status-grid" id="commercial-status-grid" aria-live="polite">
@@ -841,7 +895,7 @@
       </div>
     </section>
 
-    <section>
+    <section class="admin-view" data-admin-view="access">
       <h2>访问方式</h2>
       <p>在本机建立 SSH 隧道后访问下面的本地地址：</p>
       <code>ssh -L 26061:127.0.0.1:26061 &lt;server-alias&gt;
@@ -894,6 +948,9 @@ http://127.0.0.1:26061/local/account-admin</code>
     const commercialStatusPlans = document.querySelector('#commercial-status-plans');
     const commercialStatusInvites = document.querySelector('#commercial-status-invites');
     const commercialStatusRedemptions = document.querySelector('#commercial-status-redemptions');
+    const adminTabs = Array.from(document.querySelectorAll('[data-admin-tab]'));
+    const adminViews = Array.from(document.querySelectorAll('[data-admin-view]'));
+    const adminViewLoaded = new Set();
     let currentUserPage = 1;
     let currentUserQuery = '';
     let currentAccountType = 'all';
@@ -933,6 +990,57 @@ http://127.0.0.1:26061/local/account-admin</code>
     function row(label, value) {
       return `<div class="row"><div class="label">${label}</div><div class="value">${formatValue(value)}</div></div>`;
     }
+
+    function normalizeAdminView(value) {
+      return ['accounts', 'services', 'commercial', 'access'].includes(value) ? value : 'accounts';
+    }
+
+    function initialAdminView() {
+      const hash = window.location.hash.replace(/^#/, '');
+      return normalizeAdminView(hash || localStorage.getItem('catsco-account-admin-view'));
+    }
+
+    function ensureAdminViewLoaded(view) {
+      if (adminViewLoaded.has(view)) return;
+      adminViewLoaded.add(view);
+      if (view === 'accounts') {
+        loadUsersList();
+      } else if (view === 'services') {
+        loadServices();
+      } else if (view === 'commercial') {
+        loadCommercialPlans();
+        loadCommercialInvites();
+      }
+    }
+
+    function setAdminView(view, opts = {}) {
+      const next = normalizeAdminView(view);
+      adminTabs.forEach((tab) => {
+        const active = tab.dataset.adminTab === next;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+      adminViews.forEach((panel) => {
+        panel.classList.toggle('active', panel.dataset.adminView === next);
+      });
+      localStorage.setItem('catsco-account-admin-view', next);
+      if (window.location.hash !== `#${next}`) {
+        if (opts.replace) {
+          history.replaceState(null, '', `#${next}`);
+        } else {
+          history.pushState(null, '', `#${next}`);
+        }
+      }
+      ensureAdminViewLoaded(next);
+    }
+
+    adminTabs.forEach((tab) => {
+      tab.addEventListener('click', () => setAdminView(tab.dataset.adminTab));
+    });
+
+    window.addEventListener('hashchange', () => {
+      setAdminView(initialAdminView(), { replace: true });
+    });
 
     function stateLabel(state) {
       return Number(state || 0) === 0 ? '正常' : `已禁用(${state})`;
@@ -1682,10 +1790,7 @@ http://127.0.0.1:26061/local/account-admin</code>
       }
     });
 
-    loadUsersList();
-    loadServices();
-    loadCommercialPlans();
-    loadCommercialInvites();
+    setAdminView(initialAdminView(), { replace: true });
   </script>
 </body>
 </html>
