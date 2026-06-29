@@ -18,6 +18,7 @@ type thinToolRPCPending struct {
 	requestID      string
 	requester      *Client
 	requesterRoute runtimeRoute
+	targetRoute    runtimeRoute
 	targetOwnerUID int64
 	targetDeviceID string
 	toolName       string
@@ -67,6 +68,19 @@ func (r *thinToolRPCRouter) finish(requestID string) (thinToolRPCPending, bool) 
 		delete(r.pending, requestID)
 	}
 	return pending, ok
+}
+
+func (r *thinToolRPCRouter) get(requestID string) (thinToolRPCPending, bool) {
+	if r == nil || requestID == "" {
+		return thinToolRPCPending{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending, ok := r.pending[requestID]
+	if !ok || !r.now().Before(pending.expiresAt) {
+		return thinToolRPCPending{}, false
+	}
+	return pending, true
 }
 
 func (r *thinToolRPCRouter) expire(now time.Time) []thinToolRPCPending {
@@ -145,6 +159,7 @@ func (h *Hub) handleThinToolRPCRequest(client *Client, msg *MsgThinToolRPC) {
 		requestID:      requestID,
 		requester:      client,
 		requesterRoute: requesterRoute,
+		targetRoute:    route,
 		targetOwnerUID: ownerUID,
 		targetDeviceID: deviceID,
 		toolName:       toolName,
@@ -175,7 +190,16 @@ func (h *Hub) handleThinToolRPCResult(client *Client, msg *MsgThinToolRPC) {
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusBadRequest, "request_id required", nil)
 		return
 	}
-	pending, ok := h.thinToolRPC.finish(requestID)
+	pending, ok := h.thinToolRPC.get(requestID)
+	if !ok {
+		h.sendThinToolRPCAck(client, msg.ID, http.StatusNotFound, "request not pending", map[string]interface{}{"request_id": requestID})
+		return
+	}
+	if !h.thinToolRPCResultMatchesTarget(pending, client) {
+		h.sendThinToolRPCAck(client, msg.ID, http.StatusForbidden, "result source does not match target device", map[string]interface{}{"request_id": requestID})
+		return
+	}
+	pending, ok = h.thinToolRPC.finish(requestID)
 	if !ok {
 		h.sendThinToolRPCAck(client, msg.ID, http.StatusNotFound, "request not pending", map[string]interface{}{"request_id": requestID})
 		return
@@ -197,6 +221,23 @@ func (h *Hub) handleThinToolRPCResult(client *Client, msg *MsgThinToolRPC) {
 		}
 	}
 	h.sendThinToolRPCAck(client, msg.ID, http.StatusOK, "ok", map[string]interface{}{"request_id": requestID})
+}
+
+func (h *Hub) thinToolRPCResultMatchesTarget(pending thinToolRPCPending, client *Client) bool {
+	if h == nil || client == nil || pending.targetOwnerUID <= 0 || pending.targetDeviceID == "" {
+		return false
+	}
+	if pending.targetRoute.NodeID != "" || pending.targetRoute.ConnectionID != "" {
+		if !pending.targetRoute.matches(h.clientRoute(client)) {
+			return false
+		}
+	}
+	if client.deviceOwnerUID == pending.targetOwnerUID && client.deviceID == pending.targetDeviceID {
+		return true
+	}
+	return client.deviceConnector != nil &&
+		client.deviceConnector.UID == pending.targetOwnerUID &&
+		client.deviceConnector.DeviceID == pending.targetDeviceID
 }
 
 func (h *Hub) expireThinToolRPCRequests(now time.Time) int {
