@@ -56,8 +56,9 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
   const activeChannel = channelMeta(channel);
   const isWeixinOfficialQR = channel === 'weixin' && qrKind === 'weixin_official_qr';
   const isFeishuNativeUnconfigured = channel === 'feishu' && qrKind === 'feishu_native_unconfigured';
-  const isClawBotUnconfigured = channel === 'weixin_clawbot' && qrKind === 'weixin_clawbot_unconfigured';
-  const shouldSuppressQRCode = (channel === 'weixin' && !isWeixinOfficialQR) || isFeishuNativeUnconfigured || isClawBotUnconfigured;
+  const isClawBotIlinkQR = channel === 'weixin_clawbot' && qrKind === 'weixin_clawbot_ilink_qr';
+  const isClawBotUnavailable = channel === 'weixin_clawbot' && linkInfo && !isClawBotIlinkQR;
+  const shouldSuppressQRCode = (channel === 'weixin' && !isWeixinOfficialQR) || isFeishuNativeUnconfigured || isClawBotUnavailable;
   const qrValue = shouldSuppressQRCode ? '' : (linkInfo?.qr_value || linkInfo?.channel_qr_url || '');
   const channelImageURL = isWeixinOfficialQR ? (linkInfo?.channel_qr_url || '') : '';
   const copyValue = qrValue || '';
@@ -68,8 +69,11 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
     if (isFeishuNativeUnconfigured) {
       return '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码。';
     }
-    if (isClawBotUnconfigured) {
-      return '微信 ClawBot 入口尚未配置，暂时不能生成 ClawBot 移动端二维码。';
+    if (isClawBotUnavailable) {
+      return '微信 ClawBot 授权二维码暂时不可用，请稍后刷新重试。';
+    }
+    if (channel === 'weixin_clawbot') {
+      return '扫码会完成微信 ClawBot 授权；它不会像公众号一样直接进入该机器人聊天框，之后请在微信里打开 ClawBot 对话继续使用。';
     }
     if (isGroupTarget) {
       return `扫码后会把你的${activeChannel.displayName}身份绑定到当前 CatsCo 账号，之后可直接在移动端进入这个群聊。`;
@@ -78,8 +82,8 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
   })();
   const emptyQrText = isFeishuNativeUnconfigured
     ? '飞书原生入口尚未配置，暂时不能生成飞书移动端二维码'
-    : isClawBotUnconfigured
-      ? '微信 ClawBot 入口尚未配置，暂时不能生成 ClawBot 移动端二维码'
+    : isClawBotUnavailable
+      ? '微信 ClawBot 授权二维码暂时不可用'
     : channel === 'weixin' && linkInfo && !isWeixinOfficialQR
       ? '微信公众号参数二维码尚未配置'
       : '暂时没有可用二维码';

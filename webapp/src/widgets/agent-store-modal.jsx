@@ -682,7 +682,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const isFeishuOAuthEntry = isFeishuChannel(channel) && qrKind === 'feishu_oauth_entry' && qrValue;
   const isFeishuNativeEntry = isFeishuChannel(channel) && qrKind === 'feishu_native_entry' && qrValue;
   const hasFeishuEntryQRCode = isFeishuOAuthEntry || isFeishuNativeEntry;
-  const isClawBotEntry = isWeixinClawBotChannel(channel) && qrKind === 'weixin_clawbot_entry' && qrValue;
+  const isClawBotEntry = isWeixinClawBotChannel(channel) && qrKind === 'weixin_clawbot_ilink_qr' && qrValue;
   const displayQrUrl = isWeixinOfficialChannel(channel) && channelQrUrl ? channelQrUrl : '';
   const displayUrl = displayQrUrl || (hasFeishuEntryQRCode ? qrValue : isClawBotEntry ? qrValue : (isFeishuChannel(channel) || isWeixinClawBotChannel(channel) ? '' : qrValue || entryUrl));
   const usesLocalEntryUrl = isPotentiallyPrivateEntryUrl(displayUrl);
@@ -916,9 +916,9 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
             </div>
           ) : selected && needsClawBotConfig ? (
             <div style={{ padding: 24, border: '1px dashed var(--v3-border)', borderRadius: 8 }}>
-              <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, marginBottom: 10 }}>微信 ClawBot 入口尚未配置</div>
+              <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, marginBottom: 10 }}>微信 ClawBot 授权码需从移动端使用生成</div>
               <div style={{ color: 'var(--v3-text-muted)', fontSize: 13, lineHeight: 1.7, marginBottom: 14 }}>
-                配置 ClawBot 入口模板后，这里会显示独立于公众号的微信 ClawBot 移动端使用码。
+                微信 ClawBot 使用 iLink 一次性授权二维码，不是可长期分享的公众号参数码。请在聊天页点击“移动端使用”生成当前用户的 ClawBot 授权码。
               </div>
               {clawBotEntryReasons.length > 0 && (
                 <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
@@ -930,8 +930,8 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
                 </div>
               )}
               <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
-                必填环境变量：CATSCO_WEIXIN_CLAWBOT_ENTRY_URL_TEMPLATE<br />
-                模板必须携带 {'{scene_key}'}、{'{entry_url}'} 或 {'{entry_url_encoded}'}，用于把扫码用户带回对应虚拟员工。
+                可选环境变量：CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL、CATSCO_WEIXIN_CLAWBOT_BOT_TYPE<br />
+                默认使用 https://ilinkai.weixin.qq.com 和 bot_type=3。
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`entry_${selected.id}`, entryUrl)}>
@@ -959,7 +959,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
                 )}
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 8 }}>
-                    {qrKind === 'feishu_oauth_entry' ? '飞书 OAuth 绑定入口' : qrKind === 'feishu_native_entry' ? '飞书应用入口码' : qrKind === 'weixin_clawbot_entry' ? '微信 ClawBot 入口码' : displayQrUrl ? '微信公众号参数二维码' : '网页入口链接'}
+                    {qrKind === 'feishu_oauth_entry' ? '飞书 OAuth 绑定入口' : qrKind === 'feishu_native_entry' ? '飞书应用入口码' : qrKind === 'weixin_clawbot_ilink_qr' ? '微信 ClawBot 授权码' : displayQrUrl ? '微信公众号参数二维码' : '网页入口链接'}
                   </div>
                   <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
                     {displayUrl}
@@ -974,9 +974,9 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
                       飞书原生入口：{feishuEntryStatus.native_url}
                     </div>
                   )}
-                  {isWeixinClawBotChannel(channel) && clawBotEntryStatus?.native_url && (
+                  {isWeixinClawBotChannel(channel) && clawBotEntryStatus?.qrcode_url && (
                     <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-muted)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 14 }}>
-                      ClawBot 原生入口：{clawBotEntryStatus.native_url}
+                      ClawBot iLink 授权入口：{clawBotEntryStatus.qrcode_url}
                     </div>
                   )}
                   {usesLocalEntryUrl && (

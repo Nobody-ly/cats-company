@@ -1215,34 +1215,56 @@ func TestFeishuEntryResponseUsesOAuthShortLinkForQRCode(t *testing.T) {
 	}
 }
 
-func TestClawBotEntryResponseRequiresEntryTemplate(t *testing.T) {
+func TestClawBotEntryResponseRequiresMobileLink(t *testing.T) {
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL", "")
+	t.Setenv("CATSCO_CLAWBOT_ILINK_BASE_URL", "")
+	t.Setenv("WEIXIN_CLAWBOT_ILINK_BASE_URL", "")
+	t.Setenv("WEIXIN_BASE_URL", "")
 	handler := NewChannelAgentBindingHandler(newChannelAgentTestStore(), nil)
 	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/agent-entries", nil)
 	resp := handler.entryResponse(req, &types.ChannelAgentEntry{
 		SceneKey: "scene-clawbot",
 		Channel:  "weixin_clawbot",
 	})
-	if resp.ChannelQRURL != "" || resp.QRValue != "" || resp.QRKind != "weixin_clawbot_unconfigured" {
-		t.Fatalf("clawbot entry should not expose web qr without template: %+v", resp)
+	if resp.ChannelQRURL != "" || resp.QRValue != "" || resp.QRKind != "weixin_clawbot_mobile_link_required" {
+		t.Fatalf("clawbot entry should not expose a static QR: %+v", resp)
 	}
-	if resp.ClawBotEntryStatus == nil || resp.ClawBotEntryStatus.Ready || resp.ClawBotEntryStatus.Status != "missing_entry_template" {
+	if resp.ClawBotEntryStatus == nil || resp.ClawBotEntryStatus.Ready || resp.ClawBotEntryStatus.Status != "mobile_link_required" {
 		t.Fatalf("unexpected clawbot status: %+v", resp.ClawBotEntryStatus)
+	}
+	if resp.ClawBotEntryStatus.ILinkBaseURL != "https://ilinkai.weixin.qq.com" || resp.ClawBotEntryStatus.BotType != "3" {
+		t.Fatalf("unexpected clawbot defaults: %+v", resp.ClawBotEntryStatus)
 	}
 }
 
-func TestClawBotEntryResponseUsesConfiguredTemplate(t *testing.T) {
-	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ENTRY_URL_TEMPLATE", "weixin://clawbot/open?scene={scene_key}&entry={entry_url_encoded}")
+func TestClawBotMobileEntryResponseUsesIlinkQRCode(t *testing.T) {
+	ilinkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ilink/bot/get_bot_qrcode" {
+			t.Fatalf("unexpected iLink path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("bot_type"); got != "5" {
+			t.Fatalf("bot_type=%s, want 5", got)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ret":                0,
+			"qrcode":             "qr-mobile-1",
+			"qrcode_img_content": "https://liteapp.weixin.qq.com/q/test-mobile?qrcode=qr-mobile-1&bot_type=5",
+		})
+	}))
+	defer ilinkServer.Close()
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL", ilinkServer.URL)
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_BOT_TYPE", "5")
 	handler := NewChannelAgentBindingHandler(newChannelAgentTestStore(), nil)
 	req := httptest.NewRequest(http.MethodGet, "https://app.catsco.cc/api/agent-entries", nil)
-	resp := handler.entryResponse(req, &types.ChannelAgentEntry{
+	resp := handler.entryResponseWithScene(req, &types.ChannelAgentEntry{
 		SceneKey: "scene-clawbot",
 		Channel:  "weixin_clawbot",
-	})
-	want := "weixin://clawbot/open?scene=scene-clawbot&entry=https%3A%2F%2Fapp.catsco.cc%2Fe%2Fscene-clawbot"
-	if resp.ChannelQRURL != want || resp.QRValue != want || resp.QRKind != "weixin_clawbot_entry" {
+	}, "m.scene-clawbot")
+	want := "https://liteapp.weixin.qq.com/q/test-mobile?qrcode=qr-mobile-1&bot_type=5"
+	if resp.ChannelQRURL != want || resp.QRValue != want || resp.QRKind != "weixin_clawbot_ilink_qr" {
 		t.Fatalf("unexpected clawbot qr metadata: %+v want=%s", resp, want)
 	}
-	if resp.ClawBotEntryStatus == nil || !resp.ClawBotEntryStatus.Ready || resp.ClawBotEntryStatus.NativeURL != want {
+	if resp.ClawBotEntryStatus == nil || !resp.ClawBotEntryStatus.Ready || resp.ClawBotEntryStatus.QRCode != "qr-mobile-1" || resp.ClawBotEntryStatus.QRCodeURL != want {
 		t.Fatalf("unexpected clawbot status: %+v", resp.ClawBotEntryStatus)
 	}
 }

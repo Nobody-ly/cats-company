@@ -354,7 +354,21 @@ func TestCreateFeishuChannelIdentityMobileLinkUsesOAuthShortQRCode(t *testing.T)
 
 func TestCreateClawBotChannelIdentityMobileLinkUsesClawBotEntry(t *testing.T) {
 	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
-	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ENTRY_URL_TEMPLATE", "weixin://clawbot/open?scene={scene_key}&entry={entry_url_encoded}")
+	ilinkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ilink/bot/get_bot_qrcode" {
+			t.Fatalf("unexpected iLink path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("bot_type"); got != "3" {
+			t.Fatalf("bot_type=%s, want 3", got)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ret":                0,
+			"qrcode":             "qr-clawbot-1",
+			"qrcode_img_content": "https://liteapp.weixin.qq.com/q/test-clawbot?qrcode=qr-clawbot-1&bot_type=3",
+		})
+	}))
+	defer ilinkServer.Close()
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL", ilinkServer.URL)
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
 	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
@@ -400,10 +414,10 @@ func TestCreateClawBotChannelIdentityMobileLinkUsesClawBotEntry(t *testing.T) {
 	if resp.Entry.ID != clawBotEntry.ID || resp.Entry.Channel != "weixin_clawbot" {
 		t.Fatalf("expected clawbot entry, got %+v want id=%d", resp.Entry.ChannelAgentEntry, clawBotEntry.ID)
 	}
-	if resp.QRKind != "weixin_clawbot_entry" || !strings.Contains(resp.QRValue, "scene="+url.QueryEscape(resp.SceneKey)) {
+	if resp.QRKind != "weixin_clawbot_ilink_qr" || resp.QRValue != "https://liteapp.weixin.qq.com/q/test-clawbot?qrcode=qr-clawbot-1&bot_type=3" {
 		t.Fatalf("unexpected clawbot QR metadata: %+v", resp)
 	}
-	if resp.Entry.ClawBotEntryStatus == nil || !resp.Entry.ClawBotEntryStatus.Ready {
+	if resp.Entry.ClawBotEntryStatus == nil || !resp.Entry.ClawBotEntryStatus.Ready || resp.Entry.ClawBotEntryStatus.QRCode != "qr-clawbot-1" {
 		t.Fatalf("unexpected clawbot status: %+v", resp.Entry.ClawBotEntryStatus)
 	}
 	if wrong, _, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin", "", false); err != nil || wrong != nil {
