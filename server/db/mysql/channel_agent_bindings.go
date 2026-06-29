@@ -17,15 +17,29 @@ func (a *Adapter) EnsureChannelAgentEntry(entry *types.ChannelAgentEntry) (*type
 		return nil, fmt.Errorf("invalid channel agent entry")
 	}
 	accessMode := types.NormalizeChannelAgentAccessMode(entry.AccessMode)
-	existing, err := a.getActiveChannelAgentEntry(entry.OwnerUID, entry.AgentUID, entry.Channel, entry.ChannelAppID, accessMode)
+	tx, err := a.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin channel agent entry ensure: %w", err)
+	}
+	defer tx.Rollback()
+
+	var lockedAgentID int64
+	if err := tx.QueryRow(`SELECT id FROM users WHERE id = ? FOR UPDATE`, entry.AgentUID).Scan(&lockedAgentID); err != nil {
+		return nil, fmt.Errorf("lock channel agent entry scope: %w", err)
+	}
+
+	existing, err := getActiveChannelAgentEntryTx(tx, entry.OwnerUID, entry.AgentUID, entry.Channel, entry.ChannelAppID, accessMode)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
 		return existing, nil
 	}
 
-	res, err := a.db.Exec(
+	res, err := tx.Exec(
 		`INSERT INTO channel_agent_entries (scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status)
 		 VALUES (?, ?, ?, ?, ?, ?, 'active')`,
 		entry.SceneKey, entry.Channel, entry.ChannelAppID, accessMode, entry.OwnerUID, entry.AgentUID,
@@ -34,6 +48,9 @@ func (a *Adapter) EnsureChannelAgentEntry(entry *types.ChannelAgentEntry) (*type
 		return nil, fmt.Errorf("create channel agent entry: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return a.GetChannelAgentEntryByID(id)
 }
 
@@ -1052,6 +1069,24 @@ func (a *Adapter) ResolveChannelAgentRoute(query types.ChannelAgentRouteQuery) (
 
 func (a *Adapter) getActiveChannelAgentEntry(ownerUID, agentUID int64, channel, channelAppID, accessMode string) (*types.ChannelAgentEntry, error) {
 	row := a.db.QueryRow(
+		`SELECT id, scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
+		 FROM channel_agent_entries
+		 WHERE owner_uid = ? AND agent_uid = ? AND channel = ? AND channel_app_id = ? AND access_mode = ? AND status = 'active'
+		 ORDER BY created_at DESC LIMIT 1`,
+		ownerUID, agentUID, channel, channelAppID, types.NormalizeChannelAgentAccessMode(accessMode),
+	)
+	entry, err := scanChannelAgentEntry(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get active channel agent entry: %w", err)
+	}
+	return entry, nil
+}
+
+func getActiveChannelAgentEntryTx(tx *sql.Tx, ownerUID, agentUID int64, channel, channelAppID, accessMode string) (*types.ChannelAgentEntry, error) {
+	row := tx.QueryRow(
 		`SELECT id, scene_key, channel, channel_app_id, access_mode, owner_uid, agent_uid, status, created_at, updated_at, last_used_at
 		 FROM channel_agent_entries
 		 WHERE owner_uid = ? AND agent_uid = ? AND channel = ? AND channel_app_id = ? AND access_mode = ? AND status = 'active'

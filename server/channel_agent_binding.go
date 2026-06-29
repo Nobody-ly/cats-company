@@ -884,6 +884,11 @@ func (h *ChannelAgentBindingHandler) findMobileIdentityEntry(bindings store.Chan
 	if fallback != nil {
 		return fallback, nil
 	}
+	if ownerEntry, err := h.ensureOwnerMobileIdentityEntry(bindings, canonicalUID, agentUID, channel, appID); err != nil {
+		return nil, err
+	} else if ownerEntry != nil {
+		return ownerEntry, nil
+	}
 	return nil, fmt.Errorf("you must add this virtual employee on CatsCo before binding it to a mobile channel")
 }
 
@@ -909,6 +914,31 @@ func (h *ChannelAgentBindingHandler) findMobileIdentityEntryByID(bindings store.
 		return nil, fmt.Errorf("you must add this virtual employee on CatsCo before binding it to a mobile channel")
 	}
 	return entry, nil
+}
+
+func (h *ChannelAgentBindingHandler) ensureOwnerMobileIdentityEntry(bindings store.ChannelAgentBindingStore, canonicalUID, agentUID int64, channel, appID string) (*types.ChannelAgentEntry, error) {
+	if h == nil || h.db == nil || bindings == nil || canonicalUID <= 0 || agentUID <= 0 {
+		return nil, nil
+	}
+	ownerUID, err := h.db.GetBotOwner(agentUID)
+	if err != nil {
+		return nil, nil
+	}
+	if ownerUID != canonicalUID {
+		return nil, nil
+	}
+	if _, _, err := h.requireAgentOwner(canonicalUID, agentUID); err != nil {
+		return nil, err
+	}
+	return bindings.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     mustGenerateSceneKey(),
+		Channel:      channel,
+		ChannelAppID: appID,
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     canonicalUID,
+		AgentUID:     agentUID,
+		Status:       "active",
+	})
 }
 
 func (h *ChannelAgentBindingHandler) handleListAgentEntries(w http.ResponseWriter, r *http.Request) {

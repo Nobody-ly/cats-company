@@ -227,6 +227,68 @@ func TestCreateChannelIdentityMobileLinkRequiresExistingAccess(t *testing.T) {
 	}
 }
 
+func TestCreateChannelIdentityMobileLinkAutoCreatesOwnerEntry(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	t.Setenv("CATSCO_WEIXIN_APP_ID", "wx_app")
+	t.Setenv("CATSCO_WEIXIN_APP_SECRET", "wx_secret")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "fresh-agent", DisplayName: "Fresh Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "https://app.catsco.cc/api/channel-agent-bindings/mobile-link", strings.NewReader(`{"agent_uid":43,"channel":"weixin"}`))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(7)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp channelAgentMobileLinkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Entry.ID == 0 || resp.Entry.OwnerUID != 7 || resp.Entry.AgentUID != 43 || resp.Entry.Channel != "weixin" {
+		t.Fatalf("unexpected owner-created entry: %+v", resp.Entry.ChannelAgentEntry)
+	}
+	if resp.Entry.AccessMode != types.ChannelAgentAccessApprovalRequired || resp.Entry.ChannelAppID != "wx_app" {
+		t.Fatalf("unexpected owner-created entry config: %+v", resp.Entry.ChannelAgentEntry)
+	}
+	if resp.SceneKey == "" || !strings.HasPrefix(resp.SceneKey, "m.") {
+		t.Fatalf("unexpected mobile scene key: %+v", resp)
+	}
+	if resp.QRKind != "weixin_official_qr" || !strings.Contains(resp.ChannelQRURL, url.QueryEscape(resp.SceneKey)) {
+		t.Fatalf("unexpected QR metadata: %+v", resp)
+	}
+	entries, err := db.ListChannelAgentEntries(7, 43)
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != resp.Entry.ID {
+		t.Fatalf("expected mobile flow to persist one owner entry, entries=%+v resp=%+v", entries, resp.Entry.ChannelAgentEntry)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "https://app.catsco.cc/api/channel-agent-bindings/mobile-link", strings.NewReader(`{"agent_uid":43,"channel":"weixin"}`))
+	secondReq = secondReq.WithContext(context.WithValue(secondReq.Context(), uidKey, int64(7)))
+	secondRec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("second status=%d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	var secondResp channelAgentMobileLinkResponse
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	entries, err = db.ListChannelAgentEntries(7, 43)
+	if err != nil {
+		t.Fatalf("list entries after second link: %v", err)
+	}
+	if len(entries) != 1 || secondResp.Entry.ID != resp.Entry.ID || secondResp.SceneKey == resp.SceneKey {
+		t.Fatalf("expected second mobile link to reuse entry with a new mobile scene, entries=%+v first=%+v second=%+v", entries, resp, secondResp)
+	}
+}
+
 func TestCreateChannelIdentityMobileLinkUsesExistingFriendAccess(t *testing.T) {
 	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
 	t.Setenv("CATSCO_WEIXIN_APP_ID", "wx_app")
