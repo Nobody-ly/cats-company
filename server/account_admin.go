@@ -25,6 +25,7 @@ type AccountAdminHandler struct {
 	commercial               CommercialStore
 	relayAdmin               *RelayAdminClient
 	commercialEnforceEnabled bool
+	commercialEnforceUIDs    map[int64]bool
 }
 
 type AccountAdminUserLookup interface {
@@ -51,12 +52,20 @@ func NewAccountAdminHandler(users AccountAdminUserLookup, services AccountServic
 	return &AccountAdminHandler{users: users, services: services, serviceStore: serviceStore, commercial: commercialStore}
 }
 
-func (h *AccountAdminHandler) SetCommercialRelayAdmin(client *RelayAdminClient, enforceEnabled bool) {
+func (h *AccountAdminHandler) SetCommercialRelayAdmin(client *RelayAdminClient, enforceEnabled bool, enforceUIDs ...map[int64]bool) {
 	if h == nil {
 		return
 	}
 	h.relayAdmin = client
 	h.commercialEnforceEnabled = enforceEnabled
+	h.commercialEnforceUIDs = map[int64]bool{}
+	if len(enforceUIDs) > 0 {
+		for uid, enabled := range enforceUIDs[0] {
+			if uid > 0 && enabled {
+				h.commercialEnforceUIDs[uid] = true
+			}
+		}
+	}
 }
 
 func (h *AccountAdminHandler) HandlePage(w http.ResponseWriter, r *http.Request) {

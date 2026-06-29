@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Copy, ExternalLink, Gift, KeyRound, RotateCcw, Server, Sparkles, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Check, Copy, ExternalLink, Gift, KeyRound, RotateCcw, Server, Sparkles, Trash2, X } from 'lucide-react';
 import { api } from '../api';
 
 const FALLBACK_CONFIG = {
@@ -64,6 +64,13 @@ function formatTime(value) {
   return date.toLocaleString();
 }
 
+function formatShortDate(value) {
+  if (!value) return '长期有效';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+
 function formatCNY(value) {
   const number = Number(value || 0);
   return number.toLocaleString('zh-CN', {
@@ -94,6 +101,14 @@ function commercialTotals(summary) {
   return Object.entries(summary?.totals_by_model || {})
     .filter(([, amount]) => Number(amount) > 0)
     .sort(([a], [b]) => a.localeCompare(b));
+}
+
+function nearestPackageExpiry(packages) {
+  const dates = packages
+    .map((item) => new Date(item.expires_at || '').getTime())
+    .filter((time) => Number.isFinite(time));
+  if (!dates.length) return '';
+  return new Date(Math.min(...dates)).toISOString();
 }
 
 function commercialRolloutLabel(commercial) {
@@ -297,6 +312,8 @@ export default function RelayAccessModal({ onClose }) {
   const commercialEnforced = commercial?.enforce_enabled === true;
   const activePackages = activeEntitlements(commercialSummary);
   const modelTotals = commercialTotals(commercialSummary);
+  const packageExpiry = nearestPackageExpiry(activePackages);
+  const packageExpiryText = activePackages.length > 0 ? formatShortDate(packageExpiry) : '无套餐';
 
   const redeemInvite = async () => {
     const code = inviteCode.trim();
@@ -404,7 +421,26 @@ export default function RelayAccessModal({ onClose }) {
                   <span>当前有效套餐</span>
                 </div>
               </div>
+              <div className="relay-access-commerce-card">
+                <CalendarDays size={17} />
+                <div>
+                  <strong>{packageExpiryText}</strong>
+                  <span>最近到期</span>
+                </div>
+              </div>
             </div>
+
+            {commercialEnabled && activePackages.length > 0 && (
+              <div className="relay-access-package-list">
+                <div className="relay-access-mini-title">当前套餐</div>
+                {activePackages.map((item) => (
+                  <div className="relay-access-package-row" key={`${item.id || item.plan_id}-${item.source_ref || item.starts_at}`}>
+                    <span>{item.plan_name || item.plan_slug || '套餐'}</span>
+                    <strong>{formatShortDate(item.expires_at)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {commercialEnabled && modelTotals.length > 0 && (
               <div className="relay-access-budget-list">

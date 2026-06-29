@@ -2557,7 +2557,7 @@ button.catsco-download-action:disabled {
 
 .relay-access-commerce-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2598,7 +2598,19 @@ button.catsco-download-action:disabled {
   gap: 8px;
 }
 
-.relay-access-budget-list div {
+.relay-access-package-list {
+  display: grid;
+  gap: 8px;
+}
+
+.relay-access-mini-title {
+  color: var(--v3-text-name);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.relay-access-budget-list div,
+.relay-access-package-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2610,7 +2622,13 @@ button.catsco-download-action:disabled {
   background: rgba(0, 0, 0, 0.08);
 }
 
-.relay-access-budget-list span {
+.relay-access-package-row strong {
+  color: var(--v3-text-name);
+  font-size: 13px;
+}
+
+.relay-access-budget-list span,
+.relay-access-package-row span {
   margin-top: 0;
   overflow-wrap: anywhere;
 }

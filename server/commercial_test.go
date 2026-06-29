@@ -407,6 +407,59 @@ func TestRelayCommercialAllowlistEnablesSingleUser(t *testing.T) {
 	}
 }
 
+func TestRelayCommercialEnforceAllowlistAppliesPerUser(t *testing.T) {
+	store := newCommercialTestStore()
+	handler := NewRelayCommercialHandlerWithOptions(store, RelayCommercialOptions{
+		PublicEnabled: true,
+		EnforceUIDs:   map[int64]bool{38: true},
+	})
+
+	allowedReq := httptest.NewRequest(http.MethodGet, "/api/relay/commercial", nil)
+	allowedReq = allowedReq.WithContext(context.WithValue(allowedReq.Context(), uidKey, int64(38)))
+	allowedRec := httptest.NewRecorder()
+	handler.HandleSummary(allowedRec, allowedReq)
+	var allowedBody struct {
+		EnforceEnabled bool `json:"enforce_enabled"`
+	}
+	if err := json.Unmarshal(allowedRec.Body.Bytes(), &allowedBody); err != nil {
+		t.Fatalf("decode allowed summary: %v", err)
+	}
+	if !allowedBody.EnforceEnabled {
+		t.Fatalf("expected uid 38 to be enforce-enabled: %s", allowedRec.Body.String())
+	}
+
+	otherReq := httptest.NewRequest(http.MethodGet, "/api/relay/commercial", nil)
+	otherReq = otherReq.WithContext(context.WithValue(otherReq.Context(), uidKey, int64(39)))
+	otherRec := httptest.NewRecorder()
+	handler.HandleSummary(otherRec, otherReq)
+	var otherBody struct {
+		EnforceEnabled bool `json:"enforce_enabled"`
+	}
+	if err := json.Unmarshal(otherRec.Body.Bytes(), &otherBody); err != nil {
+		t.Fatalf("decode other summary: %v", err)
+	}
+	if otherBody.EnforceEnabled {
+		t.Fatalf("expected uid 39 to stay dry-run only: %s", otherRec.Body.String())
+	}
+}
+
+func TestAccountAdminCommercialRelayEnforceAllowlist(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil, newCommercialTestStore())
+	handler.SetCommercialRelayAdmin(nil, false, map[int64]bool{38: true})
+
+	if !handler.commercialRelayEnforcedFor(38) {
+		t.Fatalf("expected uid 38 to be enforce-enabled")
+	}
+	if handler.commercialRelayEnforcedFor(39) {
+		t.Fatalf("expected uid 39 to stay dry-run only")
+	}
+
+	handler.SetCommercialRelayAdmin(nil, true)
+	if !handler.commercialRelayEnforcedFor(39) {
+		t.Fatalf("expected global enforce to enable all users")
+	}
+}
+
 func TestCommercialRelayDryRunBuildsBudgetDiff(t *testing.T) {
 	summary := &types.CommercialSummary{
 		UID: 38,
@@ -462,6 +515,75 @@ func TestCommercialRelayDryRunBuildsBudgetDiff(t *testing.T) {
 	}
 	if dryRun.ProposedUpdates[0].Provider != "deepseek-anthropic" || dryRun.ProposedUpdates[0].MaxLimit != 100 {
 		t.Fatalf("unexpected proposed update: %+v", dryRun.ProposedUpdates[0])
+	}
+}
+
+func TestCommercialRelayDryRunFlagsOverLimitWithoutNoopSync(t *testing.T) {
+	summary := &types.CommercialSummary{
+		UID: 38,
+		TotalsByModel: map[string]float64{
+			"MiniMax-M3": 500,
+		},
+		TotalCNY: 500,
+	}
+	relayUser := &commercialRelayUsageUser{
+		UID:        38,
+		Username:   "ck",
+		Configured: true,
+		Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+			{
+				Provider:      "minimax-m3-anthropic",
+				Model:         "MiniMax-M3",
+				AllowedModels: []string{"MiniMax-M3"},
+				Budget:        commercialRelayBudget{MaxLimit: 500, CurrentUsage: 745.63, ResetDuration: "1M"},
+			},
+		}},
+	}
+
+	dryRun := compareCommercialRelayBudgets(38, summary, relayUser)
+
+	row := findCommercialRelayComparison(t, dryRun, "MiniMax-M3")
+	if row.Status != "over_limit" || row.Remaining != 0 {
+		t.Fatalf("expected over_limit row with zero remaining, got %+v", row)
+	}
+	if len(dryRun.ProposedUpdates) != 0 {
+		t.Fatalf("over-limit with matching relay limit should not propose noop sync: %+v", dryRun.ProposedUpdates)
+	}
+}
+
+func TestCommercialRelayDryRunCanLowerOverLimitRelayBudget(t *testing.T) {
+	summary := &types.CommercialSummary{
+		UID: 38,
+		TotalsByModel: map[string]float64{
+			"MiniMax-M3": 500,
+		},
+		TotalCNY: 500,
+	}
+	relayUser := &commercialRelayUsageUser{
+		UID:        38,
+		Username:   "ck",
+		Configured: true,
+		Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+			{
+				Provider:      "minimax-m3-anthropic",
+				Model:         "MiniMax-M3",
+				AllowedModels: []string{"MiniMax-M3"},
+				Budget:        commercialRelayBudget{MaxLimit: 1000, CurrentUsage: 745.63, ResetDuration: "1M"},
+			},
+		}},
+	}
+
+	dryRun := compareCommercialRelayBudgets(38, summary, relayUser)
+
+	row := findCommercialRelayComparison(t, dryRun, "MiniMax-M3")
+	if row.Status != "over_limit" || row.Remaining != 0 {
+		t.Fatalf("expected over_limit row with zero remaining, got %+v", row)
+	}
+	if len(dryRun.ProposedUpdates) != 1 {
+		t.Fatalf("expected one down-limit sync update, got %+v", dryRun.ProposedUpdates)
+	}
+	if dryRun.ProposedUpdates[0].MaxLimit != 500 {
+		t.Fatalf("expected sync to lower relay max to 500, got %+v", dryRun.ProposedUpdates[0])
 	}
 }
 

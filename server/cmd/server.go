@@ -300,6 +300,7 @@ func main() {
 	relayCommercialPublicEnabled := envBool("CATS_RELAY_COMMERCIAL_ENABLED")
 	relayCommercialTestUIDs := envInt64Set("CATS_RELAY_COMMERCIAL_TEST_UIDS")
 	relayCommercialEnforceEnabled := envBool("CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED")
+	relayCommercialEnforceUIDs := envInt64Set("CATS_RELAY_COMMERCIAL_ENFORCE_UIDS")
 	if relayCommercialPublicEnabled {
 		log.Printf("relay commercial package UI is enabled for authenticated owners")
 	}
@@ -309,11 +310,15 @@ func main() {
 	if relayCommercialEnforceEnabled {
 		log.Printf("relay commercial enforce sync is enabled")
 	}
-	accountAdminHandler.SetCommercialRelayAdmin(relayAdminClient, relayCommercialEnforceEnabled)
+	if len(relayCommercialEnforceUIDs) > 0 {
+		log.Printf("relay commercial enforce sync allowlist is enabled for %d uid(s)", len(relayCommercialEnforceUIDs))
+	}
+	accountAdminHandler.SetCommercialRelayAdmin(relayAdminClient, relayCommercialEnforceEnabled, relayCommercialEnforceUIDs)
 	relayCommercialHandler := server.NewRelayCommercialHandlerWithOptions(commercialStore, server.RelayCommercialOptions{
 		PublicEnabled:  relayCommercialPublicEnabled,
 		TestUIDs:       relayCommercialTestUIDs,
 		EnforceEnabled: relayCommercialEnforceEnabled,
+		EnforceUIDs:    relayCommercialEnforceUIDs,
 	})
 	// usageHandler := server.NewUsageHandler(db)
 

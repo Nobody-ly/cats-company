@@ -816,6 +816,12 @@
       <div class="commercial-grid" style="margin-top: 16px;">
         <div class="commercial-panel">
           <h3>套餐</h3>
+          <div class="commercial-model-actions" aria-label="套餐预设">
+            <button type="button" data-plan-preset="teacher-trial">教师试用包</button>
+            <button type="button" data-plan-preset="teacher-standard">教师标准包</button>
+            <button type="button" data-plan-preset="internal-large">内部大额包</button>
+            <button type="button" data-plan-preset="blank">空白套餐</button>
+          </div>
           <form id="commercial-plan-form">
             <input id="commercial-plan-slug" autocomplete="off" placeholder="套餐标识，例如 trial-teacher" />
             <input id="commercial-plan-name" autocomplete="off" placeholder="显示名称，例如 教师试用包" />
@@ -1438,6 +1444,46 @@ http://127.0.0.1:26061/local/account-admin</code>
       },
       clear: {},
     };
+    const commercialPlanPresets = {
+      'teacher-trial': {
+        slug: 'teacher-trial',
+        name: '教师试用包',
+        monthly_budget_cny: 0,
+        duration_days: 30,
+        model_budgets: modelBudgetTemplates['teacher-trial'],
+      },
+      'teacher-standard': {
+        slug: 'teacher-standard',
+        name: '教师标准包',
+        monthly_budget_cny: 0,
+        duration_days: 30,
+        model_budgets: {
+          'MiniMax-M3': 1500,
+          'MiniMax-M2.7': 2000,
+          'deepseek-v4-flash': 300,
+          'glm-5.1': 1000,
+        },
+      },
+      'internal-large': {
+        slug: 'internal-large',
+        name: '内部大额包',
+        monthly_budget_cny: 0,
+        duration_days: 30,
+        model_budgets: {
+          'MiniMax-M3': 5000,
+          'MiniMax-M2.7': 5000,
+          'deepseek-v4-flash': 1000,
+          'glm-5.1': 3000,
+        },
+      },
+      blank: {
+        slug: '',
+        name: '',
+        monthly_budget_cny: 0,
+        duration_days: 30,
+        model_budgets: {},
+      },
+    };
 
     function modelName(model) {
       return !model || model === '*' ? '通用额度' : model;
@@ -1601,6 +1647,7 @@ http://127.0.0.1:26061/local/account-admin</code>
       switch (status) {
         case 'match': return '一致';
         case 'mismatch': return '需同步';
+        case 'over_limit': return '已超额';
         case 'relay_only': return '仅 relay';
         case 'missing_relay_budget': return '缺 relay 限额';
         default: return status || '-';
@@ -1638,6 +1685,19 @@ http://127.0.0.1:26061/local/account-admin</code>
         const template = modelBudgetTemplates[button.dataset.modelBudgetTemplate] || {};
         document.querySelector('#commercial-plan-model-budgets').value = Object.keys(template).length
           ? JSON.stringify(template, null, 2)
+          : '';
+      });
+    });
+
+    document.querySelectorAll('[data-plan-preset]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const preset = commercialPlanPresets[button.dataset.planPreset] || commercialPlanPresets.blank;
+        document.querySelector('#commercial-plan-slug').value = preset.slug || '';
+        document.querySelector('#commercial-plan-name').value = preset.name || '';
+        document.querySelector('#commercial-plan-monthly').value = String(preset.monthly_budget_cny || 0);
+        document.querySelector('#commercial-plan-duration').value = String(preset.duration_days || 30);
+        document.querySelector('#commercial-plan-model-budgets').value = Object.keys(preset.model_budgets || {}).length
+          ? JSON.stringify(preset.model_budgets, null, 2)
           : '';
       });
     });
@@ -1726,10 +1786,18 @@ http://127.0.0.1:26061/local/account-admin</code>
         }
         commercialGrantResult.innerHTML = `<strong>已发放 ${formatCNY(data.grant.amount_cny)}</strong><div class="commercial-meta">UID ${escapeHTML(data.grant.uid)} · ${escapeHTML(modelName(data.grant.model))} · ${escapeHTML(data.grant.note || '-')}</div>`;
         document.querySelector('#commercial-summary-uid').value = String(data.grant.uid);
+        document.querySelector('#commercial-dry-run-uid').value = String(data.grant.uid);
+        clearCommercialError(commercialSummaryError);
+        clearCommercialError(commercialDryRunError);
         try {
           await loadCommercialSummary(data.grant.uid);
         } catch (summaryErr) {
           showCommercialError(commercialSummaryError, summaryErr && summaryErr.message ? summaryErr.message : '发放成功，但刷新用户额度失败。');
+        }
+        try {
+          await loadCommercialDryRun(data.grant.uid);
+        } catch (dryRunErr) {
+          showCommercialError(commercialDryRunError, dryRunErr && dryRunErr.message ? dryRunErr.message : '发放成功，但刷新 relay 对账失败。');
         }
       } catch (err) {
         showCommercialError(commercialGrantError, err && err.message ? err.message : '发放失败。');

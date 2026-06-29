@@ -42,6 +42,7 @@ describe('RelayAccessModal commercial rollout', () => {
         total_cny: 0,
         totals_by_model: {},
         entitlements: [],
+        plans: [],
       },
     });
     container = document.createElement('div');
@@ -86,8 +87,33 @@ describe('RelayAccessModal commercial rollout', () => {
           'deepseek-v4-flash': 100,
         },
         entitlements: [
-          { state: 'active', plan_name: '教师试用包' },
+          { id: 1, state: 'active', plan_name: '教师试用包', expires_at: '2026-07-29T00:00:00Z' },
           { state: 'expired', plan_name: '旧套餐' },
+        ],
+        plans: [
+          {
+            id: 1,
+            slug: 'teacher-trial',
+            name: '教师试用包',
+            state: 0,
+            duration_days: 30,
+            sort_order: 10,
+            model_budgets: {
+              'MiniMax-M3': 500,
+              'deepseek-v4-flash': 100,
+            },
+          },
+          {
+            id: 2,
+            slug: 'disabled',
+            name: '禁用套餐',
+            state: 1,
+            duration_days: 30,
+            sort_order: 20,
+            model_budgets: {
+              'glm-5.1': 500,
+            },
+          },
         ],
       },
     });
@@ -98,8 +124,12 @@ describe('RelayAccessModal commercial rollout', () => {
     expect(container.textContent).toContain('套餐账本额度');
     expect(container.textContent).toContain('需要管理员后台对账/同步后');
     expect(container.textContent).toContain('当前有效套餐');
+    expect(container.textContent).toContain('最近到期');
+    expect(container.textContent).toContain('当前套餐');
+    expect(container.textContent).toContain('教师试用包');
     expect(container.textContent).toContain('MiniMax-M3');
     expect(container.textContent).toContain('deepseek-v4-flash');
+    expect(container.textContent).not.toContain('禁用套餐');
     expect(container.querySelector('.relay-access-invite-form')).not.toBeNull();
   });
 });

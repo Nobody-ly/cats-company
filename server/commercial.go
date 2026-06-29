@@ -28,12 +28,14 @@ type RelayCommercialHandler struct {
 	publicEnabled  bool
 	testUIDs       map[int64]bool
 	enforceEnabled bool
+	enforceUIDs    map[int64]bool
 }
 
 type RelayCommercialOptions struct {
 	PublicEnabled  bool
 	TestUIDs       map[int64]bool
 	EnforceEnabled bool
+	EnforceUIDs    map[int64]bool
 }
 
 func NewRelayCommercialHandler(store CommercialStore, publicEnabled ...bool) *RelayCommercialHandler {
@@ -51,11 +53,18 @@ func NewRelayCommercialHandlerWithOptions(store CommercialStore, opts RelayComme
 			testUIDs[uid] = true
 		}
 	}
+	enforceUIDs := map[int64]bool{}
+	for uid, enabled := range opts.EnforceUIDs {
+		if uid > 0 && enabled {
+			enforceUIDs[uid] = true
+		}
+	}
 	return &RelayCommercialHandler{
 		store:          store,
 		publicEnabled:  opts.PublicEnabled,
 		testUIDs:       testUIDs,
 		enforceEnabled: opts.EnforceEnabled,
+		enforceUIDs:    enforceUIDs,
 	}
 }
 
@@ -80,6 +89,10 @@ func (h *RelayCommercialHandler) rolloutFor(uid int64) string {
 	return "disabled"
 }
 
+func (h *RelayCommercialHandler) enforceFor(uid int64) bool {
+	return h != nil && (h.enforceEnabled || h.enforceUIDs[uid])
+}
+
 func (h *RelayCommercialHandler) HandleSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -98,7 +111,7 @@ func (h *RelayCommercialHandler) HandleSummary(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled":         true,
 		"rollout":         h.rolloutFor(uid),
-		"enforce_enabled": h.enforceEnabled,
+		"enforce_enabled": h.enforceFor(uid),
 		"summary":         summary,
 		"note":            "套餐额度内测中；未开启真实接管前，当前 relay 默认额度和重置周期继续保留。",
 	})
@@ -269,7 +282,7 @@ func (h *AccountAdminHandler) HandleCommercialRelaySync(w http.ResponseWriter, r
 		writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"applied": false, "dry_run": dryRun})
 		return
 	}
-	if !h.commercialEnforceEnabled {
+	if !h.commercialRelayEnforcedFor(req.UID) {
 		writeAccountAdminJSON(w, http.StatusConflict, map[string]interface{}{
 			"error":   "commercial relay enforce is disabled",
 			"applied": false,
@@ -319,18 +332,22 @@ func (h *AccountAdminHandler) buildCommercialRelayDryRun(ctx context.Context, st
 		relayUser = user
 	}
 	dryRun := compareCommercialRelayBudgets(uid, summary, relayUser)
-	dryRun.EnforceEnabled = h.commercialEnforceEnabled
+	dryRun.EnforceEnabled = h.commercialRelayEnforcedFor(uid)
 	dryRun.RelayAdminConfigured = h.relayAdmin != nil
 	if h.relayAdmin == nil {
 		dryRun.Note = "relay admin is not configured; only commercial ledger was loaded"
 	} else if relayUser == nil {
 		dryRun.Note = "relay key was not found; create the user's relay key before enforcing commercial quota"
-	} else if !h.commercialEnforceEnabled {
-		dryRun.Note = "dry-run only; set CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED=1 before applying to relay-admin"
+	} else if !dryRun.EnforceEnabled {
+		dryRun.Note = "dry-run only; enable CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED=1 or include this uid in CATS_RELAY_COMMERCIAL_ENFORCE_UIDS before applying to relay-admin"
 	} else {
 		dryRun.Note = "enforce is enabled; apply will write provider_config_budgets to relay-admin"
 	}
 	return dryRun, nil
+}
+
+func (h *AccountAdminHandler) commercialRelayEnforcedFor(uid int64) bool {
+	return h != nil && (h.commercialEnforceEnabled || h.commercialEnforceUIDs[uid])
 }
 
 func (h *AccountAdminHandler) fetchCommercialRelayUsage(ctx context.Context, uid int64) (*commercialRelayUsageUser, error) {
@@ -380,7 +397,7 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 		limit, ok := relayByModel[model]
 		row := relayComparisonForModel(model, amount, limit, ok)
 		dryRun.Comparisons = append(dryRun.Comparisons, row)
-		if row.Syncable && row.Status != "match" {
+		if commercialRelayShouldSync(row) {
 			dryRun.ProposedUpdates = append(dryRun.ProposedUpdates, commercialRelayProviderBudgetUpdate{
 				Provider:      row.Provider,
 				AllowedModels: row.AllowedModels,
@@ -410,6 +427,19 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 	return dryRun
 }
 
+func commercialRelayShouldSync(row commercialRelayBudgetComparison) bool {
+	if !row.Syncable {
+		return false
+	}
+	if row.Status == "mismatch" {
+		return true
+	}
+	if row.Status == "over_limit" {
+		return math.Abs(row.RelayLimit-row.CommercialLimit) > 0.000001
+	}
+	return false
+}
+
 func relayComparisonForModel(model string, amount float64, limit commercialRelayModelLimit, found bool) commercialRelayBudgetComparison {
 	row := commercialRelayBudgetComparison{
 		Model:           model,
@@ -432,6 +462,10 @@ func relayComparisonForModel(model string, amount float64, limit commercialRelay
 		row.Status = "match"
 	} else {
 		row.Status = "mismatch"
+	}
+	if amount > 0 && limit.Budget.CurrentUsage > amount+0.000001 {
+		row.Status = "over_limit"
+		row.Remaining = 0
 	}
 	if !row.Syncable {
 		row.Status = "missing_relay_budget"
