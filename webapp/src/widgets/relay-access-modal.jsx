@@ -96,6 +96,12 @@ function commercialTotals(summary) {
     .sort(([a], [b]) => a.localeCompare(b));
 }
 
+function commercialRolloutLabel(commercial) {
+  if (commercial?.enforce_enabled) return '已接管';
+  if (commercial?.enabled) return '账本灰度';
+  return '未开放';
+}
+
 function extractPlainRelayKey(data) {
   const key = data?.key;
   const candidates = typeof key === 'string'
@@ -288,6 +294,7 @@ export default function RelayAccessModal({ onClose }) {
   const busy = Boolean(actionLoading);
   const commercialSummary = commercial?.summary;
   const commercialEnabled = commercial?.enabled === true && commercialSummary;
+  const commercialEnforced = commercial?.enforce_enabled === true;
   const activePackages = activeEntitlements(commercialSummary);
   const modelTotals = commercialTotals(commercialSummary);
 
@@ -378,7 +385,7 @@ export default function RelayAccessModal({ onClose }) {
                 </div>
               </div>
               <span className={`relay-access-state ${commercialEnabled ? 'active' : 'inactive'}`}>
-                {commercialEnabled ? '灰度开启' : '未开放'}
+                {commercialRolloutLabel(commercial)}
               </span>
             </div>
 
@@ -387,7 +394,7 @@ export default function RelayAccessModal({ onClose }) {
                 <Sparkles size={17} />
                 <div>
                   <strong>{formatCNY(commercialSummary?.total_cny)} CNY</strong>
-                  <span>已发放测试账本额度</span>
+                  <span>套餐账本额度</span>
                 </div>
               </div>
               <div className="relay-access-commerce-card">
@@ -429,7 +436,11 @@ export default function RelayAccessModal({ onClose }) {
               </div>
             )}
             {commercialEnabled && (
-              <div className="oc-settings-secondary">{commercial?.note || '管理员也可以在后台手动发放或调整用户额度。'}</div>
+              <div className="oc-settings-secondary">
+                {commercialEnforced
+                  ? '套餐额度已接入 relay 模型限额；管理员仍可在后台手动调额或重置用量。'
+                  : (commercial?.note || '套餐额度先记录在账本里；需要管理员后台对账/同步后，才会成为 relay 真实模型限额。')}
+              </div>
             )}
           </section>
 

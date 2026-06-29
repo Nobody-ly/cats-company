@@ -794,7 +794,7 @@
 
     <section class="admin-view" data-admin-view="commercial">
       <h2>中转商业化测试</h2>
-      <p>先只建立套餐、邀请码和人工发放账本；现有 relay 默认额度、自动建 Key 和 Bifrost 转发仍继续保留。</p>
+      <p>先建立套餐、邀请码和人工发放账本；模型额度可通过对账同步到 relay，现有自动建 Key 和 Bifrost 转发继续保留。</p>
       <div class="commercial-status-grid" id="commercial-status-grid" aria-live="polite">
         <div class="commercial-status-card">
           <span>套餐</span>
@@ -819,8 +819,8 @@
           <form id="commercial-plan-form">
             <input id="commercial-plan-slug" autocomplete="off" placeholder="套餐标识，例如 trial-teacher" />
             <input id="commercial-plan-name" autocomplete="off" placeholder="显示名称，例如 教师试用包" />
-            <input id="commercial-plan-monthly" inputmode="decimal" placeholder="通用月额度 CNY，可填 0" />
-            <textarea id="commercial-plan-model-budgets" placeholder='模型额度 JSON，例如 {"MiniMax-M3":500,"deepseek-v4-flash":100}'></textarea>
+            <input id="commercial-plan-monthly" inputmode="decimal" placeholder="通用账本额度 CNY，内测建议填 0" />
+            <textarea id="commercial-plan-model-budgets" placeholder='模型额度 JSON，会同步到 relay，例如 {"MiniMax-M3":500,"deepseek-v4-flash":100}'></textarea>
             <div class="commercial-model-actions" aria-label="套餐模型额度模板">
               <button type="button" data-model-budget-template="teacher-trial">教师试用</button>
               <button type="button" data-model-budget-template="m3-only">M3 体验</button>
@@ -853,7 +853,7 @@
           <form id="commercial-grant-form">
             <input id="commercial-grant-uid" inputmode="numeric" placeholder="用户 UID" />
             <select id="commercial-grant-model">
-              <option value="">通用额度</option>
+              <option value="">通用账本额度（暂不直接同步 relay）</option>
               <option value="MiniMax-M3">MiniMax-M3</option>
               <option value="MiniMax-M2.7">MiniMax-M2.7</option>
               <option value="deepseek-v4-flash">deepseek-v4-flash</option>
@@ -885,12 +885,12 @@
             <button id="commercial-sync-button" type="button">尝试同步</button>
           </form>
           <div id="commercial-dry-run-error" class="error"></div>
-          <div id="commercial-dry-run-result" class="commercial-summary">对比商业账本额度和 relay-admin / Bifrost 当前模型限额；默认只预演，不会写入。</div>
+          <div id="commercial-dry-run-result" class="commercial-summary">对比商业账本里的模型额度和 relay-admin / Bifrost 当前模型限额；默认只预演，不会写入。</div>
         </div>
 
         <div class="commercial-panel commercial-panel-wide">
           <h3>运营边界</h3>
-          <p>这块先做商业化账本、灰度入口和 relay 对账。只有开启 enforce 变量后，“尝试同步”才会把商业额度写到 relay-admin 的模型限额；默认不会替换现有用户的 relay key、模型调用和 Bifrost 路由。</p>
+          <p>这块先做商业化账本、灰度入口和 relay 对账。只有开启 enforce 变量后，“尝试同步”才会把模型额度写到 relay-admin 的 provider config；默认不会替换现有用户的 relay key、模型调用、key 级月预算或 Bifrost 路由。通用账本额度暂时只做记录和展示，不作为 relay 强制限额。</p>
         </div>
       </div>
     </section>

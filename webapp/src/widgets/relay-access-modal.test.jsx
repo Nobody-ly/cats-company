@@ -94,7 +94,9 @@ describe('RelayAccessModal commercial rollout', () => {
 
     await renderModal();
 
-    expect(container.textContent).toContain('灰度开启');
+    expect(container.textContent).toContain('账本灰度');
+    expect(container.textContent).toContain('套餐账本额度');
+    expect(container.textContent).toContain('需要管理员后台对账/同步后');
     expect(container.textContent).toContain('当前有效套餐');
     expect(container.textContent).toContain('MiniMax-M3');
     expect(container.textContent).toContain('deepseek-v4-flash');
