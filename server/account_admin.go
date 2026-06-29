@@ -19,10 +19,12 @@ var accountAdminAssets embed.FS
 // center. It intentionally lives outside /api so public nginx routes do not
 // expose it.
 type AccountAdminHandler struct {
-	users        AccountAdminUserLookup
-	services     AccountServiceVerifier
-	serviceStore AccountAdminServiceStore
-	commercial   CommercialStore
+	users                    AccountAdminUserLookup
+	services                 AccountServiceVerifier
+	serviceStore             AccountAdminServiceStore
+	commercial               CommercialStore
+	relayAdmin               *RelayAdminClient
+	commercialEnforceEnabled bool
 }
 
 type AccountAdminUserLookup interface {
@@ -47,6 +49,14 @@ func NewAccountAdminHandler(users AccountAdminUserLookup, services AccountServic
 		commercialStore = commercial[0]
 	}
 	return &AccountAdminHandler{users: users, services: services, serviceStore: serviceStore, commercial: commercialStore}
+}
+
+func (h *AccountAdminHandler) SetCommercialRelayAdmin(client *RelayAdminClient, enforceEnabled bool) {
+	if h == nil {
+		return
+	}
+	h.relayAdmin = client
+	h.commercialEnforceEnabled = enforceEnabled
 }
 
 func (h *AccountAdminHandler) HandlePage(w http.ResponseWriter, r *http.Request) {

@@ -454,6 +454,26 @@
       overflow-wrap: anywhere;
     }
 
+    .commercial-compare-table {
+      width: 100%;
+      margin-top: 12px;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .commercial-compare-table th,
+    .commercial-compare-table td {
+      padding: 8px 6px;
+      border-top: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .commercial-compare-table th {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
     .user-list {
       display: none;
       margin-top: 18px;
@@ -803,9 +823,20 @@
           <div id="commercial-summary-result" class="commercial-summary">输入 UID 后查看套餐、邀请码和人工发放记录。</div>
         </div>
 
+        <div class="commercial-panel">
+          <h3>Relay 对账 / 同步预演</h3>
+          <form id="commercial-dry-run-form">
+            <input id="commercial-dry-run-uid" inputmode="numeric" placeholder="用户 UID，例如 38" />
+            <button id="commercial-dry-run-button" type="submit">Dry-run 对账</button>
+            <button id="commercial-sync-button" type="button">尝试同步</button>
+          </form>
+          <div id="commercial-dry-run-error" class="error"></div>
+          <div id="commercial-dry-run-result" class="commercial-summary">对比商业账本额度和 relay-admin / Bifrost 当前模型限额；默认只预演，不会写入。</div>
+        </div>
+
         <div class="commercial-panel commercial-panel-wide">
           <h3>运营边界</h3>
-          <p>这块现在只做商业化账本和展示灰度，不替换现有用户的 relay key、默认额度、模型调用和 Bifrost 路由。公开用户入口需要显式开启灰度变量后才允许兑换邀请码。</p>
+          <p>这块先做商业化账本、灰度入口和 relay 对账。只有开启 enforce 变量后，“尝试同步”才会把商业额度写到 relay-admin 的模型限额；默认不会替换现有用户的 relay key、模型调用和 Bifrost 路由。</p>
         </div>
       </div>
     </section>
@@ -855,6 +886,11 @@ http://127.0.0.1:26061/local/account-admin</code>
     const commercialSummaryButton = document.querySelector('#commercial-summary-button');
     const commercialSummaryError = document.querySelector('#commercial-summary-error');
     const commercialSummaryResult = document.querySelector('#commercial-summary-result');
+    const commercialDryRunForm = document.querySelector('#commercial-dry-run-form');
+    const commercialDryRunButton = document.querySelector('#commercial-dry-run-button');
+    const commercialSyncButton = document.querySelector('#commercial-sync-button');
+    const commercialDryRunError = document.querySelector('#commercial-dry-run-error');
+    const commercialDryRunResult = document.querySelector('#commercial-dry-run-result');
     const commercialStatusPlans = document.querySelector('#commercial-status-plans');
     const commercialStatusInvites = document.querySelector('#commercial-status-invites');
     const commercialStatusRedemptions = document.querySelector('#commercial-status-redemptions');
@@ -1443,6 +1479,52 @@ http://127.0.0.1:26061/local/account-admin</code>
       ].join('');
     }
 
+    async function loadCommercialDryRun(uid) {
+      const resp = await fetch(`/local/account-admin/commercial/relay-dry-run?uid=${encodeURIComponent(uid)}`, { headers: { Accept: 'application/json' } });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data.error || `对账失败：HTTP ${resp.status}`);
+      }
+      renderCommercialDryRun(data.dry_run);
+      return data.dry_run;
+    }
+
+    function commercialStatusText(status) {
+      switch (status) {
+        case 'match': return '一致';
+        case 'mismatch': return '需同步';
+        case 'relay_only': return '仅 relay';
+        case 'missing_relay_budget': return '缺 relay 限额';
+        default: return status || '-';
+      }
+    }
+
+    function renderCommercialDryRun(dryRun) {
+      if (!dryRun) {
+        commercialDryRunResult.textContent = '没有对账结果。';
+        return;
+      }
+      const comparisons = Array.isArray(dryRun.comparisons) ? dryRun.comparisons : [];
+      const rows = comparisons.map((item) => `
+        <tr>
+          <td>${escapeHTML(modelName(item.model))}<div class="commercial-meta">${escapeHTML(item.provider || '-')}</div></td>
+          <td>${escapeHTML(commercialStatusText(item.status))}</td>
+          <td>${escapeHTML(formatCNY(item.commercial_limit_cny))}</td>
+          <td>${escapeHTML(formatCNY(item.relay_limit_cny))}</td>
+          <td>${escapeHTML(formatCNY(item.relay_usage_cny))}</td>
+          <td>${escapeHTML(formatCNY(item.remaining_cny))}</td>
+        </tr>
+      `).join('');
+      const proposed = Array.isArray(dryRun.proposed_updates) ? dryRun.proposed_updates : [];
+      commercialDryRunResult.innerHTML = [
+        `<strong>UID ${escapeHTML(dryRun.uid)} · relay ${dryRun.relay_key_configured ? '已配置' : '未配置'} · enforce ${dryRun.enforce_enabled ? '开启' : '关闭'}</strong>`,
+        `<div class="commercial-meta">Key：${escapeHTML((dryRun.relay_key && dryRun.relay_key.prefix) || '-')} · 用户：${escapeHTML(dryRun.relay_username || '-')}</div>`,
+        dryRun.relay_governance_error ? `<div class="error visible">Relay governance：${escapeHTML(dryRun.relay_governance_error)}</div>` : '',
+        `<table class="commercial-compare-table"><thead><tr><th>模型</th><th>状态</th><th>商业额度</th><th>Relay 限额</th><th>已用</th><th>剩余</th></tr></thead><tbody>${rows || '<tr><td colspan="6">暂无模型额度。</td></tr>'}</tbody></table>`,
+        `<div class="commercial-meta" style="margin-top:10px;">待同步项：${escapeHTML(proposed.length)} · ${escapeHTML(dryRun.note || '')}</div>`,
+      ].join('');
+    }
+
     document.querySelectorAll('[data-model-budget-template]').forEach((button) => {
       button.addEventListener('click', () => {
         const template = modelBudgetTemplates[button.dataset.modelBudgetTemplate] || {};
@@ -1559,6 +1641,44 @@ http://127.0.0.1:26061/local/account-admin</code>
         showCommercialError(commercialSummaryError, err && err.message ? err.message : '查询失败。');
       } finally {
         commercialSummaryButton.disabled = false;
+      }
+    });
+
+    commercialDryRunForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearCommercialError(commercialDryRunError);
+      commercialDryRunButton.disabled = true;
+      const uid = document.querySelector('#commercial-dry-run-uid').value.trim();
+      try {
+        await loadCommercialDryRun(uid);
+      } catch (err) {
+        showCommercialError(commercialDryRunError, err && err.message ? err.message : '对账失败。');
+      } finally {
+        commercialDryRunButton.disabled = false;
+      }
+    });
+
+    commercialSyncButton.addEventListener('click', async () => {
+      clearCommercialError(commercialDryRunError);
+      commercialSyncButton.disabled = true;
+      const uid = Number(document.querySelector('#commercial-dry-run-uid').value || 0);
+      try {
+        const resp = await fetch('/local/account-admin/commercial/relay-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ uid, apply: true }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          renderCommercialDryRun(data.dry_run);
+          showCommercialError(commercialDryRunError, data.error || `同步失败：HTTP ${resp.status}`);
+          return;
+        }
+        renderCommercialDryRun(data.dry_run);
+      } catch (err) {
+        showCommercialError(commercialDryRunError, err && err.message ? err.message : '同步失败。');
+      } finally {
+        commercialSyncButton.disabled = false;
       }
     });
 

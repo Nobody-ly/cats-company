@@ -36,6 +36,23 @@ func envBool(name string) bool {
 	}
 }
 
+func envInt64Set(name string) map[int64]bool {
+	out := map[int64]bool{}
+	raw := envString(name)
+	if raw == "" {
+		return out
+	}
+	for _, item := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		var uid int64
+		if _, err := fmt.Sscan(strings.TrimSpace(item), &uid); err == nil && uid > 0 {
+			out[uid] = true
+		}
+	}
+	return out
+}
+
 func isProductionEnv() bool {
 	for _, name := range []string{"OC_ENV", "APP_ENV", "GO_ENV", "ENV"} {
 		switch strings.ToLower(envString(name)) {
@@ -279,11 +296,25 @@ func main() {
 	feedbackHandler := server.NewFeedbackHandler(db)
 	relayConfigHandler := server.NewRelayConfigHandler()
 	relayKeyHandler := server.NewRelayKeyHandlerFromEnv()
+	relayAdminClient := server.NewRelayAdminClientFromEnv()
 	relayCommercialPublicEnabled := envBool("CATS_RELAY_COMMERCIAL_ENABLED")
+	relayCommercialTestUIDs := envInt64Set("CATS_RELAY_COMMERCIAL_TEST_UIDS")
+	relayCommercialEnforceEnabled := envBool("CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED")
 	if relayCommercialPublicEnabled {
 		log.Printf("relay commercial package UI is enabled for authenticated owners")
 	}
-	relayCommercialHandler := server.NewRelayCommercialHandler(commercialStore, relayCommercialPublicEnabled)
+	if len(relayCommercialTestUIDs) > 0 {
+		log.Printf("relay commercial package UI allowlist is enabled for %d uid(s)", len(relayCommercialTestUIDs))
+	}
+	if relayCommercialEnforceEnabled {
+		log.Printf("relay commercial enforce sync is enabled")
+	}
+	accountAdminHandler.SetCommercialRelayAdmin(relayAdminClient, relayCommercialEnforceEnabled)
+	relayCommercialHandler := server.NewRelayCommercialHandlerWithOptions(commercialStore, server.RelayCommercialOptions{
+		PublicEnabled:  relayCommercialPublicEnabled,
+		TestUIDs:       relayCommercialTestUIDs,
+		EnforceEnabled: relayCommercialEnforceEnabled,
+	})
 	// usageHandler := server.NewUsageHandler(db)
 
 	authSendCodeIPLimit := httpLimiter.LimitIP(server.HTTPRateLimitConfig{
@@ -383,6 +414,8 @@ func main() {
 	mux.HandleFunc("/local/account-admin/commercial/invites", accountAdminHandler.HandleCommercialInvites)
 	mux.HandleFunc("/local/account-admin/commercial/grants", accountAdminHandler.HandleCommercialGrant)
 	mux.HandleFunc("/local/account-admin/commercial/users", accountAdminHandler.HandleCommercialUserSummary)
+	mux.HandleFunc("/local/account-admin/commercial/relay-dry-run", accountAdminHandler.HandleCommercialRelayDryRun)
+	mux.HandleFunc("/local/account-admin/commercial/relay-sync", accountAdminHandler.HandleCommercialRelaySync)
 	mux.HandleFunc("/local/tutorial-admin", tutorialTaskHandler.HandleAdminPage)
 	mux.HandleFunc("/local/tutorial-admin/", tutorialTaskHandler.HandleAdminPage)
 	mux.HandleFunc("/local/tutorial-admin/tasks", tutorialTaskHandler.HandleAdminTasks)

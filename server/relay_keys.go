@@ -60,10 +60,14 @@ type relayKeyInfo struct {
 }
 
 func NewRelayKeyHandlerFromEnv() *RelayKeyHandler {
+	return &RelayKeyHandler{admin: NewRelayAdminClientFromEnv()}
+}
+
+func NewRelayAdminClientFromEnv() *RelayAdminClient {
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CATS_RELAY_ADMIN_URL")), "/")
 	token := strings.TrimSpace(os.Getenv("CATS_RELAY_ADMIN_TOKEN"))
 	if baseURL == "" || token == "" {
-		return &RelayKeyHandler{}
+		return nil
 	}
 	timeout := defaultRelayAdminTimeout
 	if raw := strings.TrimSpace(os.Getenv("CATS_RELAY_ADMIN_TIMEOUT_SECONDS")); raw != "" {
@@ -71,12 +75,10 @@ func NewRelayKeyHandlerFromEnv() *RelayKeyHandler {
 			timeout = time.Duration(seconds) * time.Second
 		}
 	}
-	return &RelayKeyHandler{
-		admin: &RelayAdminClient{
-			baseURL: baseURL,
-			token:   token,
-			client:  &http.Client{Timeout: timeout},
-		},
+	return &RelayAdminClient{
+		baseURL: baseURL,
+		token:   token,
+		client:  &http.Client{Timeout: timeout},
 	}
 }
 

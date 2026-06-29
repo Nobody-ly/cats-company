@@ -366,3 +366,112 @@ func TestRelayCommercialCanBeDisabledForPublicUsers(t *testing.T) {
 		t.Fatalf("expected disabled commercial payload: %s", summaryRec.Body.String())
 	}
 }
+
+func TestRelayCommercialAllowlistEnablesSingleUser(t *testing.T) {
+	store := newCommercialTestStore()
+	handler := NewRelayCommercialHandlerWithOptions(store, RelayCommercialOptions{
+		PublicEnabled: false,
+		TestUIDs:      map[int64]bool{38: true},
+	})
+
+	allowedReq := httptest.NewRequest(http.MethodGet, "/api/relay/commercial", nil)
+	allowedReq = allowedReq.WithContext(context.WithValue(allowedReq.Context(), uidKey, int64(38)))
+	allowedRec := httptest.NewRecorder()
+	handler.HandleSummary(allowedRec, allowedReq)
+	if allowedRec.Code != http.StatusOK {
+		t.Fatalf("allowed status=%d body=%s", allowedRec.Code, allowedRec.Body.String())
+	}
+	var allowedBody struct {
+		Enabled bool   `json:"enabled"`
+		Rollout string `json:"rollout"`
+	}
+	if err := json.Unmarshal(allowedRec.Body.Bytes(), &allowedBody); err != nil {
+		t.Fatalf("decode allowed summary: %v", err)
+	}
+	if !allowedBody.Enabled || allowedBody.Rollout != "allowlist" {
+		t.Fatalf("expected allowlist enabled payload: %+v", allowedBody)
+	}
+
+	otherReq := httptest.NewRequest(http.MethodGet, "/api/relay/commercial", nil)
+	otherReq = otherReq.WithContext(context.WithValue(otherReq.Context(), uidKey, int64(39)))
+	otherRec := httptest.NewRecorder()
+	handler.HandleSummary(otherRec, otherReq)
+	var otherBody struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(otherRec.Body.Bytes(), &otherBody); err != nil {
+		t.Fatalf("decode other summary: %v", err)
+	}
+	if otherBody.Enabled {
+		t.Fatalf("expected non-allowlisted user disabled: %s", otherRec.Body.String())
+	}
+}
+
+func TestCommercialRelayDryRunBuildsBudgetDiff(t *testing.T) {
+	summary := &types.CommercialSummary{
+		UID: 38,
+		TotalsByModel: map[string]float64{
+			"MiniMax-M3":        500,
+			"deepseek-v4-flash": 100,
+		},
+		TotalCNY: 600,
+	}
+	relayUser := &commercialRelayUsageUser{
+		UID:        38,
+		Username:   "ck",
+		Configured: true,
+		Key:        &commercialRelayKeySummary{Prefix: "sk-bf-aa...1234", State: "active"},
+		Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+			{
+				Provider:      "minimax-m3-anthropic",
+				Model:         "MiniMax-M3",
+				AllowedModels: []string{"MiniMax-M3"},
+				Budget:        commercialRelayBudget{MaxLimit: 500, CurrentUsage: 12.5, ResetDuration: "1M"},
+			},
+			{
+				Provider:      "deepseek-anthropic",
+				Model:         "deepseek-v4-flash",
+				AllowedModels: []string{"deepseek-v4-flash"},
+				Budget:        commercialRelayBudget{MaxLimit: 50, CurrentUsage: 2, ResetDuration: "1M"},
+			},
+			{
+				Provider:      "glm-anthropic",
+				Model:         "glm-5.1",
+				AllowedModels: []string{"glm-5.1"},
+				Budget:        commercialRelayBudget{MaxLimit: 500, CurrentUsage: 0, ResetDuration: "1M"},
+			},
+		}},
+	}
+
+	dryRun := compareCommercialRelayBudgets(38, summary, relayUser)
+
+	if !dryRun.RelayKeyConfigured || dryRun.RelayUsername != "ck" {
+		t.Fatalf("unexpected relay metadata: %+v", dryRun)
+	}
+	if row := findCommercialRelayComparison(t, dryRun, "MiniMax-M3"); row.Status != "match" || row.RelayUsage != 12.5 {
+		t.Fatalf("unexpected m3 row: %+v", row)
+	}
+	if row := findCommercialRelayComparison(t, dryRun, "deepseek-v4-flash"); row.Status != "mismatch" || row.Delta != 50 {
+		t.Fatalf("unexpected deepseek row: %+v", row)
+	}
+	if row := findCommercialRelayComparison(t, dryRun, "glm-5.1"); row.Status != "relay_only" || row.RelayLimit != 500 {
+		t.Fatalf("unexpected glm row: %+v", row)
+	}
+	if len(dryRun.ProposedUpdates) != 1 {
+		t.Fatalf("expected one proposed update, got %+v", dryRun.ProposedUpdates)
+	}
+	if dryRun.ProposedUpdates[0].Provider != "deepseek-anthropic" || dryRun.ProposedUpdates[0].MaxLimit != 100 {
+		t.Fatalf("unexpected proposed update: %+v", dryRun.ProposedUpdates[0])
+	}
+}
+
+func findCommercialRelayComparison(t *testing.T, dryRun *commercialRelayDryRun, model string) commercialRelayBudgetComparison {
+	t.Helper()
+	for _, row := range dryRun.Comparisons {
+		if row.Model == model {
+			return row
+		}
+	}
+	t.Fatalf("comparison for %s not found: %+v", model, dryRun.Comparisons)
+	return commercialRelayBudgetComparison{}
+}

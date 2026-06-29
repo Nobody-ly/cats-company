@@ -8,6 +8,7 @@
 - 新增一层可灰度的商业化账本，用来测试套餐、邀请码和人工发放。
 - 用户在 CatsCo 中转站页面能看到套餐额度，并用邀请码兑换。
 - 管理员在本地账号后台能创建套餐、创建邀请码、手动给用户发额度、查询用户额度汇总。
+- 管理员可以 dry-run 对账：比较 commercial 账本额度和 relay-admin / Bifrost 当前模型限额。
 
 ## 链路
 
@@ -18,7 +19,7 @@
 5. 后端写入 entitlement、quota grant 和 quota ledger。
 6. 用户页面重新读取 commercial summary，按模型展示额度。
 
-这条链路目前只负责商业化额度展示和账本记录，不直接替换 Bifrost 的 virtual key，也不直接改变当前 relay 调用扣费逻辑。
+这条链路默认只负责商业化额度展示、账本记录和对账预演，不直接替换 Bifrost 的 virtual key，也不直接改变当前 relay 调用扣费逻辑。只有显式开启 enforce 开关后，后台“同步”动作才会把商业额度写入 relay-admin 的模型限额。
 
 ## 灰度开关
 
@@ -34,6 +35,22 @@ CATS_RELAY_COMMERCIAL_ENABLED=1
 - `POST /api/relay/invite/redeem`
 
 关闭时，用户页面只看到“套餐额度功能尚未启用；当前 relay 默认额度和重置周期继续保留”的安全空态。
+
+内部测试可以只开放给指定 UID，不需要全量打开：
+
+```bash
+CATS_RELAY_COMMERCIAL_TEST_UIDS=38,116
+```
+
+当 `CATS_RELAY_COMMERCIAL_ENABLED` 未开启时，allowlist 用户仍可访问套餐额度和邀请码兑换入口；其他用户保持安全空态。
+
+真实同步到 relay-admin 的开关默认关闭：
+
+```bash
+CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED=1
+```
+
+关闭时，账号后台的“Relay 对账 / 同步预演”只返回 commercial 与 relay-admin 的差异和拟同步 payload，不会写入 Bifrost。开启后，后台点击“尝试同步”才会调用 relay-admin 的 internal limits 接口，将套餐额度写入 provider config budgets。
 
 本地账号后台接口不受该灰度开关影响，但仍要求只能通过本地/SSH 隧道访问。
 
@@ -62,17 +79,18 @@ CATS_RELAY_COMMERCIAL_ENABLED=1
 - 创建/更新邀请码。
 - 按 UID、模型、金额手动发放额度。
 - 查询某个 UID 的商业化额度汇总。
+- 按 UID 做 relay dry-run 对账，查看商业额度、relay 限额、已用成本、剩余额度和待同步项。
 
 建议早期运营流程：
 
 1. 先创建学校/老师试用套餐。
 2. 给每个学校一批邀请码，控制 `max_redemptions`。
 3. 对重点用户用后台手动发放额外额度。
-4. 每天抽查用户 summary 和 relay 实际用量是否一致。
+4. 每天用“Relay 对账 / 同步预演”抽查用户 summary 和 relay 实际限额是否一致。
 
 ## 当前未接入的部分
 
-- 尚未把 commercial quota 作为 relay 强制限额来源。
+- 默认尚未把 commercial quota 作为 relay 强制限额来源；真实接管需要显式开启 `CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED` 并由管理员手动同步。
 - 尚未把 Bifrost 实际调用成本写入 `commercial_quota_ledger` 的消耗项。
 - 尚未做支付、订单、发票、退款。
 - 尚未做组织/学校维度预算池。
@@ -101,5 +119,7 @@ git diff --check
 
 1. 先不开 `CATS_RELAY_COMMERCIAL_ENABLED`，确认现有 relay 页面和调用不受影响。
 2. 通过本地账号后台创建测试套餐和邀请码。
-3. 开启灰度环境变量，只给内部用户兑换测试。
+3. 优先用 `CATS_RELAY_COMMERCIAL_TEST_UIDS=38` 只给内部用户兑换测试。
 4. 对比用户页面额度、后台 summary、数据库账本。
+5. 在账号后台对 uid 38 做 Relay dry-run，对比 commercial 额度和 relay-admin 模型限额。
+6. 保持 `CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED` 关闭时，确认“尝试同步”不会写入；需要真实接管时再单独开启。

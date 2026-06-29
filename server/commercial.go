@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -22,8 +24,16 @@ type CommercialStore interface {
 }
 
 type RelayCommercialHandler struct {
-	store         CommercialStore
-	publicEnabled bool
+	store          CommercialStore
+	publicEnabled  bool
+	testUIDs       map[int64]bool
+	enforceEnabled bool
+}
+
+type RelayCommercialOptions struct {
+	PublicEnabled  bool
+	TestUIDs       map[int64]bool
+	EnforceEnabled bool
 }
 
 func NewRelayCommercialHandler(store CommercialStore, publicEnabled ...bool) *RelayCommercialHandler {
@@ -31,11 +41,43 @@ func NewRelayCommercialHandler(store CommercialStore, publicEnabled ...bool) *Re
 	if len(publicEnabled) > 0 {
 		enabled = publicEnabled[0]
 	}
-	return &RelayCommercialHandler{store: store, publicEnabled: enabled}
+	return NewRelayCommercialHandlerWithOptions(store, RelayCommercialOptions{PublicEnabled: enabled})
+}
+
+func NewRelayCommercialHandlerWithOptions(store CommercialStore, opts RelayCommercialOptions) *RelayCommercialHandler {
+	testUIDs := map[int64]bool{}
+	for uid, enabled := range opts.TestUIDs {
+		if uid > 0 && enabled {
+			testUIDs[uid] = true
+		}
+	}
+	return &RelayCommercialHandler{
+		store:          store,
+		publicEnabled:  opts.PublicEnabled,
+		testUIDs:       testUIDs,
+		enforceEnabled: opts.EnforceEnabled,
+	}
 }
 
 func (h *RelayCommercialHandler) available() bool {
 	return h != nil && h.store != nil && h.publicEnabled
+}
+
+func (h *RelayCommercialHandler) enabledFor(uid int64) bool {
+	return h != nil && h.store != nil && (h.publicEnabled || h.testUIDs[uid])
+}
+
+func (h *RelayCommercialHandler) rolloutFor(uid int64) string {
+	if h == nil {
+		return "disabled"
+	}
+	if h.publicEnabled {
+		return "public"
+	}
+	if h.testUIDs[uid] {
+		return "allowlist"
+	}
+	return "disabled"
 }
 
 func (h *RelayCommercialHandler) HandleSummary(w http.ResponseWriter, r *http.Request) {
@@ -43,20 +85,22 @@ func (h *RelayCommercialHandler) HandleSummary(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !h.available() {
+	uid := UIDFromContext(r.Context())
+	if !h.enabledFor(uid) {
 		writeJSON(w, http.StatusOK, commercialUnavailablePayload())
 		return
 	}
-	uid := UIDFromContext(r.Context())
 	summary, err := h.store.GetCommercialSummary(uid)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load commercial summary"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"enabled": true,
-		"summary": summary,
-		"note":    "套餐额度仍在测试中；当前 relay 默认额度和重置周期继续保留。",
+		"enabled":         true,
+		"rollout":         h.rolloutFor(uid),
+		"enforce_enabled": h.enforceEnabled,
+		"summary":         summary,
+		"note":            "套餐额度内测中；未开启真实接管前，当前 relay 默认额度和重置周期继续保留。",
 	})
 }
 
@@ -65,7 +109,8 @@ func (h *RelayCommercialHandler) HandleRedeemInvite(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !h.available() {
+	uid := UIDFromContext(r.Context())
+	if !h.enabledFor(uid) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "commercial relay package is not enabled"})
 		return
 	}
@@ -76,7 +121,7 @@ func (h *RelayCommercialHandler) HandleRedeemInvite(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	summary, err := h.store.RedeemCommercialInvite(UIDFromContext(r.Context()), req.Code)
+	summary, err := h.store.RedeemCommercialInvite(uid, req.Code)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -97,6 +142,313 @@ func commercialUnavailablePayload() map[string]interface{} {
 		},
 		"note": "套餐额度功能尚未启用；当前 relay 默认额度和重置周期继续保留。",
 	}
+}
+
+type commercialRelayBudget struct {
+	MaxLimit                float64 `json:"max_limit"`
+	CurrentUsage            float64 `json:"current_usage"`
+	ResetDuration           string  `json:"reset_duration"`
+	PassthroughCurrentUsage float64 `json:"passthrough_current_usage,omitempty"`
+	AccountCurrentUsage     float64 `json:"account_current_usage,omitempty"`
+}
+
+type commercialRelayModelLimit struct {
+	Provider      string                `json:"provider"`
+	Model         string                `json:"model"`
+	AllowedModels []string              `json:"allowed_models"`
+	SharedBudget  bool                  `json:"shared_budget"`
+	Budget        commercialRelayBudget `json:"budget"`
+}
+
+type commercialRelayLimits struct {
+	MonthlyBudget commercialRelayBudget       `json:"monthly_budget"`
+	ModelLimits   []commercialRelayModelLimit `json:"model_limits"`
+}
+
+type commercialRelayKeySummary struct {
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Prefix string `json:"prefix,omitempty"`
+	State  string `json:"state,omitempty"`
+}
+
+type commercialRelayUsageUser struct {
+	UID             int64                      `json:"uid"`
+	Username        string                     `json:"username"`
+	Configured      bool                       `json:"configured"`
+	Key             *commercialRelayKeySummary `json:"key,omitempty"`
+	Limits          commercialRelayLimits      `json:"limits"`
+	GovernanceError string                     `json:"governance_error,omitempty"`
+}
+
+type commercialRelayUsageResponse struct {
+	Users []commercialRelayUsageUser `json:"users"`
+}
+
+type commercialRelayBudgetComparison struct {
+	Model           string   `json:"model"`
+	Provider        string   `json:"provider,omitempty"`
+	AllowedModels   []string `json:"allowed_models,omitempty"`
+	Status          string   `json:"status"`
+	CommercialLimit float64  `json:"commercial_limit_cny"`
+	RelayLimit      float64  `json:"relay_limit_cny"`
+	RelayUsage      float64  `json:"relay_usage_cny"`
+	Remaining       float64  `json:"remaining_cny"`
+	Delta           float64  `json:"delta_cny"`
+	ResetDuration   string   `json:"reset_duration,omitempty"`
+	Syncable        bool     `json:"syncable"`
+}
+
+type commercialRelayProviderBudgetUpdate struct {
+	Provider      string   `json:"provider"`
+	AllowedModels []string `json:"allowed_models"`
+	MaxLimit      float64  `json:"max_limit"`
+	ResetDuration string   `json:"reset_duration"`
+}
+
+type commercialRelayDryRun struct {
+	UID                  int64                                 `json:"uid"`
+	EnforceEnabled       bool                                  `json:"enforce_enabled"`
+	RelayAdminConfigured bool                                  `json:"relay_admin_configured"`
+	RelayKeyConfigured   bool                                  `json:"relay_key_configured"`
+	RelayUsername        string                                `json:"relay_username,omitempty"`
+	RelayKey             *commercialRelayKeySummary            `json:"relay_key,omitempty"`
+	RelayGovernanceError string                                `json:"relay_governance_error,omitempty"`
+	Summary              *types.CommercialSummary              `json:"summary"`
+	Comparisons          []commercialRelayBudgetComparison     `json:"comparisons"`
+	ProposedUpdates      []commercialRelayProviderBudgetUpdate `json:"proposed_updates"`
+	CanApply             bool                                  `json:"can_apply"`
+	Note                 string                                `json:"note"`
+}
+
+func (h *AccountAdminHandler) HandleCommercialRelayDryRun(w http.ResponseWriter, r *http.Request) {
+	store, ok := h.requireCommercialStore(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAccountAdminJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	uid, err := strconvParsePositiveInt64(r.URL.Query().Get("uid"))
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid uid"})
+		return
+	}
+	dryRun, err := h.buildCommercialRelayDryRun(r.Context(), store, uid)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"dry_run": dryRun})
+}
+
+func (h *AccountAdminHandler) HandleCommercialRelaySync(w http.ResponseWriter, r *http.Request) {
+	store, ok := h.requireCommercialStore(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAccountAdminJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		UID   int64 `json:"uid"`
+		Apply bool  `json:"apply"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UID <= 0 {
+		writeAccountAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sync request"})
+		return
+	}
+	dryRun, err := h.buildCommercialRelayDryRun(r.Context(), store, req.UID)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if !req.Apply {
+		writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"applied": false, "dry_run": dryRun})
+		return
+	}
+	if !h.commercialEnforceEnabled {
+		writeAccountAdminJSON(w, http.StatusConflict, map[string]interface{}{
+			"error":   "commercial relay enforce is disabled",
+			"applied": false,
+			"dry_run": dryRun,
+		})
+		return
+	}
+	if h.relayAdmin == nil {
+		writeAccountAdminJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "relay admin is not configured"})
+		return
+	}
+	if len(dryRun.ProposedUpdates) == 0 {
+		writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"applied": false, "dry_run": dryRun, "note": "no syncable model budgets"})
+		return
+	}
+	var relayResp map[string]interface{}
+	err = h.relayAdmin.Do(
+		r.Context(),
+		http.MethodPost,
+		fmt.Sprintf("/internal/users/%d/key/limits", req.UID),
+		map[string]interface{}{"provider_config_budgets": dryRun.ProposedUpdates},
+		&relayResp,
+	)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := h.buildCommercialRelayDryRun(r.Context(), store, req.UID)
+	if err != nil {
+		writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"applied": true, "relay": relayResp})
+		return
+	}
+	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{"applied": true, "dry_run": updated})
+}
+
+func (h *AccountAdminHandler) buildCommercialRelayDryRun(ctx context.Context, store CommercialStore, uid int64) (*commercialRelayDryRun, error) {
+	summary, err := store.GetCommercialSummary(uid)
+	if err != nil {
+		return nil, fmt.Errorf("load commercial summary: %w", err)
+	}
+	var relayUser *commercialRelayUsageUser
+	if h.relayAdmin != nil {
+		user, err := h.fetchCommercialRelayUsage(ctx, uid)
+		if err != nil {
+			return nil, fmt.Errorf("load relay usage: %w", err)
+		}
+		relayUser = user
+	}
+	dryRun := compareCommercialRelayBudgets(uid, summary, relayUser)
+	dryRun.EnforceEnabled = h.commercialEnforceEnabled
+	dryRun.RelayAdminConfigured = h.relayAdmin != nil
+	if h.relayAdmin == nil {
+		dryRun.Note = "relay admin is not configured; only commercial ledger was loaded"
+	} else if relayUser == nil {
+		dryRun.Note = "relay key was not found; create the user's relay key before enforcing commercial quota"
+	} else if !h.commercialEnforceEnabled {
+		dryRun.Note = "dry-run only; set CATS_RELAY_COMMERCIAL_ENFORCE_ENABLED=1 before applying to relay-admin"
+	} else {
+		dryRun.Note = "enforce is enabled; apply will write provider_config_budgets to relay-admin"
+	}
+	return dryRun, nil
+}
+
+func (h *AccountAdminHandler) fetchCommercialRelayUsage(ctx context.Context, uid int64) (*commercialRelayUsageUser, error) {
+	var out commercialRelayUsageResponse
+	err := h.relayAdmin.Do(ctx, http.MethodGet, fmt.Sprintf("/internal/usage/users?search=%d&limit=1&include_governance=1", uid), nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out.Users {
+		if out.Users[i].UID == uid {
+			return &out.Users[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, relayUser *commercialRelayUsageUser) *commercialRelayDryRun {
+	dryRun := &commercialRelayDryRun{UID: uid, Summary: summary}
+	if summary == nil {
+		summary = &types.CommercialSummary{UID: uid, TotalsByModel: map[string]float64{}}
+		dryRun.Summary = summary
+	}
+	relayByModel := map[string]commercialRelayModelLimit{}
+	if relayUser != nil {
+		dryRun.RelayKeyConfigured = relayUser.Configured
+		dryRun.RelayUsername = relayUser.Username
+		dryRun.RelayKey = relayUser.Key
+		dryRun.RelayGovernanceError = relayUser.GovernanceError
+		for _, limit := range relayUser.Limits.ModelLimits {
+			model := strings.TrimSpace(limit.Model)
+			if model == "" || model == "*" {
+				continue
+			}
+			existing, exists := relayByModel[model]
+			if !exists || limit.Budget.MaxLimit > existing.Budget.MaxLimit {
+				relayByModel[model] = limit
+			}
+		}
+	}
+	commercialModels := map[string]bool{}
+	for model, amount := range summary.TotalsByModel {
+		model = strings.TrimSpace(model)
+		if model == "" || amount <= 0 {
+			continue
+		}
+		commercialModels[model] = true
+		limit, ok := relayByModel[model]
+		row := relayComparisonForModel(model, amount, limit, ok)
+		dryRun.Comparisons = append(dryRun.Comparisons, row)
+		if row.Syncable && row.Status != "match" {
+			dryRun.ProposedUpdates = append(dryRun.ProposedUpdates, commercialRelayProviderBudgetUpdate{
+				Provider:      row.Provider,
+				AllowedModels: row.AllowedModels,
+				MaxLimit:      row.CommercialLimit,
+				ResetDuration: defaultRelayResetDuration(row.ResetDuration),
+			})
+		}
+	}
+	for model, limit := range relayByModel {
+		if commercialModels[model] || limit.Budget.MaxLimit <= 0 {
+			continue
+		}
+		dryRun.Comparisons = append(dryRun.Comparisons, commercialRelayBudgetComparison{
+			Model:         model,
+			Provider:      limit.Provider,
+			AllowedModels: limit.AllowedModels,
+			Status:        "relay_only",
+			RelayLimit:    limit.Budget.MaxLimit,
+			RelayUsage:    limit.Budget.CurrentUsage,
+			Remaining:     math.Max(0, limit.Budget.MaxLimit-limit.Budget.CurrentUsage),
+			Delta:         -limit.Budget.MaxLimit,
+			ResetDuration: limit.Budget.ResetDuration,
+			Syncable:      true,
+		})
+	}
+	dryRun.CanApply = len(dryRun.ProposedUpdates) > 0
+	return dryRun
+}
+
+func relayComparisonForModel(model string, amount float64, limit commercialRelayModelLimit, found bool) commercialRelayBudgetComparison {
+	row := commercialRelayBudgetComparison{
+		Model:           model,
+		Status:          "missing_relay_budget",
+		CommercialLimit: amount,
+		Delta:           amount,
+	}
+	if !found {
+		return row
+	}
+	row.Provider = limit.Provider
+	row.AllowedModels = limit.AllowedModels
+	row.RelayLimit = limit.Budget.MaxLimit
+	row.RelayUsage = limit.Budget.CurrentUsage
+	row.Remaining = math.Max(0, limit.Budget.MaxLimit-limit.Budget.CurrentUsage)
+	row.Delta = amount - limit.Budget.MaxLimit
+	row.ResetDuration = limit.Budget.ResetDuration
+	row.Syncable = row.Provider != "" && len(row.AllowedModels) > 0
+	if nearlyEqual(amount, limit.Budget.MaxLimit) {
+		row.Status = "match"
+	} else {
+		row.Status = "mismatch"
+	}
+	if !row.Syncable {
+		row.Status = "missing_relay_budget"
+	}
+	return row
+}
+
+func nearlyEqual(a, b float64) bool {
+	return math.Abs(a-b) < 0.000001
+}
+
+func defaultRelayResetDuration(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "1M"
+	}
+	return value
 }
 
 var commercialSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{1,63}$`)
