@@ -1627,6 +1627,90 @@ func TestWeixinClawBotPollRoutesSharedTokenUsersIndependently(t *testing.T) {
 	}
 }
 
+func TestWeixinClawBotPollUsesLatestAgentSelectionOverOlderGroupBinding(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "latest-selection-token"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	actorUID, err := ensureChannelActor(db, "weixin_clawbot", tokenHash, "wx-user-1")
+	if err != nil {
+		t.Fatalf("seed actor: %v", err)
+	}
+	db.groups[505] = &types.Group{ID: 505, Name: "Project Group", OwnerID: 7}
+	db.groupMembers[505] = map[int64]*types.GroupMember{
+		9: {GroupID: 505, UserID: 9, Role: "member"},
+	}
+	if _, err := db.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+		Channel:                 "weixin_clawbot",
+		ChannelAppID:            tokenHash,
+		ChannelUserID:           "wx-user-1",
+		ChannelConversationType: "p2p",
+		ActorUID:                actorUID,
+		CanonicalUID:            9,
+		GroupID:                 505,
+		TopicID:                 "grp_505",
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed group binding: %v", err)
+	}
+	link, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.clawbot-agent",
+		EntryID:      entry.ID,
+		Channel:      "weixin_clawbot",
+		CanonicalUID: 9,
+		Status:       "active",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("seed mobile link: %v", err)
+	}
+	api := &fakeWeixinClawBotAPI{
+		qrStatus: &weixinClawBotQRCodeStatus{Ret: 0, Status: "confirmed", BotToken: botToken, ILinkUserID: "wx-user-1"},
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-agent-after-group"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList:     []weixinClawBotMessageItem{clawBotTextItem("现在问机器人")},
+				},
+			},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	req := httptest.NewRequest(http.MethodGet, "/api/channel-agent-bindings/weixin-clawbot/qrcode-status?scene_key="+url.QueryEscape(link.SceneKey)+"&qrcode=qr-1", nil)
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleQRCodeStatus(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 || db.messages[0].TopicID != p2pTopicID(9, 43) || db.messages[0].FromUID != 9 {
+		t.Fatalf("message should route to latest agent selection, got %+v", db.messages)
+	}
+}
+
 func seedClawBotAgentBinding(t *testing.T, db *channelAgentTestStore, tokenHash, channelUserID string, canonicalUID, agentUID int64, entry *types.ChannelAgentEntry) *types.ChannelAgentBinding {
 	t.Helper()
 	actorUID, err := ensureChannelActor(db, "weixin_clawbot", tokenHash, channelUserID)
@@ -1648,6 +1732,17 @@ func seedClawBotAgentBinding(t *testing.T, db *channelAgentTestStore, tokenHash,
 	})
 	if err != nil {
 		t.Fatalf("seed clawbot binding: %v", err)
+	}
+	if _, err := db.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+		Channel:                 "weixin_clawbot",
+		ChannelAppID:            tokenHash,
+		ChannelUserID:           channelUserID,
+		ChannelConversationType: "p2p",
+		ActorUID:                actorUID,
+		AgentUID:                agentUID,
+		Source:                  "test",
+	}); err != nil {
+		t.Fatalf("seed clawbot route: %v", err)
 	}
 	return binding
 }

@@ -296,6 +296,17 @@ func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, scen
 		if binding == nil {
 			return nil, "", errors.New("ClawBot binding was not created")
 		}
+		if _, err := bindings.UpsertChannelAgentRoute(&types.ChannelAgentRoute{
+			Channel:                 "weixin_clawbot",
+			ChannelAppID:            tokenHash,
+			ChannelUserID:           channelUserID,
+			ChannelConversationType: "p2p",
+			ActorUID:                actorUID,
+			AgentUID:                entry.AgentUID,
+			Source:                  "weixin_clawbot_mobile_link",
+		}); err != nil {
+			return nil, "", err
+		}
 		_, _, _ = resolveChannelIdentityMobileLink(h.db, sceneKey, "weixin_clawbot", "", true)
 		return saved, "agent", nil
 	}
@@ -505,13 +516,58 @@ func (h *WeixinClawBotHandler) handleUpdateMessage(ctx context.Context, token *t
 	if text == "" {
 		return nil
 	}
-	if delivered, err := h.deliverGroupMessage(ctx, token, msg, text); delivered || err != nil {
+	target, err := h.resolveDeliveryTarget(token, msg)
+	if err != nil {
 		return err
 	}
-	return h.deliverAgentMessage(ctx, token, msg, text)
+	if target.groupBinding != nil {
+		return h.deliverGroupMessage(ctx, token, msg, target.groupBinding, text)
+	}
+	return h.deliverAgentMessage(ctx, token, msg, target.agentUID, text)
 }
 
-func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, text string) error {
+type weixinClawBotDeliveryTarget struct {
+	agentUID     int64
+	groupBinding *types.ChannelGroupBinding
+}
+
+func (h *WeixinClawBotHandler) resolveDeliveryTarget(token *types.WeixinClawBotToken, msg weixinClawBotMessage) (*weixinClawBotDeliveryTarget, error) {
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	channelUserID := strings.TrimSpace(msg.FromUserID)
+	groupBinding, err := bindings.ResolveChannelGroupBinding(types.ChannelGroupBindingQuery{
+		Channel:                 "weixin_clawbot",
+		ChannelAppID:            token.TokenHash,
+		ChannelUserID:           channelUserID,
+		ChannelConversationType: "p2p",
+	})
+	if err != nil {
+		return nil, err
+	}
+	route, err := bindings.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
+		Channel:                 "weixin_clawbot",
+		ChannelAppID:            token.TokenHash,
+		ChannelUserID:           channelUserID,
+		ChannelConversationType: "p2p",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if groupBinding != nil && groupBinding.Status == types.ChannelAgentBindingActive {
+		if route == nil || groupBinding.SelectedAt.After(route.SelectedAt) {
+			return &weixinClawBotDeliveryTarget{groupBinding: groupBinding}, nil
+		}
+	}
+	agentUID := int64(0)
+	if route != nil {
+		agentUID = route.AgentUID
+	}
+	return &weixinClawBotDeliveryTarget{agentUID: agentUID}, nil
+}
+
+func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, agentUID int64, text string) error {
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
 	if !ok {
 		return errors.New("channel binding store not configured")
@@ -521,6 +577,7 @@ func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *t
 		ChannelAppID:            token.TokenHash,
 		ChannelUserID:           strings.TrimSpace(msg.FromUserID),
 		ChannelConversationType: "p2p",
+		AgentUID:                agentUID,
 	})
 	if err != nil {
 		return err
@@ -551,22 +608,9 @@ func (h *WeixinClawBotHandler) deliverAgentMessage(ctx context.Context, token *t
 	)
 }
 
-func (h *WeixinClawBotHandler) deliverGroupMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, text string) (bool, error) {
-	bindings, ok := h.db.(store.ChannelAgentBindingStore)
-	if !ok {
-		return false, errors.New("channel binding store not configured")
-	}
-	groupBinding, err := bindings.ResolveChannelGroupBinding(types.ChannelGroupBindingQuery{
-		Channel:                 "weixin_clawbot",
-		ChannelAppID:            token.TokenHash,
-		ChannelUserID:           strings.TrimSpace(msg.FromUserID),
-		ChannelConversationType: "p2p",
-	})
-	if err != nil {
-		return false, err
-	}
+func (h *WeixinClawBotHandler) deliverGroupMessage(ctx context.Context, token *types.WeixinClawBotToken, msg weixinClawBotMessage, groupBinding *types.ChannelGroupBinding, text string) error {
 	if groupBinding == nil || groupBinding.Status != types.ChannelAgentBindingActive {
-		return false, nil
+		return errors.New("weixin clawbot message user is not bound to a group")
 	}
 	if err := deliverInboundChannelTextToGroup(
 		h.db,
@@ -578,9 +622,9 @@ func (h *WeixinClawBotHandler) deliverGroupMessage(ctx context.Context, token *t
 		"weixin_clawbot",
 		h.groupInboundMetadata(token, groupBinding, msg),
 	); err != nil {
-		return true, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func (h *WeixinClawBotHandler) inboundMetadata(token *types.WeixinClawBotToken, binding *types.ChannelAgentBinding, msg weixinClawBotMessage) map[string]interface{} {
