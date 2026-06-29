@@ -76,6 +76,7 @@ type channelAgentEntryResponse struct {
 type channelAgentMobileLinkRequest struct {
 	AgentUID int64  `json:"agent_uid"`
 	Channel  string `json:"channel"`
+	EntryID  int64  `json:"entry_id,omitempty"`
 }
 
 type channelAgentMobileLinkResponse struct {
@@ -729,7 +730,12 @@ func (h *ChannelAgentBindingHandler) HandleCreateChannelIdentityMobileLink(w htt
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported channel"})
 		return
 	}
-	entry, err := h.findMobileIdentityEntry(bindings, canonicalUID, req.AgentUID, channel)
+	var entry *types.ChannelAgentEntry
+	if req.EntryID > 0 {
+		entry, err = h.findMobileIdentityEntryByID(bindings, canonicalUID, req.AgentUID, channel, req.EntryID)
+	} else {
+		entry, err = h.findMobileIdentityEntry(bindings, canonicalUID, req.AgentUID, channel)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
@@ -879,6 +885,30 @@ func (h *ChannelAgentBindingHandler) findMobileIdentityEntry(bindings store.Chan
 		return fallback, nil
 	}
 	return nil, fmt.Errorf("you must add this virtual employee on CatsCo before binding it to a mobile channel")
+}
+
+func (h *ChannelAgentBindingHandler) findMobileIdentityEntryByID(bindings store.ChannelAgentBindingStore, canonicalUID, agentUID int64, channel string, entryID int64) (*types.ChannelAgentEntry, error) {
+	if bindings == nil || canonicalUID <= 0 || agentUID <= 0 || entryID <= 0 {
+		return nil, fmt.Errorf("invalid mobile channel link scope")
+	}
+	entry, err := bindings.GetChannelAgentEntryByID(entryID)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil || entry.AgentUID != agentUID || normalizeChannel(entry.Channel) != channel || entry.Status != "active" {
+		return nil, fmt.Errorf("channel entry is not available for this agent")
+	}
+	if !channelEntryAgentAvailable(h.db, entry) {
+		return nil, fmt.Errorf("channel entry is not available for this agent")
+	}
+	status, _, err := channelBindingStatusForEntryCanonicalUser(h.db, entry, canonicalUID)
+	if err != nil {
+		return nil, err
+	}
+	if status != types.ChannelAgentBindingActive {
+		return nil, fmt.Errorf("you must add this virtual employee on CatsCo before binding it to a mobile channel")
+	}
+	return entry, nil
 }
 
 func (h *ChannelAgentBindingHandler) handleListAgentEntries(w http.ResponseWriter, r *http.Request) {

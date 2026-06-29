@@ -616,6 +616,12 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const [accessTab, setAccessTab] = useState('pending');
   const [pendingLoading, setPendingLoading] = useState(false);
   const [reviewingUID, setReviewingUID] = useState(null);
+  const [clawBotMobileLink, setClawBotMobileLink] = useState(null);
+  const [clawBotMobileLoading, setClawBotMobileLoading] = useState(false);
+  const [clawBotMobileError, setClawBotMobileError] = useState('');
+  const [clawBotAuthStatus, setClawBotAuthStatus] = useState(null);
+  const clawBotMobileRequestRef = useRef(0);
+  const clawBotMobileMountedRef = useRef(false);
   const botId = bot?.id || bot?.uid;
 
   useEffect(() => {
@@ -670,6 +676,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
     entryScopeMatches(entry)
     && normalizeChannelAgentAccessMode(entry.access_mode) === accessMode
   ));
+  const selectedEntryID = selected?.id || '';
   const entryUrl = selected?.entry_url || '';
   const channelQrUrl = selected?.channel_qr_url || '';
   const qrValue = selected?.qr_value || '';
@@ -689,10 +696,93 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const needsWeixinConfig = isWeixinOfficialChannel(channel) && selected && !displayQrUrl;
   const needsFeishuNativeConfig = isFeishuChannel(channel) && selected && !hasFeishuEntryQRCode;
   const needsClawBotConfig = isWeixinClawBotChannel(channel) && selected && !isClawBotEntry;
+  const clawBotMobileStatus = clawBotMobileLink?.entry?.clawbot_entry_status || null;
+  const clawBotMobileReasons = Array.isArray(clawBotMobileStatus?.reasons)
+    ? clawBotMobileStatus.reasons
+    : clawBotEntryReasons;
+  const clawBotMobileQrKind = clawBotMobileLink?.qr_kind || clawBotMobileLink?.entry?.qr_kind || '';
+  const clawBotMobileQRValue = clawBotMobileQrKind === 'weixin_clawbot_ilink_qr'
+    ? (clawBotMobileLink?.qr_value || clawBotMobileLink?.channel_qr_url || '')
+    : '';
+  const clawBotMobileQRCode = clawBotMobileStatus?.qrcode || '';
+  const clawBotMobileSceneKey = clawBotMobileLink?.scene_key || '';
 
   useEffect(() => {
     setQrImageError(false);
   }, [displayQrUrl]);
+
+  useEffect(() => {
+    clawBotMobileMountedRef.current = true;
+    return () => {
+      clawBotMobileMountedRef.current = false;
+      clawBotMobileRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    clawBotMobileRequestRef.current += 1;
+    setClawBotMobileLink(null);
+    setClawBotMobileLoading(false);
+    setClawBotMobileError('');
+    setClawBotAuthStatus(null);
+  }, [botId, channel, accessMode, selectedEntryID]);
+
+  const loadClawBotMobileLink = useCallback(async () => {
+    if (!botId || !clawBotMobileMountedRef.current) return;
+    const requestSeq = clawBotMobileRequestRef.current + 1;
+    clawBotMobileRequestRef.current = requestSeq;
+    try {
+      setClawBotMobileLoading(true);
+      setClawBotMobileError('');
+      setClawBotAuthStatus(null);
+      setClawBotMobileLink(null);
+      const res = await api.createChannelIdentityMobileLink(botId, 'weixin_clawbot', selectedEntryID);
+      if (clawBotMobileRequestRef.current !== requestSeq || !clawBotMobileMountedRef.current) return;
+      setClawBotMobileLink(res);
+    } catch (err) {
+      if (clawBotMobileRequestRef.current !== requestSeq || !clawBotMobileMountedRef.current) return;
+      setClawBotMobileLink(null);
+      setClawBotMobileError(err.message || '暂时无法生成微信 ClawBot 授权码');
+    } finally {
+      if (clawBotMobileRequestRef.current === requestSeq && clawBotMobileMountedRef.current) {
+        setClawBotMobileLoading(false);
+      }
+    }
+  }, [botId, selectedEntryID]);
+
+  useEffect(() => {
+    if (!needsClawBotConfig || !selectedEntryID || clawBotMobileLink || clawBotMobileLoading || clawBotMobileError) {
+      return;
+    }
+    loadClawBotMobileLink();
+  }, [needsClawBotConfig, selectedEntryID, clawBotMobileLink, clawBotMobileLoading, clawBotMobileError, loadClawBotMobileLink]);
+
+  useEffect(() => {
+    if (!needsClawBotConfig || !clawBotMobileSceneKey || !clawBotMobileQRCode || !clawBotMobileQRValue) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      try {
+        const res = await api.getWeixinClawBotQRCodeStatus(clawBotMobileSceneKey, clawBotMobileQRCode);
+        if (cancelled) return;
+        if (res?.token_saved) {
+          setClawBotAuthStatus({ status: 'saved', target: res.target || 'agent' });
+          return;
+        }
+        setClawBotAuthStatus({ status: res?.status || 'waiting' });
+        timer = window.setTimeout(poll, 2000);
+      } catch (err) {
+        if (cancelled) return;
+        setClawBotAuthStatus({ status: 'error', message: err.message || '授权状态检查失败' });
+        timer = window.setTimeout(poll, 3000);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [needsClawBotConfig, clawBotMobileSceneKey, clawBotMobileQRCode, clawBotMobileQRValue]);
 
   const handleGenerate = async () => {
     try {
@@ -916,31 +1006,95 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
             </div>
           ) : selected && needsClawBotConfig ? (
             <div style={{ padding: 24, border: '1px dashed var(--v3-border)', borderRadius: 8 }}>
-              <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, marginBottom: 10 }}>微信 ClawBot 授权码需从移动端使用生成</div>
+              <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, marginBottom: 10 }}>微信 ClawBot 授权码</div>
               <div style={{ color: 'var(--v3-text-muted)', fontSize: 13, lineHeight: 1.7, marginBottom: 14 }}>
-                微信 ClawBot 使用 iLink 一次性授权二维码，不是可长期分享的公众号参数码。请在聊天页点击“移动端使用”生成当前用户的 ClawBot 授权码。
+                这里会为当前登录用户生成 iLink 一次性授权二维码；它不是可投放的长期入口码。扫码授权后，服务端会保存本次授权返回的 token，之后该用户可在微信 ClawBot 里继续和这个机器人对话。
               </div>
-              {clawBotEntryReasons.length > 0 && (
+              {clawBotMobileLoading && (
+                <div style={{ padding: 32, textAlign: 'center', color: 'var(--v3-text-muted)', border: '1px solid var(--v3-border)', borderRadius: 8, marginBottom: 14 }}>
+                  正在生成微信 ClawBot 授权码...
+                </div>
+              )}
+              {!clawBotMobileLoading && clawBotMobileError && (
+                <div style={{ background: 'rgba(250,81,81,0.1)', color: '#fca5a5', border: '1px solid rgba(250,81,81,0.18)', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+                  {clawBotMobileError}
+                </div>
+              )}
+              {!clawBotMobileLoading && clawBotMobileError && (
+                <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                  <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`entry_${selected.id}`, entryUrl)} disabled={!entryUrl}>
+                    <Copy size={14} /> {copiedField === `entry_${selected.id}` ? 'Copied!' : '复制测试链接'}
+                  </button>
+                  <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={loadClawBotMobileLink}>
+                    <RefreshCw size={14} /> 重试生成
+                  </button>
+                </div>
+              )}
+              {!clawBotMobileLoading && !clawBotMobileError && clawBotMobileQRValue && (
+                <div style={{ display: 'grid', gridTemplateColumns: '196px 1fr', gap: 18, alignItems: 'center', marginBottom: 14 }}>
+                  <QRCode value={clawBotMobileQRValue} size={205} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: 'var(--v3-text-muted)', marginBottom: 8 }}>微信 ClawBot 一次性授权码</div>
+                    <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 12 }}>
+                      {clawBotMobileQRValue}
+                    </div>
+                    {clawBotMobileStatus?.qrcode_url && (
+                      <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-muted)', fontSize: 12, lineHeight: 1.5, wordBreak: 'break-all', marginBottom: 12 }}>
+                        ClawBot iLink 授权入口：{clawBotMobileStatus.qrcode_url}
+                      </div>
+                    )}
+                    <div style={{
+                      background: clawBotAuthStatus?.status === 'error' ? 'rgba(250,81,81,0.1)' : 'rgba(25,195,125,0.10)',
+                      color: clawBotAuthStatus?.status === 'error' ? '#fca5a5' : '#19C37D',
+                      border: clawBotAuthStatus?.status === 'error' ? '1px solid rgba(250,81,81,0.18)' : '1px solid rgba(25,195,125,0.18)',
+                      borderRadius: 8,
+                      padding: '9px 10px',
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      marginBottom: 12,
+                    }}>
+                      {clawBotAuthStatus?.status === 'saved'
+                        ? 'ClawBot 授权已保存；之后该用户可在微信 ClawBot 里继续和这个机器人对话。'
+                        : clawBotAuthStatus?.status === 'error'
+                          ? `正在重试授权状态检查：${clawBotAuthStatus.message}`
+                          : '扫码后请保持这个窗口打开，授权确认后服务端会自动保存 token。'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`clawbot_mobile_${selected.id}`, clawBotMobileQRValue)}>
+                        <Copy size={14} /> {copiedField === `clawbot_mobile_${selected.id}` ? 'Copied!' : '复制'}
+                      </button>
+                      <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={loadClawBotMobileLink} disabled={clawBotMobileLoading}>
+                        <RefreshCw size={14} /> 重新生成
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {!clawBotMobileLoading && !clawBotMobileError && !clawBotMobileQRValue && clawBotMobileReasons.length > 0 && (
                 <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
-                  {clawBotEntryReasons.map((reason, index) => (
+                  {clawBotMobileReasons.map((reason, index) => (
                     <div key={`${reason}-${index}`} style={{ background: 'rgba(250,81,81,0.1)', color: '#fca5a5', border: '1px solid rgba(250,81,81,0.18)', borderRadius: 8, padding: '8px 10px', fontSize: 12, lineHeight: 1.45 }}>
                       {reason}
                     </div>
                   ))}
                 </div>
               )}
-              <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+              {!clawBotMobileLoading && !clawBotMobileError && !clawBotMobileQRValue && (
+                <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
                 可选环境变量：CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL、CATSCO_WEIXIN_CLAWBOT_BOT_TYPE<br />
                 默认使用 https://ilinkai.weixin.qq.com 和 bot_type=3。
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+                </div>
+              )}
+              {!clawBotMobileLoading && !clawBotMobileError && !clawBotMobileQRValue && (
+                <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => onCopy(`entry_${selected.id}`, entryUrl)}>
                   <Copy size={14} /> {copiedField === `entry_${selected.id}` ? 'Copied!' : '复制测试链接'}
                 </button>
-                <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={handleRegenerate} disabled={saving}>
-                  <RefreshCw size={14} /> 重新生成
+                <button type="button" className="oc-btn oc-btn-default" style={{ flex: 1, padding: '9px 0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={loadClawBotMobileLink} disabled={clawBotMobileLoading}>
+                  <RefreshCw size={14} /> 生成授权码
                 </button>
               </div>
+              )}
             </div>
           ) : selected ? (
             <>
