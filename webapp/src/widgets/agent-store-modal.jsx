@@ -621,6 +621,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   const [clawBotMobileError, setClawBotMobileError] = useState('');
   const [clawBotAuthStatus, setClawBotAuthStatus] = useState(null);
   const clawBotMobileRequestRef = useRef(0);
+  const clawBotMobileMountedRef = useRef(false);
   const botId = bot?.id || bot?.uid;
 
   useEffect(() => {
@@ -711,6 +712,14 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   }, [displayQrUrl]);
 
   useEffect(() => {
+    clawBotMobileMountedRef.current = true;
+    return () => {
+      clawBotMobileMountedRef.current = false;
+      clawBotMobileRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
     clawBotMobileRequestRef.current += 1;
     setClawBotMobileLink(null);
     setClawBotMobileLoading(false);
@@ -719,7 +728,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
   }, [botId, channel, accessMode, selectedEntryID]);
 
   const loadClawBotMobileLink = useCallback(async () => {
-    if (!botId) return;
+    if (!botId || !clawBotMobileMountedRef.current) return;
     const requestSeq = clawBotMobileRequestRef.current + 1;
     clawBotMobileRequestRef.current = requestSeq;
     try {
@@ -727,19 +736,19 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
       setClawBotMobileError('');
       setClawBotAuthStatus(null);
       setClawBotMobileLink(null);
-      const res = await api.createChannelIdentityMobileLink(botId, 'weixin_clawbot');
-      if (clawBotMobileRequestRef.current !== requestSeq) return;
+      const res = await api.createChannelIdentityMobileLink(botId, 'weixin_clawbot', selectedEntryID);
+      if (clawBotMobileRequestRef.current !== requestSeq || !clawBotMobileMountedRef.current) return;
       setClawBotMobileLink(res);
     } catch (err) {
-      if (clawBotMobileRequestRef.current !== requestSeq) return;
+      if (clawBotMobileRequestRef.current !== requestSeq || !clawBotMobileMountedRef.current) return;
       setClawBotMobileLink(null);
       setClawBotMobileError(err.message || '暂时无法生成微信 ClawBot 授权码');
     } finally {
-      if (clawBotMobileRequestRef.current === requestSeq) {
+      if (clawBotMobileRequestRef.current === requestSeq && clawBotMobileMountedRef.current) {
         setClawBotMobileLoading(false);
       }
     }
-  }, [botId]);
+  }, [botId, selectedEntryID]);
 
   useEffect(() => {
     if (!needsClawBotConfig || !selectedEntryID || clawBotMobileLink || clawBotMobileLoading || clawBotMobileError) {
@@ -999,7 +1008,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
             <div style={{ padding: 24, border: '1px dashed var(--v3-border)', borderRadius: 8 }}>
               <div style={{ color: 'var(--v3-text-name)', fontWeight: 700, marginBottom: 10 }}>微信 ClawBot 授权码</div>
               <div style={{ color: 'var(--v3-text-muted)', fontSize: 13, lineHeight: 1.7, marginBottom: 14 }}>
-                这里会为当前登录用户生成 iLink 一次性授权二维码。扫码授权后，服务端会保存 ClawBot token，并长期接收这个机器人在微信 ClawBot 里的消息。
+                这里会为当前登录用户生成 iLink 一次性授权二维码；它不是可投放的长期入口码。扫码授权后，服务端会保存本次授权返回的 token，之后该用户可在微信 ClawBot 里继续和这个机器人对话。
               </div>
               {clawBotMobileLoading && (
                 <div style={{ padding: 32, textAlign: 'center', color: 'var(--v3-text-muted)', border: '1px solid var(--v3-border)', borderRadius: 8, marginBottom: 14 }}>
@@ -1045,7 +1054,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
                       marginBottom: 12,
                     }}>
                       {clawBotAuthStatus?.status === 'saved'
-                        ? 'ClawBot 授权已保存，服务端会持续接收这个 ClawBot 的消息。'
+                        ? 'ClawBot 授权已保存；之后该用户可在微信 ClawBot 里继续和这个机器人对话。'
                         : clawBotAuthStatus?.status === 'error'
                           ? `正在重试授权状态检查：${clawBotAuthStatus.message}`
                           : '扫码后请保持这个窗口打开，授权确认后服务端会自动保存 token。'}

@@ -429,6 +429,73 @@ func TestCreateClawBotChannelIdentityMobileLinkUsesClawBotEntry(t *testing.T) {
 	}
 }
 
+func TestCreateChannelIdentityMobileLinkUsesRequestedEntryID(t *testing.T) {
+	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
+	ilinkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ret":                0,
+			"qrcode":             "qr-selected-entry",
+			"qrcode_img_content": "https://liteapp.weixin.qq.com/q/selected?qrcode=qr-selected-entry&bot_type=3",
+		})
+	}))
+	defer ilinkServer.Close()
+	t.Setenv("CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL", ilinkServer.URL)
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	approvalEntry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot-approval",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed approval entry: %v", err)
+	}
+	publicEntry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot-public",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed public entry: %v", err)
+	}
+	handler := NewChannelAgentBindingHandler(db, nil)
+
+	body := `{"agent_uid":43,"channel":"weixin_clawbot","entry_id":` + strconv.FormatInt(approvalEntry.ID, 10) + `}`
+	req := httptest.NewRequest(http.MethodPost, "https://app.catsco.cc/api/channel-agent-bindings/mobile-link", strings.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleCreateChannelIdentityMobileLink(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp channelAgentMobileLinkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Entry.ID != approvalEntry.ID || resp.Entry.ID == publicEntry.ID {
+		t.Fatalf("expected requested approval entry, got %+v public=%d", resp.Entry.ChannelAgentEntry, publicEntry.ID)
+	}
+	if resp.Entry.AccessMode != types.ChannelAgentAccessApprovalRequired {
+		t.Fatalf("access mode = %q, want approval_required", resp.Entry.AccessMode)
+	}
+	resolved, canonicalUID, err := resolveChannelIdentityMobileLink(db, resp.SceneKey, "weixin_clawbot", "", false)
+	if err != nil || resolved == nil || resolved.ID != approvalEntry.ID || canonicalUID != 9 {
+		t.Fatalf("resolve requested entry=%+v canonical=%d err=%v", resolved, canonicalUID, err)
+	}
+}
+
 func TestChannelIdentityMobileLinkRejectsInvalidOrRevokedAccess(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "annika", DisplayName: "Annika", AccountType: types.AccountHuman}
