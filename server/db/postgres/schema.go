@@ -26,6 +26,7 @@ func (a *Adapter) CreateSchema() error {
 		createChannelIdentityMobileLinksTable,
 		createChannelGroupMobileLinksTable,
 		createChannelGroupBindingsTable,
+		createWeixinClawBotTokensTable,
 		migrateUsersAddBotDisclose,
 		migrateMessagesAddReplyTo,
 		migrateBotConfigAddAPIKey,
@@ -376,6 +377,31 @@ CREATE TABLE IF NOT EXISTS channel_group_bindings (
 );
 `
 
+const createWeixinClawBotTokensTable = `
+CREATE TABLE IF NOT EXISTS weixin_clawbot_tokens (
+    id BIGSERIAL PRIMARY KEY,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    bot_token TEXT NOT NULL,
+    token_last4 VARCHAR(8) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    owner_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_uid BIGINT DEFAULT NULL REFERENCES users(id) ON DELETE CASCADE,
+    entry_id BIGINT DEFAULT NULL REFERENCES channel_agent_entries(id) ON DELETE SET NULL,
+    canonical_uid BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id BIGINT DEFAULT NULL REFERENCES "groups"(id) ON DELETE CASCADE,
+    topic_id VARCHAR(128) NOT NULL DEFAULT '',
+    source_scene_key VARCHAR(64) NOT NULL DEFAULT '',
+    get_updates_buf TEXT NOT NULL DEFAULT '',
+    context_tokens JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_poll_at TIMESTAMPTZ DEFAULT NULL,
+    last_used_at TIMESTAMPTZ DEFAULT NULL,
+    last_error_at TIMESTAMPTZ DEFAULT NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`
+
 const createSchemaMigrationsTable = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version BIGINT NOT NULL PRIMARY KEY,
@@ -486,6 +512,9 @@ CREATE INDEX IF NOT EXISTS idx_channel_mobile_links_canonical ON channel_identit
 CREATE INDEX IF NOT EXISTS idx_channel_group_mobile_links_group ON channel_group_mobile_links (group_id, canonical_uid, status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_channel_group_bindings_topic ON channel_group_bindings (topic_id, status);
 CREATE INDEX IF NOT EXISTS idx_channel_group_bindings_lookup ON channel_group_bindings (channel, channel_app_id, channel_user_id, channel_conversation_id, channel_conversation_type, status);
+CREATE INDEX IF NOT EXISTS idx_weixin_clawbot_tokens_active ON weixin_clawbot_tokens (status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_weixin_clawbot_tokens_agent ON weixin_clawbot_tokens (agent_uid, canonical_uid, status);
+CREATE INDEX IF NOT EXISTS idx_weixin_clawbot_tokens_group ON weixin_clawbot_tokens (group_id, topic_id, status);
 `
 
 const createUpdatedAtTriggers = `
@@ -512,5 +541,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_group_mobile_links_updated_at BEFORE UPDATE ON channel_group_mobile_links
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE OR REPLACE TRIGGER trg_channel_group_bindings_updated_at BEFORE UPDATE ON channel_group_bindings
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE OR REPLACE TRIGGER trg_weixin_clawbot_tokens_updated_at BEFORE UPDATE ON weixin_clawbot_tokens
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 `

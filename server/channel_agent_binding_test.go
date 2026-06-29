@@ -2071,6 +2071,8 @@ type channelAgentTestStore struct {
 	groupLinks     map[string]*types.ChannelGroupMobileLink
 	groupBindings  map[string]*types.ChannelGroupBinding
 	routes         map[string]*types.ChannelAgentRoute
+	clawBotTokens  map[int64]*types.WeixinClawBotToken
+	clawBotByHash  map[string]int64
 	friends        map[string]types.FriendStatus
 	messages       []*types.Message
 	clientIDs      map[string]int64
@@ -2101,6 +2103,8 @@ func newChannelAgentTestStore() *channelAgentTestStore {
 		groupLinks:     map[string]*types.ChannelGroupMobileLink{},
 		groupBindings:  map[string]*types.ChannelGroupBinding{},
 		routes:         map[string]*types.ChannelAgentRoute{},
+		clawBotTokens:  map[int64]*types.WeixinClawBotToken{},
+		clawBotByHash:  map[string]int64{},
 		friends:        map[string]types.FriendStatus{},
 		messages:       []*types.Message{},
 		clientIDs:      map[string]int64{},
@@ -2971,12 +2975,124 @@ func (s *channelAgentTestStore) ResolveChannelAgentRoute(query types.ChannelAgen
 	return cloneRoute(route), nil
 }
 
+func (s *channelAgentTestStore) UpsertWeixinClawBotToken(token *types.WeixinClawBotToken) (*types.WeixinClawBotToken, error) {
+	if token == nil || strings.TrimSpace(token.TokenHash) == "" || strings.TrimSpace(token.BotToken) == "" {
+		return nil, errors.New("invalid weixin clawbot token")
+	}
+	now := time.Now()
+	next := cloneWeixinClawBotToken(token)
+	if next.Status == "" {
+		next.Status = types.WeixinClawBotTokenActive
+	}
+	if id := s.clawBotByHash[next.TokenHash]; id > 0 {
+		if existing := s.clawBotTokens[id]; existing != nil {
+			next.ID = existing.ID
+			next.CreatedAt = existing.CreatedAt
+			if next.GetUpdatesBuf == "" {
+				next.GetUpdatesBuf = existing.GetUpdatesBuf
+			}
+			if len(next.ContextTokens) == 0 {
+				next.ContextTokens = copyTestClawBotContexts(existing.ContextTokens)
+			}
+		}
+	} else {
+		next.ID = s.nextID
+		s.nextID++
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	s.clawBotTokens[next.ID] = next
+	s.clawBotByHash[next.TokenHash] = next.ID
+	return cloneWeixinClawBotToken(next), nil
+}
+
+func (s *channelAgentTestStore) GetWeixinClawBotTokenByID(id int64) (*types.WeixinClawBotToken, error) {
+	return cloneWeixinClawBotToken(s.clawBotTokens[id]), nil
+}
+
+func (s *channelAgentTestStore) GetWeixinClawBotTokenByHash(tokenHash string) (*types.WeixinClawBotToken, error) {
+	id := s.clawBotByHash[strings.TrimSpace(tokenHash)]
+	if id <= 0 {
+		return nil, nil
+	}
+	return cloneWeixinClawBotToken(s.clawBotTokens[id]), nil
+}
+
+func (s *channelAgentTestStore) ListActiveWeixinClawBotTokens() ([]*types.WeixinClawBotToken, error) {
+	var out []*types.WeixinClawBotToken
+	for _, token := range s.clawBotTokens {
+		if token.Status == types.WeixinClawBotTokenActive {
+			out = append(out, cloneWeixinClawBotToken(token))
+		}
+	}
+	return out, nil
+}
+
+func (s *channelAgentTestStore) UpdateWeixinClawBotTokenPollState(id int64, getUpdatesBuf string, contextTokens map[string]types.WeixinClawBotContext) error {
+	token := s.clawBotTokens[id]
+	if token == nil {
+		return nil
+	}
+	now := time.Now()
+	token.GetUpdatesBuf = strings.TrimSpace(getUpdatesBuf)
+	token.ContextTokens = copyTestClawBotContexts(contextTokens)
+	token.LastPollAt = &now
+	token.LastError = ""
+	token.LastErrorAt = nil
+	token.UpdatedAt = now
+	return nil
+}
+
+func (s *channelAgentTestStore) MarkWeixinClawBotTokenError(id int64, status string, message string) error {
+	token := s.clawBotTokens[id]
+	if token == nil {
+		return nil
+	}
+	now := time.Now()
+	if strings.TrimSpace(status) != "" {
+		token.Status = strings.TrimSpace(status)
+	}
+	token.LastError = strings.TrimSpace(message)
+	token.LastErrorAt = &now
+	token.UpdatedAt = now
+	return nil
+}
+
 func cloneEntry(entry *types.ChannelAgentEntry) *types.ChannelAgentEntry {
 	if entry == nil {
 		return nil
 	}
 	next := *entry
 	return &next
+}
+
+func cloneWeixinClawBotToken(token *types.WeixinClawBotToken) *types.WeixinClawBotToken {
+	if token == nil {
+		return nil
+	}
+	next := *token
+	next.ContextTokens = copyTestClawBotContexts(token.ContextTokens)
+	if token.LastPollAt != nil {
+		lastPollAt := *token.LastPollAt
+		next.LastPollAt = &lastPollAt
+	}
+	if token.LastUsedAt != nil {
+		lastUsedAt := *token.LastUsedAt
+		next.LastUsedAt = &lastUsedAt
+	}
+	if token.LastErrorAt != nil {
+		lastErrorAt := *token.LastErrorAt
+		next.LastErrorAt = &lastErrorAt
+	}
+	return &next
+}
+
+func copyTestClawBotContexts(contexts map[string]types.WeixinClawBotContext) map[string]types.WeixinClawBotContext {
+	next := map[string]types.WeixinClawBotContext{}
+	for key, value := range contexts {
+		next[key] = value
+	}
+	return next
 }
 
 func cloneMobileLink(link *types.ChannelIdentityMobileLink) *types.ChannelIdentityMobileLink {

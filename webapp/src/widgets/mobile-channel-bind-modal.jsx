@@ -19,6 +19,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [clawBotAuthStatus, setClawBotAuthStatus] = useState(null);
   const requestSeqRef = useRef(0);
   const isGroupTarget = Boolean(groupId || topicId);
   const targetName = isGroupTarget ? (groupName || '群聊') : agentName;
@@ -31,6 +32,7 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
       setLoading(true);
       setError('');
       setCopied(false);
+      setClawBotAuthStatus(null);
       setLinkInfo(null);
       const res = isGroupTarget
         ? await api.createChannelGroupMobileLink(groupId, topicId, channel)
@@ -62,6 +64,36 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
   const qrValue = shouldSuppressQRCode ? '' : (linkInfo?.qr_value || linkInfo?.channel_qr_url || '');
   const channelImageURL = isWeixinOfficialQR ? (linkInfo?.channel_qr_url || '') : '';
   const copyValue = qrValue || '';
+  const clawBotQRCode = linkInfo?.entry?.clawbot_entry_status?.qrcode || '';
+  const sceneKey = linkInfo?.scene_key || '';
+
+  useEffect(() => {
+    if (channel !== 'weixin_clawbot' || !sceneKey || !clawBotQRCode || !qrValue) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      try {
+        const res = await api.getWeixinClawBotQRCodeStatus(sceneKey, clawBotQRCode);
+        if (cancelled) return;
+        if (res?.token_saved) {
+          setClawBotAuthStatus({ status: 'saved', target: res.target || 'agent' });
+          return;
+        }
+        setClawBotAuthStatus({ status: res?.status || 'waiting' });
+        timer = window.setTimeout(poll, 2000);
+      } catch (err) {
+        if (cancelled) return;
+        setClawBotAuthStatus({ status: 'error', message: err.message || '授权状态检查失败' });
+        timer = window.setTimeout(poll, 3000);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [channel, sceneKey, clawBotQRCode, qrValue]);
+
   const channelCopy = (() => {
     if (channel === 'weixin' && linkInfo && !isWeixinOfficialQR) {
       return '微信公众号参数二维码尚未配置，暂时不能生成公众号移动端绑定二维码。';
@@ -138,8 +170,18 @@ export default function MobileChannelBindModal({ agentUid, agentName, groupId, t
           )}
         </div>
 
-        {!loading && !error && qrValue && (
+        {!loading && !error && qrValue && channel !== 'weixin_clawbot' && (
           <p className="mobile-channel-expiry">二维码 10 分钟内有效，完成绑定后会自动失效。</p>
+        )}
+
+        {!loading && !error && channel === 'weixin_clawbot' && qrValue && (
+          <p className="mobile-channel-expiry">
+            {clawBotAuthStatus?.status === 'saved'
+              ? 'ClawBot 授权已保存，服务端会持续接收这个 ClawBot 的消息。'
+              : clawBotAuthStatus?.status === 'error'
+                ? `正在重试授权状态检查：${clawBotAuthStatus.message}`
+                : '扫码后请保持这个窗口打开，授权确认后服务端会自动保存 token。'}
+          </p>
         )}
 
         <div className="mobile-channel-actions">

@@ -1269,6 +1269,195 @@ func TestClawBotMobileEntryResponseUsesIlinkQRCode(t *testing.T) {
 	}
 }
 
+func TestWeixinClawBotQRCodeStatusSavesAgentToken(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.friends[friendKey(9, 43)] = types.FriendAccepted
+	db.friends[friendKey(43, 9)] = types.FriendAccepted
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	link, err := db.CreateChannelIdentityMobileLink(&types.ChannelIdentityMobileLink{
+		SceneKey:     "m.clawbot",
+		EntryID:      entry.ID,
+		Channel:      "weixin_clawbot",
+		CanonicalUID: 9,
+		Status:       "active",
+		ExpiresAt:    time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("seed mobile link: %v", err)
+	}
+	api := &fakeWeixinClawBotAPI{
+		qrStatus: &weixinClawBotQRCodeStatus{Ret: 0, Status: "confirmed", BotToken: "secret-bot-token"},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	req := httptest.NewRequest(http.MethodGet, "/api/channel-agent-bindings/weixin-clawbot/qrcode-status?scene_key="+url.QueryEscape(link.SceneKey)+"&qrcode=qr-1", nil)
+	req = req.WithContext(context.WithValue(req.Context(), uidKey, int64(9)))
+	rec := httptest.NewRecorder()
+	handler.HandleQRCodeStatus(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-bot-token") {
+		t.Fatalf("response leaked bot token: %s", rec.Body.String())
+	}
+	var resp struct {
+		TokenSaved bool                     `json:"token_saved"`
+		Target     string                   `json:"target"`
+		Token      types.WeixinClawBotToken `json:"token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.TokenSaved || resp.Target != "agent" || resp.Token.TokenHash == "" || resp.Token.TokenLast4 != "oken" {
+		t.Fatalf("unexpected status response: %+v", resp)
+	}
+	stored, err := db.GetWeixinClawBotTokenByHash(resp.Token.TokenHash)
+	if err != nil || stored == nil || stored.BotToken != "secret-bot-token" || stored.AgentUID != 43 || stored.EntryID != entry.ID || stored.CanonicalUID != 9 {
+		t.Fatalf("stored token = %+v err=%v", stored, err)
+	}
+	consumed, err := db.GetChannelIdentityMobileLink(link.SceneKey)
+	if err != nil || consumed == nil || consumed.Status != "consumed" {
+		t.Fatalf("mobile link should be consumed, got %+v err=%v", consumed, err)
+	}
+}
+
+func TestWeixinClawBotPollDeliversAgentMessageAndSendsReply(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		AgentUID:       43,
+		EntryID:        entry.ID,
+		CanonicalUID:   9,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList: []weixinClawBotMessageItem{
+						clawBotTextItem("你好 ClawBot"),
+					},
+				},
+			},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 || db.messages[0].FromUID != 9 || db.messages[0].TopicID != p2pTopicID(9, 43) {
+		t.Fatalf("unexpected delivered messages: %+v", db.messages)
+	}
+	stored, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if stored.GetUpdatesBuf != "buf-next" || stored.ContextTokens["wx-user-1"].ContextToken != "ctx-1" || stored.ContextTokens["wx-user-1"].BotUserID != "wx-bot-1" {
+		t.Fatalf("poll state not saved: %+v", stored)
+	}
+	binding, err := db.ResolveChannelAgentBinding(types.ChannelAgentBindingQuery{
+		Channel:       "weixin_clawbot",
+		ChannelAppID:  tokenHash,
+		ChannelUserID: "wx-user-1",
+		AgentUID:      43,
+	})
+	if err != nil || binding == nil || binding.CanonicalUID != 9 || binding.Status != types.ChannelAgentBindingActive {
+		t.Fatalf("binding = %+v err=%v", binding, err)
+	}
+	if err := handler.SendTextMessage(context.Background(), binding, "机器人回复"); err != nil {
+		t.Fatalf("send reply: %v", err)
+	}
+	if len(api.sends) != 1 || api.sends[0].Token != botToken || api.sends[0].ToUserID != "wx-user-1" || api.sends[0].ContextToken != "ctx-1" || api.sends[0].FromUserID != "wx-bot-1" {
+		t.Fatalf("unexpected sends: %+v", api.sends)
+	}
+}
+
+func clawBotTextItem(text string) weixinClawBotMessageItem {
+	var item weixinClawBotMessageItem
+	item.Type = 1
+	item.TextItem.Text = text
+	return item
+}
+
+type fakeWeixinClawBotAPI struct {
+	qrStatus *weixinClawBotQRCodeStatus
+	updates  *weixinClawBotUpdates
+	sends    []fakeWeixinClawBotSend
+}
+
+type fakeWeixinClawBotSend struct {
+	Token        string
+	ToUserID     string
+	Text         string
+	ContextToken string
+	FromUserID   string
+}
+
+func (f *fakeWeixinClawBotAPI) GetQRCodeStatus(ctx context.Context, qrcode string) (*weixinClawBotQRCodeStatus, error) {
+	if f.qrStatus == nil {
+		return &weixinClawBotQRCodeStatus{Status: "waiting"}, nil
+	}
+	return f.qrStatus, nil
+}
+
+func (f *fakeWeixinClawBotAPI) GetUpdates(ctx context.Context, botToken string, getUpdatesBuf string) (*weixinClawBotUpdates, error) {
+	if f.updates == nil {
+		return &weixinClawBotUpdates{}, nil
+	}
+	return f.updates, nil
+}
+
+func (f *fakeWeixinClawBotAPI) SendTextMessage(ctx context.Context, botToken string, toUserID string, text string, contextToken string, fromUserID string) error {
+	f.sends = append(f.sends, fakeWeixinClawBotSend{
+		Token:        botToken,
+		ToUserID:     toUserID,
+		Text:         text,
+		ContextToken: contextToken,
+		FromUserID:   fromUserID,
+	})
+	return nil
+}
+
 func TestFeishuEntryResponseRejectsNativeEntryForAppIDMismatch(t *testing.T) {
 	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
 	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")

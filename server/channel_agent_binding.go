@@ -1019,8 +1019,15 @@ func channelBindingManagementStatus(binding *types.ChannelAgentBinding) string {
 }
 
 func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelUserID string) (int64, error) {
+	return ensureChannelActor(h.db, channel, appID, channelUserID)
+}
+
+func ensureChannelActor(db store.Store, channel, appID, channelUserID string) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("channel actor store not configured")
+	}
 	username := channelActorUsername(channel, appID, channelUserID)
-	if user, err := h.db.GetUserByUsername(username); err == nil && user != nil {
+	if user, err := db.GetUserByUsername(username); err == nil && user != nil {
 		return user.ID, nil
 	} else if err != nil {
 		return 0, err
@@ -1034,7 +1041,7 @@ func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelU
 	case "weixin_clawbot":
 		displayName = "Weixin ClawBot User"
 	}
-	uid, err := h.db.CreateUser(&types.User{
+	uid, err := db.CreateUser(&types.User{
 		Username:    username,
 		DisplayName: displayName,
 		AccountType: types.AccountHuman,
@@ -1042,7 +1049,7 @@ func (h *ChannelAgentBindingHandler) ensureChannelActor(channel, appID, channelU
 		State:       0,
 	})
 	if err != nil {
-		if user, lookupErr := h.db.GetUserByUsername(username); lookupErr == nil && user != nil {
+		if user, lookupErr := db.GetUserByUsername(username); lookupErr == nil && user != nil {
 			return user.ID, nil
 		}
 		return 0, err

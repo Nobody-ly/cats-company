@@ -351,6 +351,45 @@ type ChannelGroupBinding struct {
 	LastUsedAt              *time.Time `json:"last_used_at,omitempty"`
 }
 
+const (
+	WeixinClawBotTokenActive  = "active"
+	WeixinClawBotTokenRevoked = "revoked"
+	WeixinClawBotTokenExpired = "expired"
+)
+
+// WeixinClawBotContext stores the reply context needed by the iLink
+// sendmessage API for one Weixin ClawBot user.
+type WeixinClawBotContext struct {
+	ContextToken string    `json:"context_token"`
+	BotUserID    string    `json:"bot_user_id,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+}
+
+// WeixinClawBotToken stores a bot_token returned by the Weixin iLink ClawBot
+// QR authorization flow. BotToken is intentionally omitted from JSON output.
+type WeixinClawBotToken struct {
+	ID             int64                           `json:"id"`
+	TokenHash      string                          `json:"token_hash"`
+	BotToken       string                          `json:"-"`
+	TokenLast4     string                          `json:"token_last4,omitempty"`
+	Status         string                          `json:"status"`
+	OwnerUID       int64                           `json:"owner_uid"`
+	AgentUID       int64                           `json:"agent_uid,omitempty"`
+	EntryID        int64                           `json:"entry_id,omitempty"`
+	CanonicalUID   int64                           `json:"canonical_uid"`
+	GroupID        int64                           `json:"group_id,omitempty"`
+	TopicID        string                          `json:"topic_id,omitempty"`
+	SourceSceneKey string                          `json:"source_scene_key,omitempty"`
+	GetUpdatesBuf  string                          `json:"-"`
+	ContextTokens  map[string]WeixinClawBotContext `json:"-"`
+	LastPollAt     *time.Time                      `json:"last_poll_at,omitempty"`
+	LastUsedAt     *time.Time                      `json:"last_used_at,omitempty"`
+	LastErrorAt    *time.Time                      `json:"last_error_at,omitempty"`
+	LastError      string                          `json:"last_error,omitempty"`
+	CreatedAt      time.Time                       `json:"created_at"`
+	UpdatedAt      time.Time                       `json:"updated_at"`
+}
+
 // ChannelAgentBindingQuery is the normalized lookup key used by channel
 // adapters before they create a model session route.
 type ChannelAgentBindingQuery struct {
