@@ -4,6 +4,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -332,6 +333,7 @@ func (h *Hub) buildXiaobaRuntimeMetadata(actorUID int64, recipientUID int64, top
 	}
 	users := h.xiaobaRuntimeRelevantHumanUsers(actorUID, recipientUID, topicID)
 	if len(users) == 0 {
+		log.Printf("[xiaoba_runtime] no relevant human users: topic=%s actor=%s recipient=%s", topicID, formatUID(actorUID), formatUID(recipientUID))
 		return nil
 	}
 	devices := make([]map[string]interface{}, 0, len(users))
@@ -341,10 +343,12 @@ func (h *Hub) buildXiaobaRuntimeMetadata(actorUID int64, recipientUID int64, top
 		}
 		device, ok := h.xiaobaRuntimeReadyDevice(user.ID)
 		if !ok {
+			log.Printf("[xiaoba_runtime] no ready device: topic=%s actor=%s recipient=%s user=%s username=%s display=%s", topicID, formatUID(actorUID), formatUID(recipientUID), formatUID(user.ID), user.Username, user.DisplayName)
 			continue
 		}
 		userName := firstNonEmpty(user.DisplayName, user.Username, formatUID(user.ID))
 		label := firstNonEmpty(device.DisplayName, userName+" 的电脑", formatUID(user.ID)+" 的电脑")
+		log.Printf("[xiaoba_runtime] ready device: topic=%s actor=%s recipient=%s user=%s username=%s label=%q device_id=%s body_id=%s install_id=%s os=%s active=%t route_connected=%t routable=%t", topicID, formatUID(actorUID), formatUID(recipientUID), formatUID(user.ID), userName, label, device.DeviceID, device.BodyID, device.InstallationID, normalizeDeviceOS(device.OS), device.Active, device.RouteConnected, device.Routable)
 		devices = append(devices, map[string]interface{}{
 			"userId":   formatUID(user.ID),
 			"userName": userName,
@@ -354,8 +358,10 @@ func (h *Hub) buildXiaobaRuntimeMetadata(actorUID int64, recipientUID int64, top
 		})
 	}
 	if len(devices) == 0 {
+		log.Printf("[xiaoba_runtime] no devices injected: topic=%s actor=%s recipient=%s relevant_users=%d", topicID, formatUID(actorUID), formatUID(recipientUID), len(users))
 		return nil
 	}
+	log.Printf("[xiaoba_runtime] inject devices: topic=%s actor=%s recipient=%s count=%d devices=%#v", topicID, formatUID(actorUID), formatUID(recipientUID), len(devices), devices)
 	return map[string]interface{}{
 		"schema":  "xiaoba.runtime.v1",
 		"devices": devices,
