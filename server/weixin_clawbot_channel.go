@@ -256,6 +256,11 @@ func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, scen
 		if entry == nil || resolvedCanonicalUID != canonicalUID {
 			return nil, "", errors.New("ClawBot mobile link is no longer valid")
 		}
+		if existing, err := bindings.GetWeixinClawBotTokenByHash(tokenHash); err != nil {
+			return nil, "", err
+		} else if existing != nil && (existing.CanonicalUID != canonicalUID || existing.AgentUID != entry.AgentUID || existing.EntryID != entry.ID) {
+			return nil, "", errors.New("ClawBot bot_token is already bound to another CatsCo user or entry")
+		}
 		token.OwnerUID = entry.OwnerUID
 		token.AgentUID = entry.AgentUID
 		token.EntryID = entry.ID
@@ -273,6 +278,11 @@ func (h *WeixinClawBotHandler) saveAuthorizedTokenForScene(r *http.Request, scen
 		}
 		if link == nil || link.CanonicalUID != canonicalUID {
 			return nil, "", errors.New("ClawBot group mobile link not found or expired")
+		}
+		if existing, err := bindings.GetWeixinClawBotTokenByHash(tokenHash); err != nil {
+			return nil, "", err
+		} else if existing != nil && (existing.CanonicalUID != canonicalUID || existing.GroupID != link.GroupID || strings.TrimSpace(existing.TopicID) != strings.TrimSpace(link.TopicID)) {
+			return nil, "", errors.New("ClawBot bot_token is already bound to another CatsCo user or group")
 		}
 		ownerUID := link.CanonicalUID
 		if group != nil && group.OwnerID > 0 {
