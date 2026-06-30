@@ -261,6 +261,7 @@ func (h *Hub) bindClientDeviceFromHi(client *Client, msg *MsgClientHi) (map[stri
 		InstallationID: firstNonEmpty(msg.Device.InstallationID, client.installationID),
 		Status:         msg.Device.Status,
 		Capabilities:   msg.Device.Capabilities,
+		ModelStatus:    msg.Device.ModelStatus,
 	}
 	device, err := h.userDevices.register(ownerUID, req)
 	if err != nil {

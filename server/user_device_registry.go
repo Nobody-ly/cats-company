@@ -58,8 +58,15 @@ type UserDevice struct {
 	Routable          bool                   `json:"routable"`
 	UnavailableReason string                 `json:"unavailableReason,omitempty"`
 	Capabilities      []DeviceGrantOperation `json:"capabilities,omitempty"`
+	ModelStatus       *DeviceModelStatus     `json:"modelStatus,omitempty"`
 	RegisteredAt      int64                  `json:"registeredAt"`
 	LastSeenAt        int64                  `json:"lastSeenAt,omitempty"`
+}
+
+type DeviceModelStatus struct {
+	Source    string `json:"source,omitempty"`
+	Model     string `json:"model,omitempty"`
+	UpdatedAt int64  `json:"updatedAt,omitempty"`
 }
 
 type ScopedDeviceGrant struct {
@@ -153,13 +160,14 @@ type deviceSelectionPreference struct {
 }
 
 type RegisterUserDeviceRequest struct {
-	DeviceID       string   `json:"device_id"`
-	DisplayName    string   `json:"display_name,omitempty"`
-	OS             string   `json:"os,omitempty"`
-	BodyID         string   `json:"body_id,omitempty"`
-	InstallationID string   `json:"installation_id,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	Capabilities   []string `json:"capabilities,omitempty"`
+	DeviceID       string             `json:"device_id"`
+	DisplayName    string             `json:"display_name,omitempty"`
+	OS             string             `json:"os,omitempty"`
+	BodyID         string             `json:"body_id,omitempty"`
+	InstallationID string             `json:"installation_id,omitempty"`
+	Status         string             `json:"status,omitempty"`
+	Capabilities   []string           `json:"capabilities,omitempty"`
+	ModelStatus    *DeviceModelStatus `json:"model_status,omitempty"`
 }
 
 type userDeviceRegistry struct {
@@ -221,6 +229,7 @@ func (r *userDeviceRegistry) register(ownerUID int64, req RegisterUserDeviceRequ
 		InstallationID: normalizeDeviceText(req.InstallationID),
 		Status:         normalizeDeviceStatus(req.Status),
 		Capabilities:   normalizeDeviceCapabilities(req.Capabilities),
+		ModelStatus:    normalizeDeviceModelStatus(req.ModelStatus, now),
 		RegisteredAt:   unixMillis(now),
 		LastSeenAt:     unixMillis(now),
 	}
@@ -324,6 +333,68 @@ func (r *userDeviceRegistry) activeDevice(ownerUID int64, deviceID string) (User
 		return UserDevice{}, false
 	}
 	return device, true
+}
+
+func normalizeDeviceModelStatus(input *DeviceModelStatus, now time.Time) *DeviceModelStatus {
+	if input == nil {
+		return nil
+	}
+	source := strings.ToLower(strings.TrimSpace(input.Source))
+	model := normalizeDeviceText(input.Model)
+	switch source {
+	case "relay":
+		if model == "" {
+			return nil
+		}
+	case "custom":
+		if model == "" {
+			model = "自定义模型"
+		}
+	default:
+		return nil
+	}
+	updatedAt := input.UpdatedAt
+	if updatedAt <= 0 {
+		updatedAt = unixMillis(now)
+	}
+	return &DeviceModelStatus{
+		Source:    source,
+		Model:     model,
+		UpdatedAt: updatedAt,
+	}
+}
+
+func LatestDeviceModelStatus(hub *Hub, ownerUID int64) (DeviceModelStatus, bool) {
+	if hub == nil || hub.userDevices == nil || ownerUID <= 0 {
+		return DeviceModelStatus{}, false
+	}
+	devices := hub.userDevices.activeDevices(ownerUID)
+	var best DeviceModelStatus
+	bestSeenAt := int64(0)
+	for _, device := range devices {
+		if device.ModelStatus == nil {
+			continue
+		}
+		status := *device.ModelStatus
+		if status.Source != "relay" && status.Source != "custom" {
+			continue
+		}
+		if status.Source == "relay" && strings.TrimSpace(status.Model) == "" {
+			continue
+		}
+		seenAt := status.UpdatedAt
+		if seenAt <= 0 {
+			seenAt = device.LastSeenAt
+		}
+		if seenAt <= 0 {
+			continue
+		}
+		if seenAt >= bestSeenAt {
+			best = status
+			bestSeenAt = seenAt
+		}
+	}
+	return best, bestSeenAt > 0
 }
 
 func (r *userDeviceRegistry) touch(ownerUID int64, deviceID string) {

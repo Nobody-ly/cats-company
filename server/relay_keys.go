@@ -17,7 +17,8 @@ import (
 const defaultRelayAdminTimeout = 15 * time.Second
 
 type RelayKeyHandler struct {
-	admin *RelayAdminClient
+	admin                     *RelayAdminClient
+	deviceModelStatusResolver func(uid int64) (DeviceModelStatus, bool)
 }
 
 type RelayAdminClient struct {
@@ -78,6 +79,13 @@ type relayUsageSummary struct {
 
 func NewRelayKeyHandlerFromEnv() *RelayKeyHandler {
 	return &RelayKeyHandler{admin: NewRelayAdminClientFromEnv()}
+}
+
+func (h *RelayKeyHandler) SetDeviceModelStatusResolver(resolver func(uid int64) (DeviceModelStatus, bool)) {
+	if h == nil {
+		return
+	}
+	h.deviceModelStatusResolver = resolver
 }
 
 func NewRelayAdminClientFromEnv() *RelayAdminClient {
@@ -173,8 +181,19 @@ func (h *RelayKeyHandler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	uid := UIDFromContext(r.Context())
+	if uid <= 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 	source := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
 	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	if source == "" && model == "" && h.deviceModelStatusResolver != nil {
+		if status, ok := h.deviceModelStatusResolver(uid); ok {
+			source = strings.ToLower(strings.TrimSpace(status.Source))
+			model = strings.TrimSpace(status.Model)
+		}
+	}
 	if source == "custom" || normalizeRelayModelName(model) == "custom" || strings.EqualFold(model, "自定义模型") {
 		writeJSON(w, http.StatusOK, relayUsageResponse{
 			Configured: true,
@@ -188,11 +207,6 @@ func (h *RelayKeyHandler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.admin == nil {
 		writeJSON(w, http.StatusOK, relayUsageResponse{Configured: false})
-		return
-	}
-	uid := UIDFromContext(r.Context())
-	if uid <= 0 {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 	user, err := fetchRelayUsageForUID(r.Context(), h.admin, uid)

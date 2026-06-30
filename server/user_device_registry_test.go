@@ -72,6 +72,57 @@ func TestUserDeviceRegistryRegistersAndIssuesScopedGrants(t *testing.T) {
 	}
 }
 
+func TestUserDeviceRegistryStoresCurrentModelStatus(t *testing.T) {
+	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
+	registry := newUserDeviceRegistry(time.Minute)
+	registry.now = func() time.Time { return now }
+
+	device, err := registry.register(7, RegisterUserDeviceRequest{
+		DeviceID: "laptop-main",
+		Status:   "online",
+		ModelStatus: &DeviceModelStatus{
+			Source: "relay",
+			Model:  "MiniMax-M3",
+		},
+	})
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	if device.ModelStatus == nil {
+		t.Fatalf("expected model status")
+	}
+	if device.ModelStatus.Source != "relay" || device.ModelStatus.Model != "MiniMax-M3" || device.ModelStatus.UpdatedAt != unixMillis(now) {
+		t.Fatalf("unexpected model status: %#v", device.ModelStatus)
+	}
+
+	hub := &Hub{userDevices: registry}
+	status, ok := LatestDeviceModelStatus(hub, 7)
+	if !ok {
+		t.Fatalf("expected latest model status")
+	}
+	if status.Source != "relay" || status.Model != "MiniMax-M3" {
+		t.Fatalf("unexpected latest model status: %#v", status)
+	}
+}
+
+func TestUserDeviceRegistryNormalizesCustomModelStatus(t *testing.T) {
+	registry := newUserDeviceRegistry(time.Minute)
+	registry.now = func() time.Time { return time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC) }
+
+	device, err := registry.register(7, RegisterUserDeviceRequest{
+		DeviceID: "laptop-main",
+		ModelStatus: &DeviceModelStatus{
+			Source: "custom",
+		},
+	})
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	if device.ModelStatus == nil || device.ModelStatus.Source != "custom" || device.ModelStatus.Model != "自定义模型" {
+		t.Fatalf("unexpected custom model status: %#v", device.ModelStatus)
+	}
+}
+
 func TestUserDeviceRegistryIssuesShellGrantWhenDeviceCapabilityIsRegistered(t *testing.T) {
 	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
 	registry := newUserDeviceRegistry(time.Minute)

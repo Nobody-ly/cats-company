@@ -289,6 +289,115 @@ func TestRelayUsageSummaryUsesRequestedModel(t *testing.T) {
 	}
 }
 
+func TestRelayUsageSummaryUsesCurrentDeviceModel(t *testing.T) {
+	oldSecret := append([]byte(nil), jwtSecret...)
+	defer func() { jwtSecret = oldSecret }()
+	SetJWTSecret("relay-current-device-model-secret")
+
+	userToken, err := GenerateToken(10, "frank", "frank@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken human: %v", err)
+	}
+
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, commercialRelayUsageResponse{Users: []commercialRelayUsageUser{{
+			UID:        10,
+			Configured: true,
+			Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+				{
+					Provider: "minimax-m2-anthropic",
+					Model:    "MiniMax-M2.7",
+					Budget:   commercialRelayBudget{MaxLimit: 1000, CurrentUsage: 900, ResetDuration: "1M"},
+				},
+				{
+					Provider:      "minimax-m3-anthropic",
+					Model:         "MiniMax-M3",
+					AllowedModels: []string{"minimax-m3"},
+					Budget:        commercialRelayBudget{MaxLimit: 500, CurrentUsage: 125, ResetDuration: "1M"},
+				},
+			}},
+		}}})
+	}))
+	defer admin.Close()
+
+	t.Setenv("CATS_RELAY_ADMIN_URL", admin.URL)
+	t.Setenv("CATS_RELAY_ADMIN_TOKEN", "relay-admin-secret")
+	t.Setenv("CATS_RELAY_DEFAULT_MODEL", "MiniMax-M2.7")
+
+	keyHandler := NewRelayKeyHandlerFromEnv()
+	keyHandler.SetDeviceModelStatusResolver(func(uid int64) (DeviceModelStatus, bool) {
+		if uid != 10 {
+			return DeviceModelStatus{}, false
+		}
+		return DeviceModelStatus{Source: "relay", Model: "MiniMax-M3", UpdatedAt: 1782790000000}, true
+	})
+	store := relayConfigOwnerStore{users: map[int64]*types.User{
+		10: {ID: 10, Username: "frank", AccountType: types.AccountHuman, State: 0},
+	}}
+	handler := OwnerMiddlewareWithDB(store)(keyHandler.HandleUsage)
+	req := httptest.NewRequest(http.MethodGet, "/api/relay/usage", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=200 body=%s", rec.Code, rec.Body.String())
+	}
+	var out relayUsageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode usage response: %v", err)
+	}
+	if !out.Configured || out.Summary == nil {
+		t.Fatalf("expected configured usage summary, got %+v", out)
+	}
+	if out.Summary.Model != "MiniMax-M3" || out.Summary.Percent != 25 || out.Summary.RemainingCNY != 375 {
+		t.Fatalf("expected current device model summary, got %+v", out.Summary)
+	}
+}
+
+func TestRelayUsageSummaryUsesCurrentCustomModel(t *testing.T) {
+	oldSecret := append([]byte(nil), jwtSecret...)
+	defer func() { jwtSecret = oldSecret }()
+	SetJWTSecret("relay-current-custom-model-secret")
+
+	userToken, err := GenerateToken(11, "grace", "grace@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken human: %v", err)
+	}
+
+	keyHandler := NewRelayKeyHandlerFromEnv()
+	keyHandler.SetDeviceModelStatusResolver(func(uid int64) (DeviceModelStatus, bool) {
+		if uid != 11 {
+			return DeviceModelStatus{}, false
+		}
+		return DeviceModelStatus{Source: "custom", Model: "gpt-5.5", UpdatedAt: 1782790000000}, true
+	})
+	store := relayConfigOwnerStore{users: map[int64]*types.User{
+		11: {ID: 11, Username: "grace", AccountType: types.AccountHuman, State: 0},
+	}}
+	handler := OwnerMiddlewareWithDB(store)(keyHandler.HandleUsage)
+	req := httptest.NewRequest(http.MethodGet, "/api/relay/usage", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=200 body=%s", rec.Code, rec.Body.String())
+	}
+	var out relayUsageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode usage response: %v", err)
+	}
+	if !out.Configured || out.Summary == nil {
+		t.Fatalf("expected custom usage summary, got %+v", out)
+	}
+	if out.Summary.Source != "custom" || out.Summary.Model != "自定义模型" || out.Summary.LimitCNY != 0 {
+		t.Fatalf("expected current custom summary without quota, got %+v", out.Summary)
+	}
+}
+
 func TestRelayUsageSummarySkipsQuotaForCustomModel(t *testing.T) {
 	oldSecret := append([]byte(nil), jwtSecret...)
 	defer func() { jwtSecret = oldSecret }()
