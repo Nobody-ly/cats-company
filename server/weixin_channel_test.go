@@ -1547,6 +1547,590 @@ func TestWeixinClawBotPollDeliversAgentMessageAndSendsReply(t *testing.T) {
 	}
 }
 
+func TestWeixinClawBotPollDeliversTextAndFileAttachmentBlocks(t *testing.T) {
+	t.Cleanup(func() { _ = os.RemoveAll("uploads") })
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-file"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	fileURL := "https://media.example/contract.pdf"
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-file-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList: []weixinClawBotMessageItem{
+						clawBotTextItem("请看合同"),
+						clawBotFileItem(fileURL, "contract.pdf", "application/pdf"),
+					},
+				},
+			},
+		},
+		media: map[string]fakeWeixinClawBotMedia{
+			fileURL: {FileName: "contract.pdf", ContentType: "application/pdf", Body: "%PDF fake"},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	msg := db.messages[0]
+	if msg.TopicID != p2pTopicID(9, 43) || msg.FromUID != 9 || msg.MsgType != "text" || msg.Content != "请看合同" {
+		t.Fatalf("message=%+v", msg)
+	}
+	if len(msg.ContentBlocks) != 2 || msg.ContentBlocks[0].Type != "text" || msg.ContentBlocks[1].Type != "file" {
+		t.Fatalf("content blocks=%+v", msg.ContentBlocks)
+	}
+	payload := msg.ContentBlocks[1].Payload
+	if payload["name"] != "contract.pdf" || payload["mime_type"] != "application/pdf" {
+		t.Fatalf("payload=%+v", payload)
+	}
+	if url, _ := payload["url"].(string); !strings.HasPrefix(url, "/uploads/files/") {
+		t.Fatalf("url=%+v", payload["url"])
+	}
+	if len(api.downloadCalls) != 1 || api.downloadCalls[0].URL != fileURL || api.downloadCalls[0].Kind != "file" {
+		t.Fatalf("download calls=%+v", api.downloadCalls)
+	}
+	stored, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if stored.ContextTokens["wx-user-1"].ContextToken != "ctx-1" {
+		t.Fatalf("context token not saved: %+v", stored.ContextTokens)
+	}
+}
+
+func TestWeixinClawBotPollDeliversPureImageAttachmentBlocks(t *testing.T) {
+	t.Cleanup(func() { _ = os.RemoveAll("uploads") })
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-image"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	imageURL := "https://media.example/photo.jpg"
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-image-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList:     []weixinClawBotMessageItem{clawBotImageItem(imageURL, "photo.jpg", "image/jpeg")},
+				},
+			},
+		},
+		media: map[string]fakeWeixinClawBotMedia{
+			imageURL: {FileName: "photo.jpg", ContentType: "image/jpeg", Body: "fake-jpeg"},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	msg := db.messages[0]
+	if msg.MsgType != "image" || msg.Content != "[图片] photo.jpg" {
+		t.Fatalf("message=%+v", msg)
+	}
+	if len(msg.ContentBlocks) != 1 || msg.ContentBlocks[0].Type != "image" {
+		t.Fatalf("content blocks=%+v", msg.ContentBlocks)
+	}
+	payload := msg.ContentBlocks[0].Payload
+	if payload["name"] != "photo.jpg" || payload["mime_type"] != "image/jpeg" {
+		t.Fatalf("payload=%+v", payload)
+	}
+	if url, _ := payload["url"].(string); !strings.HasPrefix(url, "/uploads/images/") {
+		t.Fatalf("url=%+v", payload["url"])
+	}
+}
+
+func TestWeixinClawBotPollDeliversUnsupportedAttachmentSummary(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-unsupported"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-unsupported-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList:     []weixinClawBotMessageItem{clawBotFileIDItem("file-1", "contract.pdf", "application/pdf")},
+				},
+			},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	if !strings.Contains(db.messages[0].Content, "微信 ClawBot 附件") || !strings.Contains(db.messages[0].Content, "contract.pdf") {
+		t.Fatalf("message content=%q", db.messages[0].Content)
+	}
+	if len(api.downloadCalls) != 1 || api.downloadCalls[0].MediaID != "file-1" {
+		t.Fatalf("download calls=%+v", api.downloadCalls)
+	}
+}
+
+func TestWeixinClawBotPollDeliversUnknownItemSummary(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-unknown"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-unknown-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList:     []weixinClawBotMessageItem{clawBotUnknownItem()},
+				},
+			},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	if !strings.Contains(db.messages[0].Content, "微信 ClawBot 附件") {
+		t.Fatalf("message content=%q", db.messages[0].Content)
+	}
+	if len(api.downloadCalls) != 0 {
+		t.Fatalf("unknown item should not download: %+v", api.downloadCalls)
+	}
+}
+
+func TestWeixinClawBotPollDeliversDownloadFailureSummary(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-download-fail"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	fileURL := "https://media.example/broken.pdf"
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-download-fail-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList:     []weixinClawBotMessageItem{clawBotFileItem(fileURL, "broken.pdf", "application/pdf")},
+				},
+			},
+		},
+		media: map[string]fakeWeixinClawBotMedia{
+			fileURL: {Err: errors.New("download failed")},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	if !strings.Contains(db.messages[0].Content, "微信 ClawBot 附件") || !strings.Contains(db.messages[0].Content, "broken.pdf") {
+		t.Fatalf("message content=%q", db.messages[0].Content)
+	}
+}
+
+func TestWeixinClawBotPollDeliversGroupImageAttachmentBlocks(t *testing.T) {
+	t.Cleanup(func() { _ = os.RemoveAll("uploads") })
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.groups[505] = &types.Group{ID: 505, Name: "Project Group", OwnerID: 7}
+	db.groupMembers[505] = map[int64]*types.GroupMember{
+		9: {GroupID: 505, UserID: 9, Role: "member"},
+	}
+	botToken := "poll-bot-token-group-image"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	actorUID, err := ensureChannelActor(db, "weixin_clawbot", tokenHash, "wx-user-1")
+	if err != nil {
+		t.Fatalf("seed channel actor: %v", err)
+	}
+	if _, err := db.UpsertChannelGroupBinding(&types.ChannelGroupBinding{
+		Channel:                 "weixin_clawbot",
+		ChannelAppID:            tokenHash,
+		ChannelUserID:           "wx-user-1",
+		ChannelConversationType: "p2p",
+		ActorUID:                actorUID,
+		CanonicalUID:            9,
+		GroupID:                 505,
+		TopicID:                 "grp_505",
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed group binding: %v", err)
+	}
+	imageURL := "https://media.example/group-photo.jpg"
+	api := &fakeWeixinClawBotAPI{
+		updates: &weixinClawBotUpdates{
+			GetUpdatesBuf: "buf-next",
+			Messages: []weixinClawBotMessage{
+				{
+					MessageID:    json.RawMessage(`"msg-group-image-1"`),
+					MessageType:  1,
+					FromUserID:   "wx-user-1",
+					ToUserID:     "wx-bot-1",
+					ContextToken: "ctx-1",
+					ItemList:     []weixinClawBotMessageItem{clawBotImageItem(imageURL, "group-photo.jpg", "image/jpeg")},
+				},
+			},
+		},
+		media: map[string]fakeWeixinClawBotMedia{
+			imageURL: {FileName: "group-photo.jpg", ContentType: "image/jpeg", Body: "fake-jpeg"},
+		},
+	}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+	token, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
+	if err := handler.pollTokenOnce(context.Background(), token); err != nil {
+		t.Fatalf("poll token: %v", err)
+	}
+	if len(db.messages) != 1 {
+		t.Fatalf("messages=%+v", db.messages)
+	}
+	msg := db.messages[0]
+	if msg.TopicID != "grp_505" || msg.FromUID != 9 || msg.MsgType != "image" {
+		t.Fatalf("message=%+v", msg)
+	}
+	if len(msg.ContentBlocks) != 1 || msg.ContentBlocks[0].Type != "image" {
+		t.Fatalf("content blocks=%+v", msg.ContentBlocks)
+	}
+}
+
+func TestWeixinClawBotOutboundAttachmentFallsBackToTextLinks(t *testing.T) {
+	t.Setenv("CATSCO_PUBLIC_BASE_URL", "https://app.example")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-outbound"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+		ContextTokens: map[string]types.WeixinClawBotContext{
+			"wx-user-1": {ContextToken: "ctx-1", BotUserID: "wx-bot-1", UpdatedAt: time.Now()},
+		},
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	binding := seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	api := &fakeWeixinClawBotAPI{}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+
+	err = handler.SendOutboundMessage(context.Background(), binding, channelOutboundMessage{
+		Text: "报告已生成",
+		Attachments: []channelOutboundAttachment{
+			{Type: "file", Name: "report.pdf", URL: "/uploads/files/report.pdf", MimeType: "application/pdf"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send outbound: %v", err)
+	}
+	if len(api.sends) != 1 {
+		t.Fatalf("sends=%+v", api.sends)
+	}
+	text := api.sends[0].Text
+	if !strings.Contains(text, "报告已生成") || !strings.Contains(text, "report.pdf") || !strings.Contains(text, "https://app.example/uploads/files/report.pdf") {
+		t.Fatalf("fallback text=%q", text)
+	}
+	if api.sends[0].ContextToken != "ctx-1" || api.sends[0].FromUserID != "wx-bot-1" || api.sends[0].ToUserID != "wx-user-1" {
+		t.Fatalf("send=%+v", api.sends[0])
+	}
+}
+
+func TestWeixinClawBotOutboundRichFileReplyUsesDispatcherFallback(t *testing.T) {
+	t.Setenv("CATSCO_PUBLIC_BASE_URL", "https://app.example")
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-dispatcher"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+		ContextTokens: map[string]types.WeixinClawBotContext{
+			"wx-user-1": {ContextToken: "ctx-1", BotUserID: "wx-bot-1", UpdatedAt: time.Now()},
+		},
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	binding := seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	api := &fakeWeixinClawBotAPI{}
+	hub := NewHub(db, nil)
+	NewWeixinClawBotHandler(db, hub, WeixinClawBotConfig{WorkerEnabled: false}, api).InstallOutboundDispatcher()
+	topicID := p2pTopicID(9, 43)
+	hub.channelOut.RecordInboundReplyRoute(topicID, 9, binding)
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: topicID,
+		Content: json.RawMessage(`{"type":"file","payload":{"url":"/uploads/files/report.pdf","name":"report.pdf","size":12,"mime_type":"application/pdf"}}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize message: %v", err)
+	}
+
+	hub.forwardChannelBotReply(43, 9, topicID, payload, 123)
+
+	deadline := time.Now().Add(time.Second)
+	for len(api.sends) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(api.sends) != 1 {
+		t.Fatalf("sends=%+v", api.sends)
+	}
+	text := api.sends[0].Text
+	if strings.Contains(text, `{"type":"file"`) || !strings.Contains(text, "report.pdf") || !strings.Contains(text, "https://app.example/uploads/files/report.pdf") {
+		t.Fatalf("fallback text=%q", text)
+	}
+}
+
+func TestChannelOutboundMessageExtractsRichFilePayload(t *testing.T) {
+	t.Setenv("CATSCO_PUBLIC_BASE_URL", "https://app.example")
+	payload, err := normalizeMessageRequest(&SendMessageRequest{
+		TopicID: "p2p_9_43",
+		Content: json.RawMessage(`{"type":"file","payload":{"url":"/uploads/files/report.pdf","name":"report.pdf","size":12,"mime_type":"application/pdf"}}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize message: %v", err)
+	}
+	message := channelOutboundMessageFromPayload(payload)
+	if !message.HasContent() || len(message.Attachments) != 1 || message.Attachments[0].Name != "report.pdf" {
+		t.Fatalf("outbound message=%+v", message)
+	}
+	text := message.TextWithAttachmentLinks()
+	if !strings.Contains(text, "report.pdf") || !strings.Contains(text, "https://app.example/uploads/files/report.pdf") {
+		t.Fatalf("fallback text=%q", text)
+	}
+	if strings.Contains(text, `{"type":"file"`) {
+		t.Fatalf("fallback should not expose raw rich content json: %q", text)
+	}
+}
+
+func TestHTTPWeixinClawBotMediaURLValidation(t *testing.T) {
+	client := newHTTPWeixinClawBotAPI(WeixinClawBotConfig{
+		ILinkBaseURL:       "https://ilinkai.weixin.qq.com",
+		MediaHostAllowlist: []string{"media.example"},
+	})
+	endpoint, authenticated, err := client.resolveMediaDownloadURL("/ilink/media/download?id=1")
+	if err != nil || endpoint != "https://ilinkai.weixin.qq.com/ilink/media/download?id=1" || !authenticated {
+		t.Fatalf("relative endpoint=%q auth=%v err=%v", endpoint, authenticated, err)
+	}
+	endpoint, authenticated, err = client.resolveMediaDownloadURL("https://media.example/files/a.pdf")
+	if err != nil || endpoint != "https://media.example/files/a.pdf" || authenticated {
+		t.Fatalf("cdn endpoint=%q auth=%v err=%v", endpoint, authenticated, err)
+	}
+	if _, _, err := client.resolveMediaDownloadURL("https://169.254.169.254/latest/meta-data"); err == nil {
+		t.Fatalf("private metadata host should be rejected")
+	}
+	if _, _, err := client.resolveMediaDownloadURL("https://evil.example/files/a.pdf"); err == nil {
+		t.Fatalf("unlisted host should be rejected")
+	}
+	if _, _, err := client.resolveMediaDownloadURL("http://media.example/files/a.pdf"); err == nil {
+		t.Fatalf("non-same-origin http host should be rejected")
+	}
+}
+
 func TestWeixinClawBotPollRoutesSharedTokenUsersIndependently(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
@@ -1754,10 +2338,63 @@ func clawBotTextItem(text string) weixinClawBotMessageItem {
 	return item
 }
 
+func clawBotFileItem(downloadURL, name, contentType string) weixinClawBotMessageItem {
+	return clawBotItemFromPayload(map[string]interface{}{
+		"type": 3,
+		"file_item": map[string]interface{}{
+			"download_url":  downloadURL,
+			"file_name":     name,
+			"mime_type":     contentType,
+			"resource_key":  "file-resource-1",
+			"contentLength": 12,
+		},
+	})
+}
+
+func clawBotImageItem(downloadURL, name, contentType string) weixinClawBotMessageItem {
+	return clawBotItemFromPayload(map[string]interface{}{
+		"type": 2,
+		"image_item": map[string]interface{}{
+			"download_url": downloadURL,
+			"name":         name,
+			"content_type": contentType,
+		},
+	})
+}
+
+func clawBotFileIDItem(fileID, name, contentType string) weixinClawBotMessageItem {
+	return clawBotItemFromPayload(map[string]interface{}{
+		"type": 3,
+		"file_item": map[string]interface{}{
+			"file_id":   fileID,
+			"file_name": name,
+			"mime_type": contentType,
+		},
+	})
+}
+
+func clawBotUnknownItem() weixinClawBotMessageItem {
+	return clawBotItemFromPayload(map[string]interface{}{
+		"type":          99,
+		"mystery_field": "opaque-value",
+	})
+}
+
+func clawBotItemFromPayload(payload map[string]interface{}) weixinClawBotMessageItem {
+	raw, _ := json.Marshal(payload)
+	var item weixinClawBotMessageItem
+	if err := json.Unmarshal(raw, &item); err != nil {
+		panic(err)
+	}
+	return item
+}
+
 type fakeWeixinClawBotAPI struct {
-	qrStatus *weixinClawBotQRCodeStatus
-	updates  *weixinClawBotUpdates
-	sends    []fakeWeixinClawBotSend
+	qrStatus      *weixinClawBotQRCodeStatus
+	updates       *weixinClawBotUpdates
+	media         map[string]fakeWeixinClawBotMedia
+	downloadCalls []weixinClawBotMediaRef
+	sends         []fakeWeixinClawBotSend
 }
 
 type fakeWeixinClawBotSend struct {
@@ -1766,6 +2403,13 @@ type fakeWeixinClawBotSend struct {
 	Text         string
 	ContextToken string
 	FromUserID   string
+}
+
+type fakeWeixinClawBotMedia struct {
+	FileName    string
+	ContentType string
+	Body        string
+	Err         error
 }
 
 func (f *fakeWeixinClawBotAPI) GetQRCodeStatus(ctx context.Context, qrcode string) (*weixinClawBotQRCodeStatus, error) {
@@ -1780,6 +2424,26 @@ func (f *fakeWeixinClawBotAPI) GetUpdates(ctx context.Context, botToken string, 
 		return &weixinClawBotUpdates{}, nil
 	}
 	return f.updates, nil
+}
+
+func (f *fakeWeixinClawBotAPI) DownloadMedia(ctx context.Context, botToken string, ref weixinClawBotMediaRef) (*channelMediaDownload, error) {
+	f.downloadCalls = append(f.downloadCalls, ref)
+	key := strings.TrimSpace(ref.URL)
+	if key == "" {
+		key = strings.TrimSpace(ref.MediaID)
+	}
+	media, ok := f.media[key]
+	if !ok {
+		return nil, errors.New("missing fake clawbot media")
+	}
+	if media.Err != nil {
+		return nil, media.Err
+	}
+	return &channelMediaDownload{
+		Body:        io.NopCloser(strings.NewReader(media.Body)),
+		FileName:    media.FileName,
+		ContentType: media.ContentType,
+	}, nil
 }
 
 func (f *fakeWeixinClawBotAPI) SendTextMessage(ctx context.Context, botToken string, toUserID string, text string, contextToken string, fromUserID string) error {

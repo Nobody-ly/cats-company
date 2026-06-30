@@ -1764,6 +1764,7 @@ type ChannelOutboundDispatcher struct {
 
 type weixinClawBotOutbound interface {
 	SendTextMessage(ctx context.Context, binding *types.ChannelAgentBinding, text string) error
+	SendOutboundMessage(ctx context.Context, binding *types.ChannelAgentBinding, message channelOutboundMessage) error
 }
 
 type channelOutboundReplyRoute struct {
@@ -1884,7 +1885,7 @@ func (h *Hub) forwardChannelBotReply(senderUID int64, peerUID int64, topicID str
 	if h == nil || payload == nil || msgID <= 0 || peerUID <= 0 || senderUID <= 0 {
 		return
 	}
-	if payload.StoredType != "text" || isTransientRuntimePayload(payload) {
+	if isTransientRuntimePayload(payload) {
 		return
 	}
 	user, err := h.db.GetUser(senderUID)
@@ -1897,18 +1898,18 @@ func (h *Hub) forwardChannelBotReply(senderUID int64, peerUID int64, topicID str
 	if dispatcher == nil {
 		return
 	}
-	text := normalizeContentText(payload.DisplayContent)
-	if strings.TrimSpace(text) == "" {
+	message := channelOutboundMessageFromPayload(payload)
+	if !message.HasContent() {
 		return
 	}
-	go dispatcher.ForwardBotReply(context.Background(), peerUID, senderUID, topicID, text)
+	go dispatcher.ForwardBotReplyMessage(context.Background(), peerUID, senderUID, topicID, message)
 }
 
 func (h *Hub) forwardChannelGroupBotReply(senderUID int64, topicID string, payload *normalizedMessagePayload, msgID int64) {
 	if h == nil || payload == nil || msgID <= 0 || senderUID <= 0 || strings.TrimSpace(topicID) == "" {
 		return
 	}
-	if payload.StoredType != "text" || isTransientRuntimePayload(payload) {
+	if isTransientRuntimePayload(payload) {
 		return
 	}
 	user, err := h.db.GetUser(senderUID)
@@ -1921,15 +1922,22 @@ func (h *Hub) forwardChannelGroupBotReply(senderUID int64, topicID string, paylo
 	if dispatcher == nil {
 		return
 	}
-	text := normalizeContentText(payload.DisplayContent)
-	if strings.TrimSpace(text) == "" {
+	message := channelOutboundMessageFromPayload(payload)
+	if !message.HasContent() {
 		return
 	}
-	go dispatcher.ForwardGroupBotReply(context.Background(), senderUID, topicID, text)
+	go dispatcher.ForwardGroupBotReplyMessage(context.Background(), senderUID, topicID, message)
 }
 
 func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUID int64, agentUID int64, topicID string, text string) error {
+	return d.ForwardBotReplyMessage(ctx, actorUID, agentUID, topicID, channelOutboundTextMessage(text))
+}
+
+func (d *ChannelOutboundDispatcher) ForwardBotReplyMessage(ctx context.Context, actorUID int64, agentUID int64, topicID string, message channelOutboundMessage) error {
 	if d == nil || d.db == nil {
+		return nil
+	}
+	if !message.HasContent() {
 		return nil
 	}
 	bindings, ok := d.db.(store.ChannelAgentBindingStore)
@@ -1939,7 +1947,7 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 	if binding, ok, err := d.lookupRecordedReplyBinding(bindings, topicID, actorUID, agentUID); err != nil {
 		return err
 	} else if ok {
-		sent, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
+		sent, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, message)
 		if sent || err != nil {
 			return err
 		}
@@ -1950,7 +1958,7 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 			return err
 		}
 		if binding != nil {
-			if sent, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text); sent || err != nil {
+			if sent, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, message); sent || err != nil {
 				return err
 			}
 		}
@@ -1961,7 +1969,7 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 			return err
 		}
 		if binding != nil {
-			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
+			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, message)
 			return err
 		}
 	}
@@ -1971,7 +1979,7 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 			return err
 		}
 		if binding != nil && normalizeChannel(binding.Channel) == "weixin_clawbot" {
-			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, text)
+			_, err := d.sendChannelBindingReply(ctx, binding, topicID, actorUID, agentUID, message)
 			return err
 		}
 	}
@@ -1979,7 +1987,11 @@ func (d *ChannelOutboundDispatcher) ForwardBotReply(ctx context.Context, actorUI
 }
 
 func (d *ChannelOutboundDispatcher) ForwardGroupBotReply(ctx context.Context, senderUID int64, topicID string, text string) error {
-	if d == nil || d.db == nil || strings.TrimSpace(topicID) == "" || strings.TrimSpace(text) == "" {
+	return d.ForwardGroupBotReplyMessage(ctx, senderUID, topicID, channelOutboundTextMessage(text))
+}
+
+func (d *ChannelOutboundDispatcher) ForwardGroupBotReplyMessage(ctx context.Context, senderUID int64, topicID string, message channelOutboundMessage) error {
+	if d == nil || d.db == nil || strings.TrimSpace(topicID) == "" || !message.HasContent() {
 		return nil
 	}
 	bindingsStore, ok := d.db.(store.ChannelAgentBindingStore)
@@ -2011,11 +2023,19 @@ func (d *ChannelOutboundDispatcher) ForwardGroupBotReply(ctx context.Context, se
 			if strings.TrimSpace(receiveID) == "" {
 				continue
 			}
+			text := message.TextWithAttachmentLinks()
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
 			if err := d.feishu.SendTextMessage(ctx, receiveIDType, receiveID, text); err != nil {
 				log.Printf("feishu group outbound reply failed topic=%s sender=%d binding=%d: %v", topicID, senderUID, binding.ID, err)
 			}
 		case "weixin":
 			if d.weixin == nil || strings.TrimSpace(binding.ChannelAppID) != strings.TrimSpace(d.weixinAppID) || strings.TrimSpace(binding.ChannelUserID) == "" {
+				continue
+			}
+			text := message.TextWithAttachmentLinks()
+			if strings.TrimSpace(text) == "" {
 				continue
 			}
 			if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
@@ -2037,7 +2057,7 @@ func (d *ChannelOutboundDispatcher) ForwardGroupBotReply(ctx context.Context, se
 				AgentUID:                senderUID,
 				Status:                  binding.Status,
 			}
-			if err := d.clawBot.SendTextMessage(ctx, agentBinding, text); err != nil {
+			if err := d.clawBot.SendOutboundMessage(ctx, agentBinding, message); err != nil {
 				log.Printf("weixin clawbot group outbound reply failed topic=%s sender=%d binding=%d: %v", topicID, senderUID, binding.ID, err)
 			}
 		}
@@ -2068,13 +2088,14 @@ func (d *ChannelOutboundDispatcher) lookupRecordedReplyBinding(bindings store.Ch
 	return binding, true, nil
 }
 
-func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context, binding *types.ChannelAgentBinding, topicID string, actorUID int64, agentUID int64, text string) (bool, error) {
+func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context, binding *types.ChannelAgentBinding, topicID string, actorUID int64, agentUID int64, message channelOutboundMessage) (bool, error) {
 	if d == nil || binding == nil {
 		return false, nil
 	}
 	if err := validateDeliverableChannelBinding(d.db, binding); err != nil {
 		return false, nil
 	}
+	text := message.TextWithAttachmentLinks()
 	switch normalizeChannel(binding.Channel) {
 	case "feishu":
 		if d.feishu == nil {
@@ -2089,6 +2110,9 @@ func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context,
 		if receiveID == "" {
 			return false, nil
 		}
+		if strings.TrimSpace(text) == "" {
+			return false, nil
+		}
 		if err := d.feishu.SendTextMessage(ctx, receiveIDType, receiveID, text); err != nil {
 			log.Printf("feishu outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
 			return true, err
@@ -2096,6 +2120,9 @@ func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context,
 		return true, nil
 	case "weixin":
 		if d.weixin == nil || binding.ChannelUserID == "" {
+			return false, nil
+		}
+		if strings.TrimSpace(text) == "" {
 			return false, nil
 		}
 		if err := d.weixin.SendTextMessage(ctx, binding.ChannelUserID, text); err != nil {
@@ -2107,7 +2134,7 @@ func (d *ChannelOutboundDispatcher) sendChannelBindingReply(ctx context.Context,
 		if d.clawBot == nil || binding.ChannelUserID == "" {
 			return false, nil
 		}
-		if err := d.clawBot.SendTextMessage(ctx, binding, text); err != nil {
+		if err := d.clawBot.SendOutboundMessage(ctx, binding, message); err != nil {
 			log.Printf("weixin clawbot outbound reply failed topic=%s actor=%d agent=%d: %v", topicID, actorUID, agentUID, err)
 			return true, err
 		}
