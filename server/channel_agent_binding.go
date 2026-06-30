@@ -1174,9 +1174,9 @@ func (h *ChannelAgentBindingHandler) entryResponseWithScene(r *http.Request, ent
 		appID := configuredFeishuAppID()
 		resp.FeishuOAuthURL = feishuOAuthStartURL(r, sceneKey)
 		if feishuStatus.Ready {
-			resp.ChannelQRURL = feishuOAuthShortURL(r, sceneKey)
+			resp.ChannelQRURL = feishuNativeEntryShortURL(r, sceneKey)
 			resp.QRValue = resp.ChannelQRURL
-			resp.QRKind = "feishu_oauth_entry"
+			resp.QRKind = "feishu_native_entry"
 		}
 		if appID == "" {
 			resp.FeishuOAuthURL = ""
@@ -1314,6 +1314,17 @@ func feishuNativeEntryURL(r *http.Request, entry *types.ChannelAgentEntry) strin
 }
 
 func feishuNativeEntryURLForScene(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) string {
+	if sceneKey == "" && entry != nil {
+		sceneKey = entry.SceneKey
+	}
+	return feishuNativeEntryURLForSceneWithOAuthURL(r, entry, sceneKey, feishuOAuthStartURL(r, sceneKey))
+}
+
+func feishuNativeEntryURLForSceneAfterOAuth(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) string {
+	return feishuNativeEntryURLForSceneWithOAuthURL(r, entry, sceneKey, "")
+}
+
+func feishuNativeEntryURLForSceneWithOAuthURL(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string, oauthURLOverride string) string {
 	template := configuredFeishuEntryURLTemplate()
 	if template == "" || entry == nil {
 		return ""
@@ -1322,7 +1333,7 @@ func feishuNativeEntryURLForScene(r *http.Request, entry *types.ChannelAgentEntr
 		sceneKey = entry.SceneKey
 	}
 	entryURLValue := entryURL(r, sceneKey)
-	oauthURLValue := feishuOAuthStartURL(r, sceneKey)
+	oauthURLValue := strings.TrimSpace(oauthURLOverride)
 	shortURLValue := feishuNativeEntryShortURL(r, sceneKey)
 	appID := strings.TrimSpace(entry.ChannelAppID)
 	if appID == "" {
@@ -1883,9 +1894,9 @@ func (h *ChannelAgentBindingHandler) groupMobileLinkResponse(r *http.Request, li
 		feishuStatus := buildFeishuEntryConfigStatusForScene(r, groupFeishuPseudoEntry(link), link.SceneKey)
 		resp.FeishuEntryStatus = feishuStatus
 		if feishuStatus.Ready {
-			resp.ChannelQRURL = feishuOAuthShortURL(r, link.SceneKey)
+			resp.ChannelQRURL = feishuNativeEntryShortURL(r, link.SceneKey)
 			resp.QRValue = resp.ChannelQRURL
-			resp.QRKind = "feishu_oauth_entry"
+			resp.QRKind = "feishu_native_entry"
 		}
 	}
 	if link.Channel == "weixin_clawbot" {

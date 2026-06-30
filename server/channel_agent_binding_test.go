@@ -364,7 +364,7 @@ func TestCreateChannelIdentityMobileLinkUsesExistingFriendAccess(t *testing.T) {
 	}
 }
 
-func TestCreateFeishuChannelIdentityMobileLinkUsesOAuthShortQRCode(t *testing.T) {
+func TestCreateFeishuChannelIdentityMobileLinkUsesNativeShortQRCode(t *testing.T) {
 	t.Setenv("CATSCO_CHANNEL_BINDING_TOKEN", "mobile-link-test-secret")
 	t.Setenv("CATSCO_FEISHU_APP_ID", "cli_app")
 	t.Setenv("CATSCO_FEISHU_APP_SECRET", "secret")
@@ -402,11 +402,11 @@ func TestCreateFeishuChannelIdentityMobileLinkUsesOAuthShortQRCode(t *testing.T)
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	wantQR := "https://app.catsco.cc/api/f/" + url.PathEscape(resp.SceneKey)
+	wantQR := "https://app.catsco.cc/api/fn/" + url.PathEscape(resp.SceneKey)
 	if resp.Entry.ID != entry.ID || resp.SceneKey == "" || !strings.HasPrefix(resp.SceneKey, "m.") {
 		t.Fatalf("unexpected mobile response: %+v", resp)
 	}
-	if resp.QRKind != "feishu_oauth_entry" || resp.QRValue != wantQR || resp.ChannelQRURL != wantQR {
+	if resp.QRKind != "feishu_native_entry" || resp.QRValue != wantQR || resp.ChannelQRURL != wantQR {
 		t.Fatalf("unexpected QR metadata: %+v want=%s", resp, wantQR)
 	}
 	if resp.Entry.FeishuEntryStatus == nil || resp.Entry.FeishuEntryStatus.NativeShortURL != "https://app.catsco.cc/api/fn/"+url.PathEscape(resp.SceneKey) {

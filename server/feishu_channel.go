@@ -31,6 +31,7 @@ const (
 	defaultFeishuAuthorizeURL = "https://open.feishu.cn/open-apis/authen/v1/index"
 	defaultFeishuAPIBase      = "https://open.feishu.cn"
 	feishuOAuthStateTTL       = 10 * time.Minute
+	feishuOAuthNextNative     = "native"
 )
 
 // FeishuChannelConfig contains the cloud Feishu app settings.
@@ -165,10 +166,15 @@ func (h *FeishuChannelHandler) HandleOAuthStart(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
+	next := ""
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("next")), feishuOAuthNextNative) {
+		next = feishuOAuthNextNative
+	}
 	state, err := h.signOAuthState(feishuOAuthState{
 		SceneKey:  sceneKey,
 		ExpiresAt: time.Now().Add(feishuOAuthStateTTL).Unix(),
 		Nonce:     mustGenerateSceneKey(),
+		Next:      next,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create oauth state"})
@@ -203,8 +209,9 @@ func (h *FeishuChannelHandler) HandleOAuthShortLink(w http.ResponseWriter, r *ht
 	http.Redirect(w, r, feishuOAuthStartURL(r, sceneKey), http.StatusFound)
 }
 
-// HandleNativeEntryShortLink keeps legacy Feishu native-entry QR payloads
-// usable by redirecting them through the OAuth binding flow.
+// HandleNativeEntryShortLink keeps Feishu native-entry QR payloads short, then
+// either starts identity binding for temporary mobile scenes or redirects to
+// the configured Feishu app/bot entry.
 func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -220,6 +227,7 @@ func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter,
 		return
 	}
 	var entry *types.ChannelAgentEntry
+	isTemporaryMobileScene := strings.HasPrefix(sceneKey, "m.") || strings.HasPrefix(sceneKey, "g.")
 	if strings.HasPrefix(sceneKey, "g.") {
 		link, _, err := resolveChannelGroupMobileLink(h.db, sceneKey, "feishu", h.effectiveAppID(""), false)
 		if err != nil {
@@ -247,7 +255,16 @@ func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter,
 			return
 		}
 	}
-	http.Redirect(w, r, feishuOAuthStartURL(r, sceneKey), http.StatusFound)
+	if isTemporaryMobileScene {
+		http.Redirect(w, r, feishuOAuthStartURLWithNext(r, sceneKey, feishuOAuthNextNative), http.StatusFound)
+		return
+	}
+	nativeURL := feishuNativeEntryURLForScene(r, entry, sceneKey)
+	if nativeURL == "" || !isUsableRedirectURL(nativeURL) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "feishu native entry is not configured"})
+		return
+	}
+	http.Redirect(w, r, nativeURL, http.StatusFound)
 }
 
 // HandleOAuthCallback binds the Feishu OAuth identity to the scanned entry.
@@ -366,6 +383,12 @@ func (h *FeishuChannelHandler) HandleOAuthCallback(w http.ResponseWriter, r *htt
 	if err := h.db.CreateTopic(p2pTopicID(conversationUID, entry.AgentUID), "p2p", conversationUID); err != nil {
 		log.Printf("create feishu agent topic failed: %v", err)
 	}
+	if state.Next == feishuOAuthNextNative {
+		if nativeURL := feishuNativeEntryURLForSceneAfterOAuth(r, entry, state.SceneKey); nativeURL != "" && isUsableRedirectURL(nativeURL) {
+			http.Redirect(w, r, nativeURL, http.StatusFound)
+			return
+		}
+	}
 	writeHTML(w, http.StatusOK, oauthResultHTML("绑定完成", fmt.Sprintf("你已进入「%s」，可以回到飞书聊天框直接提问。", name)))
 }
 
@@ -410,6 +433,12 @@ func (h *FeishuChannelHandler) handleGroupOAuthCallback(w http.ResponseWriter, r
 	}
 	if err := h.db.CreateTopic(link.TopicID, "group", link.CanonicalUID); err != nil {
 		log.Printf("create feishu group mobile topic failed: %v", err)
+	}
+	if state.Next == feishuOAuthNextNative {
+		if nativeURL := feishuNativeEntryURLForSceneAfterOAuth(r, groupFeishuPseudoEntry(link), state.SceneKey); nativeURL != "" && isUsableRedirectURL(nativeURL) {
+			http.Redirect(w, r, nativeURL, http.StatusFound)
+			return
+		}
 	}
 	groupName := "这个群聊"
 	if group != nil && strings.TrimSpace(group.Name) != "" {
@@ -1257,7 +1286,15 @@ func (h *FeishuChannelHandler) oauthRedirectURI(r *http.Request) string {
 }
 
 func feishuOAuthStartURL(r *http.Request, sceneKey string) string {
-	return publicBaseURL(r) + "/api/channel-agent-bindings/oauth/feishu/start?scene_key=" + url.QueryEscape(sceneKey)
+	return feishuOAuthStartURLWithNext(r, sceneKey, "")
+}
+
+func feishuOAuthStartURLWithNext(r *http.Request, sceneKey string, next string) string {
+	startURL := publicBaseURL(r) + "/api/channel-agent-bindings/oauth/feishu/start?scene_key=" + url.QueryEscape(sceneKey)
+	if strings.TrimSpace(next) != "" {
+		startURL += "&next=" + url.QueryEscape(strings.TrimSpace(next))
+	}
+	return startURL
 }
 
 func feishuOAuthShortURL(r *http.Request, sceneKey string) string {
@@ -1313,6 +1350,7 @@ type feishuOAuthState struct {
 	SceneKey  string `json:"scene_key"`
 	ExpiresAt int64  `json:"expires_at"`
 	Nonce     string `json:"nonce"`
+	Next      string `json:"next,omitempty"`
 }
 
 func (h *FeishuChannelHandler) signOAuthState(state feishuOAuthState) (string, error) {
