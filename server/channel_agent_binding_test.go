@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -2272,6 +2273,31 @@ func (s *channelAgentTestStore) GetUserByUsername(username string) (*types.User,
 
 func (s *channelAgentTestStore) GetBotOwner(botUID int64) (int64, error) {
 	return s.owners[botUID], nil
+}
+
+func (s *channelAgentTestStore) ListBotsByOwner(ownerID int64) ([]map[string]interface{}, error) {
+	var ids []int64
+	for botUID, currentOwnerID := range s.owners {
+		if currentOwnerID == ownerID {
+			ids = append(ids, botUID)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	out := make([]map[string]interface{}, 0, len(ids))
+	for _, botUID := range ids {
+		user := s.users[botUID]
+		if user == nil || user.AccountType != types.AccountBot {
+			continue
+		}
+		out = append(out, map[string]interface{}{
+			"id":           user.ID,
+			"username":     user.Username,
+			"display_name": user.DisplayName,
+			"avatar_url":   user.AvatarURL,
+			"state":        user.State,
+		})
+	}
+	return out, nil
 }
 
 func (s *channelAgentTestStore) GetBotBodyID(botUID int64) (string, error) {

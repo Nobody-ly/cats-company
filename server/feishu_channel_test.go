@@ -821,6 +821,101 @@ func TestFeishuMessageEventRequiresSelectedAgent(t *testing.T) {
 	}
 }
 
+func TestFeishuRosterForUnknownIdentityShowsOnlyPublicEntries(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "private-agent", DisplayName: "Private Agent", AccountType: types.AccountBot}
+	db.users[44] = &types.User{ID: 44, Username: "public-agent", DisplayName: "Public Agent", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	db.owners[44] = 7
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-private",
+		Channel:      "feishu",
+		ChannelAppID: "cli_app",
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     7,
+		AgentUID:     43,
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("seed private entry: %v", err)
+	}
+	if _, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     "scene-public",
+		Channel:      "feishu",
+		ChannelAppID: "cli_app",
+		AccessMode:   types.ChannelAgentAccessPublic,
+		OwnerUID:     7,
+		AgentUID:     44,
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("seed public entry: %v", err)
+	}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_new", "oc_chat_1", "p2p", "om_list", "员工列表")
+	if len(api.sends) != 1 {
+		t.Fatalf("sends=%+v", api.sends)
+	}
+	reply := api.sends[0].Text
+	if !strings.Contains(reply, "Public Agent") || strings.Contains(reply, "Private Agent") {
+		t.Fatalf("unexpected roster reply: %s", reply)
+	}
+	if !strings.Contains(reply, "当前只显示公开入口") || !strings.Contains(reply, "发送编号") {
+		t.Fatalf("reply should explain public-only roster and number selection: %s", reply)
+	}
+}
+
+func TestFeishuRosterIncludesOwnedAgentWithoutEntryAndNumberSelectCreatesEntry(t *testing.T) {
+	db := newChannelAgentTestStore()
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[8] = &types.User{ID: 8, Username: channelActorUsername("feishu", "cli_app", "ou_owner"), DisplayName: "Feishu Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "owned-agent", DisplayName: "Owned Agent", AccountType: types.AccountBot}
+	db.owners[43] = 9
+	if _, err := db.UpsertChannelAgentBinding(&types.ChannelAgentBinding{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_owner",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+		CanonicalUID:            9,
+		OwnerUID:                9,
+		AgentUID:                43,
+		Status:                  types.ChannelAgentBindingActive,
+	}); err != nil {
+		t.Fatalf("seed canonical identity: %v", err)
+	}
+	api := &fakeFeishuAPI{appID: "cli_app"}
+	handler := NewFeishuChannelHandler(db, nil, FeishuChannelConfig{AppID: "cli_app"}, api)
+
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_owner", "oc_chat_1", "p2p", "om_list", "员工列表")
+	if len(api.sends) != 1 || !strings.Contains(api.sends[0].Text, "Owned Agent") {
+		t.Fatalf("owned agent should be listed, sends=%+v", api.sends)
+	}
+	if strings.Contains(api.sends[0].Text, "当前只显示公开入口") {
+		t.Fatalf("known identity should not show public-only guidance: %s", api.sends[0].Text)
+	}
+	sendFeishuTextEvent(t, handler, "cli_app", "ou_owner", "oc_chat_1", "p2p", "om_select", "1")
+	if len(api.sends) != 2 || !strings.Contains(api.sends[1].Text, "已切换到「Owned Agent」") {
+		t.Fatalf("number selection should switch to owned agent, sends=%+v", api.sends)
+	}
+	entries, err := db.ListChannelAgentEntries(9, 43)
+	if err != nil || len(entries) != 1 || entries[0].Channel != "feishu" || entries[0].ChannelAppID != "cli_app" {
+		t.Fatalf("owned selection should create feishu entry, entries=%+v err=%v", entries, err)
+	}
+	route, err := db.ResolveChannelAgentRoute(types.ChannelAgentRouteQuery{
+		Channel:                 "feishu",
+		ChannelAppID:            "cli_app",
+		ChannelUserID:           "ou_owner",
+		ChannelConversationID:   "oc_chat_1",
+		ChannelConversationType: "p2p",
+		ActorUID:                8,
+	})
+	if err != nil || route == nil || route.AgentUID != 43 {
+		t.Fatalf("number selection should create current route, route=%+v err=%v", route, err)
+	}
+}
+
 func TestFeishuP2PBindingInheritsActivatedBaseBinding(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
