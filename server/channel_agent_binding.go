@@ -1314,6 +1314,17 @@ func feishuNativeEntryURL(r *http.Request, entry *types.ChannelAgentEntry) strin
 }
 
 func feishuNativeEntryURLForScene(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) string {
+	if sceneKey == "" && entry != nil {
+		sceneKey = entry.SceneKey
+	}
+	return feishuNativeEntryURLForSceneWithOAuthURL(r, entry, sceneKey, feishuOAuthStartURL(r, sceneKey))
+}
+
+func feishuNativeEntryURLForSceneAfterOAuth(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string) string {
+	return feishuNativeEntryURLForSceneWithOAuthURL(r, entry, sceneKey, "")
+}
+
+func feishuNativeEntryURLForSceneWithOAuthURL(r *http.Request, entry *types.ChannelAgentEntry, sceneKey string, oauthURLOverride string) string {
 	template := configuredFeishuEntryURLTemplate()
 	if template == "" || entry == nil {
 		return ""
@@ -1322,7 +1333,7 @@ func feishuNativeEntryURLForScene(r *http.Request, entry *types.ChannelAgentEntr
 		sceneKey = entry.SceneKey
 	}
 	entryURLValue := entryURL(r, sceneKey)
-	oauthURLValue := feishuOAuthStartURL(r, sceneKey)
+	oauthURLValue := strings.TrimSpace(oauthURLOverride)
 	shortURLValue := feishuNativeEntryShortURL(r, sceneKey)
 	appID := strings.TrimSpace(entry.ChannelAppID)
 	if appID == "" {
