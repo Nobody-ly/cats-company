@@ -203,8 +203,8 @@ func (h *FeishuChannelHandler) HandleOAuthShortLink(w http.ResponseWriter, r *ht
 	http.Redirect(w, r, feishuOAuthStartURL(r, sceneKey), http.StatusFound)
 }
 
-// HandleNativeEntryShortLink keeps legacy Feishu native-entry QR payloads
-// usable by redirecting them through the OAuth binding flow.
+// HandleNativeEntryShortLink keeps Feishu native-entry QR payloads short, then
+// redirects to the configured Feishu app/bot entry.
 func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -247,7 +247,12 @@ func (h *FeishuChannelHandler) HandleNativeEntryShortLink(w http.ResponseWriter,
 			return
 		}
 	}
-	http.Redirect(w, r, feishuOAuthStartURL(r, sceneKey), http.StatusFound)
+	nativeURL := feishuNativeEntryURLForScene(r, entry, sceneKey)
+	if nativeURL == "" || !isUsableRedirectURL(nativeURL) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "feishu native entry is not configured"})
+		return
+	}
+	http.Redirect(w, r, nativeURL, http.StatusFound)
 }
 
 // HandleOAuthCallback binds the Feishu OAuth identity to the scanned entry.
