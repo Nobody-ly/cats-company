@@ -16,8 +16,9 @@ import (
 )
 
 type accountTestUserLookup struct {
-	users map[int64]*types.User
-	err   error
+	users      map[int64]*types.User
+	botConfigs map[int64]*types.BotConfig
+	err        error
 }
 
 func (s accountTestUserLookup) GetUser(id int64) (*types.User, error) {
@@ -25,6 +26,13 @@ func (s accountTestUserLookup) GetUser(id int64) (*types.User, error) {
 		return nil, s.err
 	}
 	return s.users[id], nil
+}
+
+func (s accountTestUserLookup) GetBotConfig(uid int64) (*types.BotConfig, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.botConfigs[uid], nil
 }
 
 func (s accountTestUserLookup) GetUserByUsername(username string) (*types.User, error) {

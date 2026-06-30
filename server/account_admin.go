@@ -38,6 +38,10 @@ type AccountAdminUserLookup interface {
 	UpdateUserState(uid int64, state int) error
 }
 
+type AccountAdminBotLookup interface {
+	GetBotConfig(uid int64) (*types.BotConfig, error)
+}
+
 type AccountAdminServiceStore interface {
 	CreateAuthService(service *types.AuthService) (int64, error)
 	ListAuthServices() ([]*types.AuthService, error)
@@ -114,7 +118,7 @@ func (h *AccountAdminHandler) HandleUserLookup(w http.ResponseWriter, r *http.Re
 	}
 
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
-		"user": accountUserPayload(user),
+		"user": h.accountAdminUserPayload(user),
 	})
 }
 
@@ -152,7 +156,7 @@ func (h *AccountAdminHandler) HandleUserList(w http.ResponseWriter, r *http.Requ
 	}
 	payload := make([]accountUserResponse, 0, len(users))
 	for _, user := range users {
-		payload = append(payload, accountUserPayload(user))
+		payload = append(payload, h.accountAdminUserPayload(user))
 	}
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
 		"users":        payload,
@@ -188,7 +192,7 @@ func (h *AccountAdminHandler) HandleUserSearch(w http.ResponseWriter, r *http.Re
 
 	payload := make([]accountUserResponse, 0, len(users))
 	for _, user := range users {
-		payload = append(payload, accountUserPayload(user))
+		payload = append(payload, h.accountAdminUserPayload(user))
 	}
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
 		"users": payload,
@@ -233,8 +237,31 @@ func (h *AccountAdminHandler) HandleUserState(w http.ResponseWriter, r *http.Req
 	user.State = req.State
 	writeAccountAdminJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":   true,
-		"user": accountUserPayload(user),
+		"user": h.accountAdminUserPayload(user),
 	})
+}
+
+func (h *AccountAdminHandler) accountAdminUserPayload(user *types.User) accountUserResponse {
+	resp := accountUserPayload(user)
+	if h == nil || user == nil || user.AccountType != types.AccountBot {
+		return resp
+	}
+	bots, ok := h.users.(AccountAdminBotLookup)
+	if !ok {
+		return resp
+	}
+	config, err := bots.GetBotConfig(user.ID)
+	if err != nil || config == nil || config.OwnerID <= 0 {
+		return resp
+	}
+	resp.Owner = &accountUserOwner{UID: config.OwnerID}
+	owner, err := h.users.GetUser(config.OwnerID)
+	if err != nil || owner == nil {
+		return resp
+	}
+	resp.Owner.Username = owner.Username
+	resp.Owner.DisplayName = owner.DisplayName
+	return resp
 }
 
 func (h *AccountAdminHandler) searchUsers(query string) ([]*types.User, error) {

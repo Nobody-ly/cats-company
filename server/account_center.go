@@ -195,6 +195,13 @@ type accountUserResponse struct {
 	AccountType types.AccountType `json:"account_type"`
 	State       int               `json:"state"`
 	CreatedAt   *time.Time        `json:"created_at,omitempty"`
+	Owner       *accountUserOwner `json:"owner,omitempty"`
+}
+
+type accountUserOwner struct {
+	UID         int64  `json:"uid"`
+	Username    string `json:"username,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 func accountUserPayload(user *types.User) accountUserResponse {

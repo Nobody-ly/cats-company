@@ -183,6 +183,56 @@ func TestAccountAdminUserListFiltersAccountType(t *testing.T) {
 	}
 }
 
+func TestAccountAdminBotListIncludesOwner(t *testing.T) {
+	handler := NewAccountAdminHandler(accountTestUserLookup{
+		users: map[int64]*types.User{
+			2:  {ID: 2, Username: "bruce", Email: "bruce@example.com", DisplayName: "布鲁斯", AccountType: types.AccountHuman, State: 0},
+			20: {ID: 20, Username: "weather-bot", Email: "bot@example.com", DisplayName: "Weather Bot", AccountType: types.AccountBot, State: 0},
+			30: {ID: 30, Username: "legacy-bot", Email: "legacy@example.com", DisplayName: "Legacy Bot", AccountType: types.AccountBot, State: 0},
+		},
+		botConfigs: map[int64]*types.BotConfig{
+			20: {UserID: 20, OwnerID: 2},
+			30: {UserID: 30},
+		},
+	}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/local/account-admin/users/list?page=1&page_size=10&account_type=bot", nil)
+	req.RemoteAddr = "127.0.0.1:40200"
+	rec := httptest.NewRecorder()
+	handler.HandleUserList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Users []struct {
+			UID   int64 `json:"uid"`
+			Owner *struct {
+				UID         int64  `json:"uid"`
+				Username    string `json:"username"`
+				DisplayName string `json:"display_name"`
+			} `json:"owner"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	byUID := map[int64]*struct {
+		UID         int64  `json:"uid"`
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+	}{}
+	for _, user := range body.Users {
+		byUID[user.UID] = user.Owner
+	}
+	if byUID[20] == nil || byUID[20].UID != 2 || byUID[20].Username != "bruce" || byUID[20].DisplayName != "布鲁斯" {
+		t.Fatalf("expected bot owner payload for uid 20, got %+v", byUID[20])
+	}
+	if byUID[30] != nil {
+		t.Fatalf("legacy bot without owner should omit owner, got %+v", byUID[30])
+	}
+}
+
 func TestAccountAdminUserListRejectsUnsupportedAccountType(t *testing.T) {
 	handler := NewAccountAdminHandler(accountTestUserLookup{users: map[int64]*types.User{}}, nil, nil)
 

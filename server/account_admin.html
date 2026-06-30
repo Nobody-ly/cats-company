@@ -1052,6 +1052,14 @@ http://127.0.0.1:26061/local/account-admin</code>
       return Number(state || 0) === 0 ? '正常' : `已禁用(${state})`;
     }
 
+    function botOwnerLabel(user) {
+      if (!user || user.account_type !== 'bot') return '';
+      const owner = user.owner || {};
+      if (!owner.uid) return '未记录归属';
+      const name = owner.display_name || owner.username || `uid ${owner.uid}`;
+      return `${name} · uid ${owner.uid}`;
+    }
+
     function normalizeAccountType(value) {
       return ['human', 'bot'].includes(value) ? value : 'all';
     }
@@ -1089,6 +1097,7 @@ http://127.0.0.1:26061/local/account-admin</code>
         row('显示名', user.display_name),
         row('头像', user.avatar_url),
         row('账号类型', user.account_type),
+        user.account_type === 'bot' ? row('归属账号', botOwnerLabel(user)) : '',
         row('状态', stateLabel(user.state)),
         row('创建时间', user.created_at),
         `<div class="row"><div class="label">账号操作</div><div class="value">${stateActionButton(user)}</div></div>`,
@@ -1103,9 +1112,10 @@ http://127.0.0.1:26061/local/account-admin</code>
         `用户名=${user.username || '-'}`,
         `邮箱=${user.email || '-'}`,
         `类型=${user.account_type || '-'}`,
+        user.account_type === 'bot' ? `归属=${botOwnerLabel(user)}` : '',
         `状态=${stateLabel(user.state)}`,
         `创建=${user.created_at || '-'}`,
-      ].join(' · ');
+      ].filter(Boolean).join(' · ');
       return `<div class="user-item">
         <div>
           <strong>${escapeHTML(title)}</strong>
