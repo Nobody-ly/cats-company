@@ -351,17 +351,7 @@ func (h *AccountAdminHandler) commercialRelayEnforcedFor(uid int64) bool {
 }
 
 func (h *AccountAdminHandler) fetchCommercialRelayUsage(ctx context.Context, uid int64) (*commercialRelayUsageUser, error) {
-	var out commercialRelayUsageResponse
-	err := h.relayAdmin.Do(ctx, http.MethodGet, fmt.Sprintf("/internal/usage/users?search=%d&limit=1&include_governance=1", uid), nil, &out)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out.Users {
-		if out.Users[i].UID == uid {
-			return &out.Users[i], nil
-		}
-	}
-	return nil, nil
+	return fetchRelayUsageForUID(ctx, h.relayAdmin, uid)
 }
 
 func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, relayUser *commercialRelayUsageUser) *commercialRelayDryRun {

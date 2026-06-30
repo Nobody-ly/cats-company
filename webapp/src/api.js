@@ -145,6 +145,13 @@ export const api = {
   redeemRelayInvite: (code) => request('POST', '/api/relay/invite/redeem', { code }),
   createRelaySession: () => request('POST', '/api/relay/session', {}),
   getRelayKey: () => request('GET', '/api/relay/key'),
+  getRelayUsage: ({ model, source } = {}) => {
+    const params = new URLSearchParams();
+    if (model) params.set('model', model);
+    if (source) params.set('source', source);
+    const query = params.toString();
+    return request('GET', `/api/relay/usage${query ? `?${query}` : ''}`);
+  },
   createRelayKey: (name) => request('POST', '/api/relay/key', name ? { name } : {}),
   rotateRelayKey: () => request('POST', '/api/relay/key/rotate', {}),
   revealRelayKey: () => request('POST', '/api/relay/key/reveal', {}),

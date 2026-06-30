@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -57,6 +58,22 @@ type relayKeyInfo struct {
 	CreatedAt string  `json:"created_at,omitempty"`
 	UpdatedAt string  `json:"updated_at,omitempty"`
 	RevokedAt *string `json:"revoked_at,omitempty"`
+}
+
+type relayUsageResponse struct {
+	Configured bool               `json:"configured"`
+	Summary    *relayUsageSummary `json:"summary,omitempty"`
+}
+
+type relayUsageSummary struct {
+	Source       string  `json:"source,omitempty"`
+	Model        string  `json:"model"`
+	Provider     string  `json:"provider,omitempty"`
+	UsedCNY      float64 `json:"used_cny"`
+	LimitCNY     float64 `json:"limit_cny"`
+	RemainingCNY float64 `json:"remaining_cny"`
+	Percent      float64 `json:"percent"`
+	Status       string  `json:"status"`
 }
 
 func NewRelayKeyHandlerFromEnv() *RelayKeyHandler {
@@ -151,6 +168,52 @@ func (h *RelayKeyHandler) HandleReveal(w http.ResponseWriter, r *http.Request) {
 	h.forward(w, r, http.MethodPost, uid, "/reveal", nil)
 }
 
+func (h *RelayKeyHandler) HandleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	source := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	if source == "custom" || normalizeRelayModelName(model) == "custom" || strings.EqualFold(model, "自定义模型") {
+		writeJSON(w, http.StatusOK, relayUsageResponse{
+			Configured: true,
+			Summary: &relayUsageSummary{
+				Source: "custom",
+				Model:  "自定义模型",
+				Status: "custom",
+			},
+		})
+		return
+	}
+	if h.admin == nil {
+		writeJSON(w, http.StatusOK, relayUsageResponse{Configured: false})
+		return
+	}
+	uid := UIDFromContext(r.Context())
+	if uid <= 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	user, err := fetchRelayUsageForUID(r.Context(), h.admin, uid)
+	if err != nil {
+		status := http.StatusBadGateway
+		message := "relay admin request failed"
+		if relayErr, ok := err.(relayAdminError); ok {
+			message = relayErr.message
+			if relayErr.status >= 400 && relayErr.status < 500 {
+				status = relayErr.status
+			}
+		}
+		writeJSON(w, status, map[string]string{"error": message})
+		return
+	}
+	if model == "" {
+		model = relayEnv("CATS_RELAY_DEFAULT_MODEL", "MiniMax-M2.7")
+	}
+	writeJSON(w, http.StatusOK, buildRelayUsageResponse(user, model))
+}
+
 func (h *RelayKeyHandler) forward(w http.ResponseWriter, r *http.Request, method string, uid int64, suffix string, body interface{}) {
 	var out relayKeyResponse
 	err := h.admin.Do(r.Context(), method, fmt.Sprintf("/internal/users/%d/key%s", uid, suffix), body, &out)
@@ -178,6 +241,117 @@ func stripRelayPlaintext(out *relayKeyResponse) {
 	if out != nil && out.Key != nil {
 		out.Key.Key = ""
 	}
+}
+
+func fetchRelayUsageForUID(ctx context.Context, admin *RelayAdminClient, uid int64) (*commercialRelayUsageUser, error) {
+	if admin == nil {
+		return nil, nil
+	}
+	var out commercialRelayUsageResponse
+	err := admin.Do(ctx, http.MethodGet, fmt.Sprintf("/internal/usage/users?search=%d&limit=1&include_governance=1", uid), nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out.Users {
+		if out.Users[i].UID == uid {
+			return &out.Users[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func buildRelayUsageResponse(user *commercialRelayUsageUser, preferredModel string) relayUsageResponse {
+	if user == nil || !user.Configured {
+		return relayUsageResponse{Configured: false}
+	}
+	limit, ok := findRelayUsageModel(user.Limits.ModelLimits, preferredModel)
+	if !ok {
+		if strings.TrimSpace(preferredModel) != "" {
+			return relayUsageResponse{Configured: true}
+		}
+		limit, ok = pickRelayUsageModel(user.Limits.ModelLimits)
+		if !ok {
+			return relayUsageResponse{Configured: true}
+		}
+	}
+	used := limit.Budget.CurrentUsage
+	maxLimit := limit.Budget.MaxLimit
+	remaining := 0.0
+	percent := 0.0
+	status := "normal"
+	if maxLimit > 0 {
+		remaining = math.Max(0, maxLimit-used)
+		percent = used / maxLimit * 100
+		if used > maxLimit+0.000001 {
+			status = "over_limit"
+		} else if percent >= 90 {
+			status = "high"
+		}
+	}
+	return relayUsageResponse{
+		Configured: true,
+		Summary: &relayUsageSummary{
+			Source:       "relay",
+			Model:        limit.Model,
+			Provider:     limit.Provider,
+			UsedCNY:      used,
+			LimitCNY:     maxLimit,
+			RemainingCNY: remaining,
+			Percent:      percent,
+			Status:       status,
+		},
+	}
+}
+
+func findRelayUsageModel(limits []commercialRelayModelLimit, model string) (commercialRelayModelLimit, bool) {
+	target := normalizeRelayModelName(model)
+	if target == "" {
+		return commercialRelayModelLimit{}, false
+	}
+	for _, limit := range limits {
+		if limit.Budget.MaxLimit <= 0 {
+			continue
+		}
+		if normalizeRelayModelName(limit.Model) == target {
+			return limit, true
+		}
+		for _, allowed := range limit.AllowedModels {
+			if normalizeRelayModelName(allowed) == target {
+				return limit, true
+			}
+		}
+	}
+	return commercialRelayModelLimit{}, false
+}
+
+func normalizeRelayModelName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func pickRelayUsageModel(limits []commercialRelayModelLimit) (commercialRelayModelLimit, bool) {
+	var best commercialRelayModelLimit
+	found := false
+	bestScore := -1.0
+	for _, limit := range limits {
+		model := strings.TrimSpace(limit.Model)
+		if model == "" || model == "*" || limit.Budget.MaxLimit <= 0 {
+			continue
+		}
+		score := limit.Budget.CurrentUsage / limit.Budget.MaxLimit
+		if !found || score > bestScore {
+			best = limit
+			bestScore = score
+			found = true
+		}
+	}
+	return best, found
 }
 
 func (c *RelayAdminClient) Do(ctx context.Context, method string, path string, body interface{}, out interface{}) error {

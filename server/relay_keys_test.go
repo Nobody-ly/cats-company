@@ -185,6 +185,171 @@ func TestRelayKeyCreateAndRotateProxy(t *testing.T) {
 	}
 }
 
+func TestRelayUsageSummaryUsesCurrentUserRelayData(t *testing.T) {
+	oldSecret := append([]byte(nil), jwtSecret...)
+	defer func() { jwtSecret = oldSecret }()
+	SetJWTSecret("relay-usage-secret")
+	t.Setenv("CATS_RELAY_DEFAULT_MODEL", "MiniMax-M3")
+
+	userToken, err := GenerateToken(7, "charlie", "charlie@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken human: %v", err)
+	}
+
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer relay-admin-secret" {
+			t.Fatalf("missing relay admin auth: %q", r.Header.Get("Authorization"))
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/internal/usage/users" {
+			t.Fatalf("unexpected relay admin request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.URL.Query().Get("search"); got != "7" {
+			t.Fatalf("search query = %q, want 7", got)
+		}
+		if got := r.URL.Query().Get("include_governance"); got != "1" {
+			t.Fatalf("include_governance = %q, want 1", got)
+		}
+		writeJSON(w, http.StatusOK, commercialRelayUsageResponse{Users: []commercialRelayUsageUser{
+			{
+				UID:        7,
+				Username:   "charlie",
+				Configured: true,
+				Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+					{
+						Provider: "minimax-m2-anthropic",
+						Model:    "MiniMax-M2.7",
+						Budget:   commercialRelayBudget{MaxLimit: 1000, CurrentUsage: 900, ResetDuration: "1M"},
+					},
+					{
+						Provider: "minimax-m3-anthropic",
+						Model:    "MiniMax-M3",
+						Budget:   commercialRelayBudget{MaxLimit: 500, CurrentUsage: 250, ResetDuration: "1M"},
+					},
+				}},
+			},
+		}})
+	}))
+	defer admin.Close()
+
+	t.Setenv("CATS_RELAY_ADMIN_URL", admin.URL)
+	t.Setenv("CATS_RELAY_ADMIN_TOKEN", "relay-admin-secret")
+
+	store := relayConfigOwnerStore{users: map[int64]*types.User{
+		7: {ID: 7, Username: "charlie", AccountType: types.AccountHuman, State: 0},
+	}}
+	handler := OwnerMiddlewareWithDB(store)(NewRelayKeyHandlerFromEnv().HandleUsage)
+	req := httptest.NewRequest(http.MethodGet, "/api/relay/usage", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=200 body=%s", rec.Code, rec.Body.String())
+	}
+	var out relayUsageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode usage response: %v", err)
+	}
+	if !out.Configured || out.Summary == nil {
+		t.Fatalf("expected configured usage summary, got %+v", out)
+	}
+	if out.Summary.Source != "relay" || out.Summary.Model != "MiniMax-M3" || out.Summary.Percent != 50 || out.Summary.RemainingCNY != 250 {
+		t.Fatalf("unexpected usage summary: %+v", out.Summary)
+	}
+}
+
+func TestRelayUsageSummaryUsesRequestedModel(t *testing.T) {
+	user := &commercialRelayUsageUser{
+		UID:        8,
+		Configured: true,
+		Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+			{
+				Provider:      "minimax-m2-anthropic",
+				Model:         "MiniMax-M2.7",
+				AllowedModels: []string{"MiniMax-M2.7"},
+				Budget:        commercialRelayBudget{MaxLimit: 1000, CurrentUsage: 900, ResetDuration: "1M"},
+			},
+			{
+				Provider:      "minimax-m3-anthropic",
+				Model:         "MiniMax-M3",
+				AllowedModels: []string{"minimax-m3"},
+				Budget:        commercialRelayBudget{MaxLimit: 500, CurrentUsage: 100, ResetDuration: "1M"},
+			},
+		}},
+	}
+
+	out := buildRelayUsageResponse(user, "minimax_m3")
+
+	if !out.Configured || out.Summary == nil {
+		t.Fatalf("expected configured usage summary, got %+v", out)
+	}
+	if out.Summary.Source != "relay" || out.Summary.Model != "MiniMax-M3" || out.Summary.Percent != 20 || out.Summary.RemainingCNY != 400 {
+		t.Fatalf("expected requested model summary, got %+v", out.Summary)
+	}
+}
+
+func TestRelayUsageSummarySkipsQuotaForCustomModel(t *testing.T) {
+	oldSecret := append([]byte(nil), jwtSecret...)
+	defer func() { jwtSecret = oldSecret }()
+	SetJWTSecret("relay-custom-usage-secret")
+
+	userToken, err := GenerateToken(9, "erin", "erin@example.com")
+	if err != nil {
+		t.Fatalf("GenerateToken human: %v", err)
+	}
+
+	store := relayConfigOwnerStore{users: map[int64]*types.User{
+		9: {ID: 9, Username: "erin", AccountType: types.AccountHuman, State: 0},
+	}}
+	handler := OwnerMiddlewareWithDB(store)(NewRelayKeyHandlerFromEnv().HandleUsage)
+	req := httptest.NewRequest(http.MethodGet, "/api/relay/usage?source=custom&model=gpt-5.5", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=200 body=%s", rec.Code, rec.Body.String())
+	}
+	var out relayUsageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode usage response: %v", err)
+	}
+	if !out.Configured || out.Summary == nil {
+		t.Fatalf("expected custom usage summary, got %+v", out)
+	}
+	if out.Summary.Source != "custom" || out.Summary.Model != "自定义模型" || out.Summary.LimitCNY != 0 {
+		t.Fatalf("expected custom summary without quota, got %+v", out.Summary)
+	}
+}
+
+func TestRelayUsageSummaryMarksOverLimit(t *testing.T) {
+	user := &commercialRelayUsageUser{
+		UID:        8,
+		Configured: true,
+		Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+			{
+				Provider: "minimax-m3-anthropic",
+				Model:    "MiniMax-M3",
+				Budget:   commercialRelayBudget{MaxLimit: 500, CurrentUsage: 745.63, ResetDuration: "1M"},
+			},
+		}},
+	}
+
+	out := buildRelayUsageResponse(user, "MiniMax-M3")
+
+	if !out.Configured || out.Summary == nil {
+		t.Fatalf("expected configured usage summary, got %+v", out)
+	}
+	if out.Summary.Status != "over_limit" || out.Summary.RemainingCNY != 0 {
+		t.Fatalf("expected over-limit summary, got %+v", out.Summary)
+	}
+	if out.Summary.Percent <= 100 {
+		t.Fatalf("expected percent over 100, got %+v", out.Summary)
+	}
+}
+
 func TestRelayKeyGetStripsPlaintextFromAdminResponse(t *testing.T) {
 	oldSecret := append([]byte(nil), jwtSecret...)
 	defer func() { jwtSecret = oldSecret }()

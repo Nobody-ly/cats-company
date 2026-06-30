@@ -2202,7 +2202,39 @@ body {
 }
 
 .v3-profile-name { font-weight: 600; font-size: 14px; color: #fff; }
-.v3-profile-roles { font-size: 11px; color: var(--v3-text-muted); }
+.v3-profile-roles {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0;
+  font-size: 11px;
+  color: var(--v3-text-muted);
+}
+
+.v3-relay-usage-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 118px;
+  min-height: 18px;
+  margin-left: 8px;
+  padding: 0 7px;
+  border: 1px solid rgba(63, 185, 80, 0.28);
+  border-radius: 999px;
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.11);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v3-relay-usage-pill.danger {
+  border-color: rgba(248, 113, 113, 0.34);
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.12);
+}
 
 .v3-profile-settings {
   color: var(--v3-text-muted);

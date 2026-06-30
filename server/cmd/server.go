@@ -480,6 +480,7 @@ func main() {
 	mux.HandleFunc("/api/relay/key", ownerAuthWithDB(relayKeyHandler.HandleKey))
 	mux.HandleFunc("/api/relay/key/rotate", ownerAuthWithDB(relayKeyHandler.HandleRotate))
 	mux.HandleFunc("/api/relay/key/reveal", ownerAuthWithDB(relayKeyHandler.HandleReveal))
+	mux.HandleFunc("/api/relay/usage", ownerAuthWithDB(relayKeyHandler.HandleUsage))
 	mux.HandleFunc("/api/devices", authWithDB(deviceHandler.HandleListDevices))
 	mux.HandleFunc("/api/devices/", jwtAuthWithDB(deviceHandler.HandleDeviceByID))
 	mux.HandleFunc("/api/devices/register", authWithDB(deviceHandler.HandleRegisterDevice))

@@ -176,6 +176,7 @@ function TinodeWebApp() {
   const [showDesktopConnectModal, setShowDesktopConnectModal] = useState(false);
   const [localAgentStatus, setLocalAgentStatus] = useState('checking');
   const [showRelayModal, setShowRelayModal] = useState(false);
+  const [relayUsage, setRelayUsage] = useState(null);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(() => loadAppSidebarCollapsed());
   const [tutorialOpenToken, setTutorialOpenToken] = useState(0);
   const [showTutorialMenuHint, setShowTutorialMenuHint] = useState(false);
@@ -279,6 +280,31 @@ function TinodeWebApp() {
       cancelled = true;
     };
   }, [user?.uid, persistUser]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setRelayUsage(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadRelayUsage = () => {
+      api.getRelayUsage()
+        .then((data) => {
+          if (!cancelled) setRelayUsage(data?.summary || null);
+        })
+        .catch(() => {
+          if (!cancelled) setRelayUsage(null);
+        });
+    };
+
+    loadRelayUsage();
+    const timer = window.setInterval(loadRelayUsage, 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user?.uid]);
 
   const refreshLocalAgentStatus = useCallback(async ({ allowDailyPrompt = false } = {}) => {
     if (!user?.uid) return;
@@ -473,6 +499,7 @@ function TinodeWebApp() {
           <ProfileFooter
             user={user}
             wsStatus={wsStatus}
+            relayUsage={relayUsage}
             onTogglePopover={() => setShowProfilePopover(!showProfilePopover)}
           />
         )}
@@ -592,9 +619,10 @@ function SidebarContent({ activeTopic, onSelectTopic, user, onlineUsers }) {
   return <ChatListView activeTopic={activeTopic} onSelectTopic={onSelectTopic} user={user} onlineUsers={onlineUsers} />;
 }
 
-function ProfileFooter({ user, wsStatus, onTogglePopover }) {
+function ProfileFooter({ user, wsStatus, relayUsage, onTogglePopover }) {
   const statusClass = wsStatus === 'connected' ? 'online' : 'offline';
   const displayName = user.display_name || user.username;
+  const usageLabel = formatRelayUsagePill(relayUsage);
   return (
     <div className="v3-profile-footer" onClick={onTogglePopover} style={{cursor: 'pointer'}}>
       <Avatar name={displayName} src={user.avatar_url} size={32} className="v3-profile-avatar" />
@@ -603,6 +631,7 @@ function ProfileFooter({ user, wsStatus, onTogglePopover }) {
         <div className="v3-profile-roles">
            <span className={`v3-status-dot ${statusClass}`} style={{marginLeft: 0, marginRight: 6}}></span>
            {wsStatus === 'connected' ? 'Online' : 'Offline'}
+           {usageLabel && <span className={`v3-relay-usage-pill ${relayUsage?.status === 'over_limit' ? 'danger' : ''}`}>{usageLabel}</span>}
         </div>
       </div>
       <div className="v3-profile-settings" style={{color: '#888'}}>
@@ -610,6 +639,30 @@ function ProfileFooter({ user, wsStatus, onTogglePopover }) {
       </div>
     </div>
   );
+}
+
+function formatRelayUsagePill(summary) {
+  if (summary?.source === 'custom' || summary?.status === 'custom') {
+    return '自定义模型';
+  }
+  if (!summary || !summary.model || !Number.isFinite(Number(summary.limit_cny)) || Number(summary.limit_cny) <= 0) {
+    return '';
+  }
+  if (summary.status === 'over_limit') {
+    return `${shortRelayModelName(summary.model)} 已用 100%+`;
+  }
+  const remainingPercent = Math.max(0, Math.min(100, 100 - Number(summary.percent || 0)));
+  return `${shortRelayModelName(summary.model)} 剩余 ${Math.round(remainingPercent)}%`;
+}
+
+function shortRelayModelName(model) {
+  const text = String(model || '').trim();
+  if (!text) return '模型';
+  if (/minimax-m3/i.test(text)) return 'M3';
+  if (/minimax-m2\.?7/i.test(text)) return 'M2.7';
+  if (/deepseek/i.test(text)) return 'DS';
+  if (/glm/i.test(text)) return 'GLM';
+  return text.length > 8 ? `${text.slice(0, 8)}...` : text;
 }
 
 function formatAuthError(message) {
