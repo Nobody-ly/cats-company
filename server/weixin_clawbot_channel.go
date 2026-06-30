@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/aes"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -18,6 +19,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	urlpath "path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,10 +31,15 @@ import (
 	"github.com/openchat/openchat/server/store/types"
 )
 
-const weixinClawBotChannelVersion = "catsco-weixin-clawbot/1.0"
+const (
+	weixinClawBotChannelVersion      = "catsco-weixin-clawbot/1.0"
+	defaultWeixinClawBotCDNBaseURL   = "https://novac2c.cdn.weixin.qq.com/c2c"
+	weixinClawBotMaxOutboundMessages = 8
+)
 
 type WeixinClawBotConfig struct {
 	ILinkBaseURL             string
+	CDNBaseURL               string
 	MediaHostAllowlist       []string
 	MediaDownloadURLTemplate string
 	WorkerEnabled            bool
@@ -54,6 +63,7 @@ type weixinClawBotAPI interface {
 	GetUpdates(ctx context.Context, botToken string, getUpdatesBuf string) (*weixinClawBotUpdates, error)
 	DownloadMedia(ctx context.Context, botToken string, ref weixinClawBotMediaRef) (*channelMediaDownload, error)
 	SendTextMessage(ctx context.Context, botToken string, toUserID string, text string, contextToken string, fromUserID string) error
+	SendMediaMessage(ctx context.Context, botToken string, toUserID string, media weixinClawBotOutboundMedia, contextToken string, fromUserID string) error
 }
 
 type weixinClawBotQRCodeStatus struct {
@@ -135,6 +145,14 @@ type weixinClawBotUnsupportedItem struct {
 	Raw    json.RawMessage
 }
 
+type weixinClawBotOutboundMedia struct {
+	Type        string
+	Name        string
+	Path        string
+	Size        int64
+	ContentType string
+}
+
 type weixinClawBotAPIError struct {
 	Operation string
 	Status    int
@@ -186,6 +204,7 @@ func NewWeixinClawBotHandler(db store.Store, hub *Hub, cfg WeixinClawBotConfig, 
 func weixinClawBotConfigFromEnv() WeixinClawBotConfig {
 	return WeixinClawBotConfig{
 		ILinkBaseURL:             configuredWeixinClawBotILinkBaseURL(),
+		CDNBaseURL:               firstEnv("CATSCO_WEIXIN_CLAWBOT_CDN_BASE_URL", "WEIXIN_CLAWBOT_CDN_BASE_URL", "WEIXIN_CDN_BASE_URL"),
 		MediaHostAllowlist:       commaListEnv("CATSCO_WEIXIN_CLAWBOT_MEDIA_HOST_ALLOWLIST", "WEIXIN_CLAWBOT_MEDIA_HOST_ALLOWLIST"),
 		MediaDownloadURLTemplate: firstEnv("CATSCO_WEIXIN_CLAWBOT_MEDIA_DOWNLOAD_URL_TEMPLATE", "WEIXIN_CLAWBOT_MEDIA_DOWNLOAD_URL_TEMPLATE"),
 		WorkerEnabled:            !falseEnv(firstEnv("CATSCO_WEIXIN_CLAWBOT_WORKER_ENABLED", "WEIXIN_CLAWBOT_WORKER_ENABLED")),
@@ -413,8 +432,7 @@ func (h *WeixinClawBotHandler) SendOutboundMessage(ctx context.Context, binding 
 	}
 	tokenHash := strings.TrimSpace(binding.ChannelAppID)
 	channelUserID := strings.TrimSpace(binding.ChannelUserID)
-	text := message.TextWithAttachmentLinks()
-	if tokenHash == "" || channelUserID == "" || strings.TrimSpace(text) == "" {
+	if tokenHash == "" || channelUserID == "" || !message.HasContent() {
 		return nil
 	}
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
@@ -429,7 +447,143 @@ func (h *WeixinClawBotHandler) SendOutboundMessage(ctx context.Context, binding 
 	if strings.TrimSpace(contextValue.ContextToken) == "" {
 		return fmt.Errorf("missing weixin clawbot context token for channel user")
 	}
-	return h.api.SendTextMessage(ctx, token.BotToken, channelUserID, text, contextValue.ContextToken, contextValue.BotUserID)
+	if text := strings.TrimSpace(message.Text); text != "" {
+		if err := h.api.SendTextMessage(ctx, token.BotToken, channelUserID, text, contextValue.ContextToken, contextValue.BotUserID); err != nil {
+			return err
+		}
+	}
+	var fallbackAttachments []channelOutboundAttachment
+	for index, attachment := range message.Attachments {
+		if index >= weixinClawBotMaxOutboundMessages {
+			fallbackAttachments = append(fallbackAttachments, message.Attachments[index:]...)
+			break
+		}
+		media, err := weixinClawBotOutboundMediaFromAttachment(attachment)
+		if err != nil {
+			log.Printf("weixin clawbot outbound attachment fallback name=%s url=%s: %v", attachment.Name, attachment.URL, err)
+			fallbackAttachments = append(fallbackAttachments, attachment)
+			continue
+		}
+		if err := h.api.SendMediaMessage(ctx, token.BotToken, channelUserID, media, contextValue.ContextToken, contextValue.BotUserID); err != nil {
+			log.Printf("weixin clawbot outbound media send failed name=%s path=%s: %v", media.Name, media.Path, err)
+			fallbackAttachments = append(fallbackAttachments, attachment)
+			continue
+		}
+	}
+	if len(fallbackAttachments) > 0 {
+		fallbackText := channelOutboundMessage{Attachments: fallbackAttachments}.TextWithAttachmentLinks()
+		if strings.TrimSpace(fallbackText) != "" {
+			return h.api.SendTextMessage(ctx, token.BotToken, channelUserID, fallbackText, contextValue.ContextToken, contextValue.BotUserID)
+		}
+	}
+	return nil
+}
+
+func weixinClawBotOutboundMediaFromAttachment(attachment channelOutboundAttachment) (weixinClawBotOutboundMedia, error) {
+	kind := strings.ToLower(strings.TrimSpace(attachment.Type))
+	if kind != "image" {
+		kind = "file"
+	}
+	rawURL := strings.TrimSpace(attachment.URL)
+	if rawURL == "" && strings.TrimSpace(attachment.FileKey) != "" {
+		rawURL = channelOutboundUploadURL(kind, attachment.FileKey)
+	}
+	localPath, err := weixinClawBotLocalUploadPath(rawURL, kind)
+	if err != nil {
+		return weixinClawBotOutboundMedia{}, err
+	}
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return weixinClawBotOutboundMedia{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return weixinClawBotOutboundMedia{}, errors.New("outbound attachment is not a regular file")
+	}
+	maxSize := int64(maxFileSize)
+	if kind == "image" {
+		maxSize = int64(maxImageSize)
+	}
+	if info.Size() > maxSize {
+		return weixinClawBotOutboundMedia{}, fmt.Errorf("file too large; maximum supported size is %dMB", maxUploadSizeMB)
+	}
+	name := sanitizeChannelMediaFileName(firstNonEmpty(attachment.Name, channelOutboundFileNameFromURL(rawURL), filepath.Base(localPath)))
+	contentType := strings.TrimSpace(attachment.MimeType)
+	if contentType == "" {
+		contentType = normalizedUploadMimeType(filepath.Ext(name), "")
+	}
+	return weixinClawBotOutboundMedia{
+		Type:        kind,
+		Name:        name,
+		Path:        localPath,
+		Size:        info.Size(),
+		ContentType: contentType,
+	}, nil
+}
+
+func weixinClawBotLocalUploadPath(raw string, kind string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("missing outbound attachment url")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if (parsed.Scheme != "" || parsed.Host != "") && !weixinClawBotURLMatchesPublicBase(parsed) {
+		return "", errors.New("outbound attachment is not a CatsCo upload URL")
+	}
+	cleanPath := urlpath.Clean("/" + strings.TrimPrefix(parsed.Path, "/"))
+	rel := strings.TrimPrefix(cleanPath, "/uploads/")
+	if rel == cleanPath || rel == "" {
+		return "", errors.New("outbound attachment is not under uploads")
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) != 2 {
+		return "", errors.New("invalid outbound attachment upload path")
+	}
+	subDir, fileName := parts[0], parts[1]
+	if subDir != "files" && subDir != "images" {
+		return "", errors.New("unsupported outbound attachment upload directory")
+	}
+	if kind == "image" && subDir != "images" {
+		return "", errors.New("image attachment is not stored under uploads/images")
+	}
+	if kind != "image" && subDir != "files" {
+		return "", errors.New("file attachment is not stored under uploads/files")
+	}
+	if !uploadFileNamePattern.MatchString(fileName) {
+		return "", errors.New("outbound attachment filename is not a generated upload key")
+	}
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if subDir == "images" && !allowedImageExts[ext] {
+		return "", errors.New("invalid outbound image type")
+	}
+	if subDir == "files" && !allowedFileExts[ext] {
+		return "", errors.New("outbound file type not allowed")
+	}
+	baseDir, err := filepath.Abs(filepath.Join(uploadDir, subDir))
+	if err != nil {
+		return "", err
+	}
+	fullPath, err := filepath.Abs(filepath.Join(baseDir, fileName))
+	if err != nil {
+		return "", err
+	}
+	if fullPath != baseDir && !strings.HasPrefix(fullPath, baseDir+string(os.PathSeparator)) {
+		return "", errors.New("invalid outbound attachment path")
+	}
+	return fullPath, nil
+}
+
+func weixinClawBotURLMatchesPublicBase(parsed *url.URL) bool {
+	if parsed == nil || parsed.Host == "" {
+		return true
+	}
+	base, err := url.Parse(publicBaseURL(nil))
+	if err != nil || base.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, base.Scheme) && strings.EqualFold(parsed.Host, base.Host)
 }
 
 func (h *WeixinClawBotHandler) manageTokenWorkers(ctx context.Context) {
@@ -1180,6 +1334,7 @@ func weixinClawBotPrivateHost(host string) bool {
 
 type httpWeixinClawBotAPI struct {
 	baseURL                  string
+	cdnBaseURL               string
 	allowedMediaHosts        map[string]bool
 	mediaDownloadURLTemplate string
 	httpClient               *http.Client
@@ -1191,6 +1346,10 @@ func newHTTPWeixinClawBotAPI(cfg WeixinClawBotConfig) *httpWeixinClawBotAPI {
 	if baseURL == "" {
 		baseURL = configuredWeixinClawBotILinkBaseURL()
 	}
+	cdnBaseURL := strings.TrimRight(strings.TrimSpace(cfg.CDNBaseURL), "/")
+	if cdnBaseURL == "" {
+		cdnBaseURL = defaultWeixinClawBotCDNBaseURL
+	}
 	allowedMediaHosts := weixinClawBotAllowedMediaHosts(baseURL, cfg.MediaHostAllowlist)
 	longPoll := cfg.LongPollTimeout
 	if longPoll <= 0 {
@@ -1198,6 +1357,7 @@ func newHTTPWeixinClawBotAPI(cfg WeixinClawBotConfig) *httpWeixinClawBotAPI {
 	}
 	return &httpWeixinClawBotAPI{
 		baseURL:                  baseURL,
+		cdnBaseURL:               cdnBaseURL,
 		allowedMediaHosts:        allowedMediaHosts,
 		mediaDownloadURLTemplate: strings.TrimSpace(cfg.MediaDownloadURLTemplate),
 		httpClient:               &http.Client{Timeout: longPoll + 5*time.Second},
@@ -1475,6 +1635,74 @@ func (c *httpWeixinClawBotAPI) SendTextMessage(ctx context.Context, botToken str
 	if strings.TrimSpace(contextToken) == "" {
 		return errors.New("context_token is required for Weixin ClawBot sendmessage")
 	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	return c.sendMessageItems(ctx, botToken, toUserID, contextToken, fromUserID, []map[string]interface{}{
+		{"type": 1, "text_item": map[string]string{"text": text}},
+	}, "sendmessage:text")
+}
+
+func (c *httpWeixinClawBotAPI) SendMediaMessage(ctx context.Context, botToken string, toUserID string, media weixinClawBotOutboundMedia, contextToken string, fromUserID string) error {
+	if strings.TrimSpace(contextToken) == "" {
+		return errors.New("context_token is required for Weixin ClawBot sendmessage")
+	}
+	media.Type = strings.ToLower(strings.TrimSpace(media.Type))
+	if media.Type != "image" {
+		media.Type = "file"
+	}
+	media.Name = sanitizeChannelMediaFileName(media.Name)
+	if strings.TrimSpace(media.Path) == "" {
+		return errors.New("missing outbound media path")
+	}
+	if strings.TrimSpace(media.Name) == "" {
+		media.Name = filepath.Base(media.Path)
+	}
+	info, err := os.Stat(media.Path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("outbound media path is not a regular file")
+	}
+	media.Size = info.Size()
+	maxSize := int64(maxFileSize)
+	if media.Type == "image" {
+		maxSize = int64(maxImageSize)
+	}
+	if media.Size > maxSize {
+		return fmt.Errorf("file too large; maximum supported size is %dMB", maxUploadSizeMB)
+	}
+	rawMD5, err := weixinClawBotFileMD5(media.Path, maxSize)
+	if err != nil {
+		return err
+	}
+	aesKey := make([]byte, aes.BlockSize)
+	if _, err := rand.Read(aesKey); err != nil {
+		return err
+	}
+	fileKey := randomClawBotHex(16)
+	paddedSize := weixinClawBotAESPaddedSize(media.Size)
+	uploadParam, err := c.requestMediaUploadURL(ctx, botToken, weixinClawBotUploadMediaType(media.Type), toUserID, fileKey, media.Size, rawMD5, paddedSize, aesKey)
+	if err != nil {
+		return err
+	}
+	downloadParam, err := c.uploadMediaToCDN(ctx, uploadParam, fileKey, media.Path, media.Size, aesKey)
+	if err != nil {
+		return err
+	}
+	item := weixinClawBotOutboundMediaItem(media, downloadParam, aesKey, paddedSize)
+	return c.sendMessageItems(ctx, botToken, toUserID, contextToken, fromUserID, []map[string]interface{}{item}, "sendmessage:"+media.Type)
+}
+
+func (c *httpWeixinClawBotAPI) sendMessageItems(ctx context.Context, botToken string, toUserID string, contextToken string, fromUserID string, items []map[string]interface{}, operation string) error {
+	if strings.TrimSpace(contextToken) == "" {
+		return errors.New("context_token is required for Weixin ClawBot sendmessage")
+	}
+	if strings.TrimSpace(toUserID) == "" || len(items) == 0 {
+		return nil
+	}
 	clientID := "catsco-" + randomClawBotHex(6)
 	body, _ := json.Marshal(map[string]interface{}{
 		"msg": map[string]interface{}{
@@ -1483,9 +1711,7 @@ func (c *httpWeixinClawBotAPI) SendTextMessage(ctx context.Context, botToken str
 			"client_id":     clientID,
 			"message_type":  2,
 			"message_state": 2,
-			"item_list": []map[string]interface{}{
-				{"type": 1, "text_item": map[string]string{"text": text}},
-			},
+			"item_list":     items,
 			"context_token": strings.TrimSpace(contextToken),
 		},
 		"base_info": map[string]string{
@@ -1512,9 +1738,232 @@ func (c *httpWeixinClawBotAPI) SendTextMessage(ctx context.Context, botToken str
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || data.Ret != 0 || data.ErrCode != 0 {
-		return &weixinClawBotAPIError{Operation: "sendmessage", Status: resp.StatusCode, Ret: data.Ret, ErrCode: data.ErrCode, ErrMsg: data.ErrMsg}
+		return &weixinClawBotAPIError{Operation: operation, Status: resp.StatusCode, Ret: data.Ret, ErrCode: data.ErrCode, ErrMsg: data.ErrMsg}
 	}
 	return nil
+}
+
+func (c *httpWeixinClawBotAPI) requestMediaUploadURL(ctx context.Context, botToken string, mediaType int, toUserID string, fileKey string, rawSize int64, rawMD5 string, encryptedSize int64, aesKey []byte) (string, error) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"filekey":       fileKey,
+		"media_type":    mediaType,
+		"to_user_id":    strings.TrimSpace(toUserID),
+		"rawsize":       rawSize,
+		"rawfilemd5":    rawMD5,
+		"filesize":      encryptedSize,
+		"no_need_thumb": true,
+		"aeskey":        hex.EncodeToString(aesKey),
+		"base_info": map[string]string{
+			"channel_version": weixinClawBotChannelVersion,
+		},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/ilink/bot/getuploadurl", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	setWeixinClawBotAuthHeaders(req, botToken)
+	req.Header.Set("X-WECHAT-UIN", randomWechatUIN())
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var data struct {
+		Ret           int    `json:"ret,omitempty"`
+		ErrCode       int    `json:"errcode,omitempty"`
+		ErrMsg        string `json:"errmsg,omitempty"`
+		UploadParam   string `json:"upload_param,omitempty"`
+		UploadFullURL string `json:"upload_full_url,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || data.Ret != 0 || data.ErrCode != 0 {
+		return "", &weixinClawBotAPIError{Operation: "getuploadurl", Status: resp.StatusCode, Ret: data.Ret, ErrCode: data.ErrCode, ErrMsg: data.ErrMsg}
+	}
+	uploadParam := strings.TrimSpace(data.UploadParam)
+	if uploadParam == "" {
+		uploadParam = weixinClawBotUploadParamFromFullURL(data.UploadFullURL)
+	}
+	if uploadParam == "" {
+		return "", errors.New("weixin clawbot getuploadurl response missing upload_param")
+	}
+	return uploadParam, nil
+}
+
+func (c *httpWeixinClawBotAPI) uploadMediaToCDN(ctx context.Context, uploadParam string, fileKey string, filePath string, rawSize int64, aesKey []byte) (string, error) {
+	if strings.TrimSpace(c.cdnBaseURL) == "" {
+		return "", errors.New("weixin clawbot cdn base url is not configured")
+	}
+	endpoint := strings.TrimRight(c.cdnBaseURL, "/") + "/upload?encrypted_query_param=" + url.QueryEscape(uploadParam) + "&filekey=" + url.QueryEscape(fileKey)
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	body, err := newWeixinClawBotAESECBEncryptReader(file, aesKey)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return "", err
+	}
+	req.ContentLength = weixinClawBotAESPaddedSize(rawSize)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errText, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return "", fmt.Errorf("weixin clawbot cdn upload http %d: %s", resp.StatusCode, strings.TrimSpace(string(errText)))
+	}
+	downloadParam := strings.TrimSpace(resp.Header.Get("x-encrypted-param"))
+	if downloadParam == "" {
+		return "", errors.New("weixin clawbot cdn upload response missing x-encrypted-param")
+	}
+	return downloadParam, nil
+}
+
+func weixinClawBotOutboundMediaItem(media weixinClawBotOutboundMedia, downloadParam string, aesKey []byte, encryptedSize int64) map[string]interface{} {
+	mediaPayload := map[string]interface{}{
+		"encrypt_query_param": strings.TrimSpace(downloadParam),
+		"aes_key":             base64.StdEncoding.EncodeToString([]byte(hex.EncodeToString(aesKey))),
+		"encrypt_type":        1,
+	}
+	if media.Type == "image" {
+		return map[string]interface{}{
+			"type": 2,
+			"image_item": map[string]interface{}{
+				"media":    mediaPayload,
+				"mid_size": encryptedSize,
+			},
+		}
+	}
+	return map[string]interface{}{
+		"type": 4,
+		"file_item": map[string]interface{}{
+			"media":     mediaPayload,
+			"file_name": media.Name,
+			"len":       strconv.FormatInt(media.Size, 10),
+		},
+	}
+}
+
+func weixinClawBotUploadMediaType(kind string) int {
+	if strings.EqualFold(strings.TrimSpace(kind), "image") {
+		return 1
+	}
+	return 3
+}
+
+func weixinClawBotUploadParamFromFullURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	query := parsed.Query()
+	if value := strings.TrimSpace(query.Get("encrypted_query_param")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(query.Get("encrypt_query_param"))
+}
+
+func weixinClawBotFileMD5(filePath string, maxSize int64) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := md5.New()
+	limited := &io.LimitedReader{R: file, N: maxSize + 1}
+	written, err := io.Copy(hash, limited)
+	if err != nil {
+		return "", err
+	}
+	if written > maxSize {
+		return "", fmt.Errorf("file too large; maximum supported size is %dMB", maxUploadSizeMB)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func weixinClawBotAESPaddedSize(rawSize int64) int64 {
+	if rawSize < 0 {
+		rawSize = 0
+	}
+	return (rawSize/int64(aes.BlockSize) + 1) * int64(aes.BlockSize)
+}
+
+type weixinClawBotAESECBEncryptReader struct {
+	src      io.Reader
+	block    interface{ Encrypt(dst, src []byte) }
+	pending  []byte
+	out      []byte
+	finished bool
+}
+
+func newWeixinClawBotAESECBEncryptReader(src io.Reader, key []byte) (io.Reader, error) {
+	if src == nil {
+		return nil, errors.New("missing plaintext media body")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return &weixinClawBotAESECBEncryptReader{src: src, block: block}, nil
+}
+
+func (r *weixinClawBotAESECBEncryptReader) Read(p []byte) (int, error) {
+	for len(r.out) == 0 && !r.finished {
+		if err := r.fill(); err != nil {
+			return 0, err
+		}
+	}
+	if len(r.out) > 0 {
+		n := copy(p, r.out)
+		r.out = r.out[n:]
+		return n, nil
+	}
+	return 0, io.EOF
+}
+
+func (r *weixinClawBotAESECBEncryptReader) fill() error {
+	buf := make([]byte, 32*1024)
+	n, err := r.src.Read(buf)
+	data := append(r.pending, buf[:n]...)
+	if err == io.EOF {
+		padding := aes.BlockSize - len(data)%aes.BlockSize
+		if padding == 0 {
+			padding = aes.BlockSize
+		}
+		data = append(data, bytes.Repeat([]byte{byte(padding)}, padding)...)
+		r.out = encryptWeixinClawBotAESECBBlocks(r.block, data)
+		r.pending = nil
+		r.finished = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	encryptLen := len(data) - len(data)%aes.BlockSize
+	if encryptLen > 0 {
+		r.out = encryptWeixinClawBotAESECBBlocks(r.block, data[:encryptLen])
+	}
+	r.pending = append(r.pending[:0], data[encryptLen:]...)
+	return nil
+}
+
+func encryptWeixinClawBotAESECBBlocks(block interface{ Encrypt(dst, src []byte) }, data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	encrypted := make([]byte, len(data))
+	for offset := 0; offset < len(data); offset += aes.BlockSize {
+		block.Encrypt(encrypted[offset:offset+aes.BlockSize], data[offset:offset+aes.BlockSize])
+	}
+	return encrypted
 }
 
 func setWeixinClawBotAuthHeaders(req *http.Request, botToken string) {

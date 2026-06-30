@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -2014,15 +2015,88 @@ func TestWeixinClawBotOutboundAttachmentFallsBackToTextLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send outbound: %v", err)
 	}
-	if len(api.sends) != 1 {
+	if len(api.sends) != 2 {
 		t.Fatalf("sends=%+v", api.sends)
 	}
-	text := api.sends[0].Text
-	if !strings.Contains(text, "报告已生成") || !strings.Contains(text, "report.pdf") || !strings.Contains(text, "https://app.example/uploads/files/report.pdf") {
+	if api.sends[0].Text != "报告已生成" {
+		t.Fatalf("text=%q", api.sends[0].Text)
+	}
+	text := api.sends[1].Text
+	if !strings.Contains(text, "report.pdf") || !strings.Contains(text, "https://app.example/uploads/files/report.pdf") {
 		t.Fatalf("fallback text=%q", text)
 	}
-	if api.sends[0].ContextToken != "ctx-1" || api.sends[0].FromUserID != "wx-bot-1" || api.sends[0].ToUserID != "wx-user-1" {
-		t.Fatalf("send=%+v", api.sends[0])
+	if api.sends[1].ContextToken != "ctx-1" || api.sends[1].FromUserID != "wx-bot-1" || api.sends[1].ToUserID != "wx-user-1" {
+		t.Fatalf("send=%+v", api.sends[1])
+	}
+}
+
+func TestWeixinClawBotOutboundLocalAttachmentSendsNativeMedia(t *testing.T) {
+	t.Cleanup(func() { _ = os.RemoveAll("uploads") })
+	db := newChannelAgentTestStore()
+	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
+	db.users[9] = &types.User{ID: 9, Username: "alice", DisplayName: "Alice", AccountType: types.AccountHuman}
+	db.users[43] = &types.User{ID: 43, Username: "virtual-catsco", DisplayName: "Virtual Catsco", AccountType: types.AccountBot}
+	db.owners[43] = 7
+	entry, err := db.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:   "scene-clawbot",
+		Channel:    "weixin_clawbot",
+		AccessMode: types.ChannelAgentAccessPublic,
+		OwnerUID:   7,
+		AgentUID:   43,
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	botToken := "poll-bot-token-outbound-media"
+	tokenHash := hashWeixinClawBotToken(botToken)
+	if _, err := db.UpsertWeixinClawBotToken(&types.WeixinClawBotToken{
+		TokenHash:      tokenHash,
+		BotToken:       botToken,
+		TokenLast4:     last4(botToken),
+		Status:         types.WeixinClawBotTokenActive,
+		OwnerUID:       7,
+		SourceSceneKey: "m.clawbot",
+		ContextTokens: map[string]types.WeixinClawBotContext{
+			"wx-user-1": {ContextToken: "ctx-1", BotUserID: "wx-bot-1", UpdatedAt: time.Now()},
+		},
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	fileKey := generateFileKey(".pdf")
+	filePath := filepath.Join("uploads", "files", fileKey)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		t.Fatalf("mkdir upload dir: %v", err)
+	}
+	contents := []byte("%PDF-1.4 fake pdf")
+	if err := os.WriteFile(filePath, contents, 0644); err != nil {
+		t.Fatalf("write upload: %v", err)
+	}
+	binding := seedClawBotAgentBinding(t, db, tokenHash, "wx-user-1", 9, 43, entry)
+	api := &fakeWeixinClawBotAPI{}
+	handler := NewWeixinClawBotHandler(db, nil, WeixinClawBotConfig{WorkerEnabled: false}, api)
+
+	err = handler.SendOutboundMessage(context.Background(), binding, channelOutboundMessage{
+		Text: "报告已生成",
+		Attachments: []channelOutboundAttachment{
+			{Type: "file", Name: "report.pdf", URL: "/uploads/files/" + fileKey, MimeType: "application/pdf"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send outbound: %v", err)
+	}
+	if len(api.sends) != 1 || api.sends[0].Text != "报告已生成" {
+		t.Fatalf("text sends=%+v", api.sends)
+	}
+	if len(api.mediaSends) != 1 {
+		t.Fatalf("media sends=%+v", api.mediaSends)
+	}
+	mediaSend := api.mediaSends[0]
+	if mediaSend.ToUserID != "wx-user-1" || mediaSend.ContextToken != "ctx-1" || mediaSend.FromUserID != "wx-bot-1" {
+		t.Fatalf("media send route=%+v", mediaSend)
+	}
+	if mediaSend.Media.Type != "file" || mediaSend.Media.Name != "report.pdf" || mediaSend.Media.Path == "" || mediaSend.Media.Size != int64(len(contents)) || mediaSend.Media.ContentType != "application/pdf" {
+		t.Fatalf("media=%+v", mediaSend.Media)
 	}
 }
 
@@ -2131,6 +2205,101 @@ func TestHTTPWeixinClawBotMediaURLValidation(t *testing.T) {
 	}
 	if _, _, err := client.resolveMediaDownloadURL("http://media.example/files/a.pdf"); err == nil {
 		t.Fatalf("non-same-origin http host should be rejected")
+	}
+}
+
+func TestHTTPWeixinClawBotSendMediaMessageUploadsEncryptedFile(t *testing.T) {
+	plain := []byte("%PDF-1.4 fake pdf body")
+	filePath := filepath.Join(t.TempDir(), "report.pdf")
+	if err := os.WriteFile(filePath, plain, 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	var uploadReq map[string]interface{}
+	var sendReq map[string]interface{}
+	var encryptedUpload []byte
+	var aesKeyHex string
+	ilinkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ilink/bot/getuploadurl":
+			if err := json.NewDecoder(r.Body).Decode(&uploadReq); err != nil {
+				t.Errorf("decode upload req: %v", err)
+			}
+			aesKeyHex, _ = uploadReq["aeskey"].(string)
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ret": 0, "upload_param": "upload-param-1"})
+		case "/c2c/upload":
+			if got := r.URL.Query().Get("encrypted_query_param"); got != "upload-param-1" {
+				t.Errorf("upload param=%q", got)
+			}
+			if got := r.URL.Query().Get("filekey"); got == "" {
+				t.Errorf("missing filekey")
+			}
+			if r.ContentLength != weixinClawBotAESPaddedSize(int64(len(plain))) {
+				t.Errorf("content length=%d", r.ContentLength)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read encrypted upload: %v", err)
+			}
+			encryptedUpload = body
+			w.Header().Set("x-encrypted-param", "download-param-1")
+			w.WriteHeader(http.StatusOK)
+		case "/ilink/bot/sendmessage":
+			if err := json.NewDecoder(r.Body).Decode(&sendReq); err != nil {
+				t.Errorf("decode send req: %v", err)
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ret": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ilinkServer.Close()
+	client := newHTTPWeixinClawBotAPI(WeixinClawBotConfig{
+		ILinkBaseURL: ilinkServer.URL,
+		CDNBaseURL:   ilinkServer.URL + "/c2c",
+	})
+
+	err := client.SendMediaMessage(context.Background(), "bot-token", "wx-user-1", weixinClawBotOutboundMedia{
+		Type:        "file",
+		Name:        "report.pdf",
+		Path:        filePath,
+		ContentType: "application/pdf",
+	}, "ctx-1", "wx-bot-1")
+	if err != nil {
+		t.Fatalf("send media: %v", err)
+	}
+	if uploadReq == nil || sendReq == nil || len(encryptedUpload) == 0 {
+		t.Fatalf("missing requests upload=%+v send=%+v encrypted=%d", uploadReq, sendReq, len(encryptedUpload))
+	}
+	wantMD5, err := weixinClawBotFileMD5(filePath, int64(maxFileSize))
+	if err != nil {
+		t.Fatalf("md5: %v", err)
+	}
+	if uploadReq["rawfilemd5"] != wantMD5 || int64(uploadReq["rawsize"].(float64)) != int64(len(plain)) || int64(uploadReq["filesize"].(float64)) != weixinClawBotAESPaddedSize(int64(len(plain))) {
+		t.Fatalf("upload req=%+v", uploadReq)
+	}
+	decrypted, err := decryptWeixinClawBotMediaBody(encryptedUpload, base64.StdEncoding.EncodeToString([]byte(aesKeyHex)))
+	if err != nil {
+		t.Fatalf("decrypt upload: %v", err)
+	}
+	if !bytes.Equal(decrypted, plain) {
+		t.Fatalf("decrypted=%q want=%q", decrypted, plain)
+	}
+	msg := sendReq["msg"].(map[string]interface{})
+	if msg["to_user_id"] != "wx-user-1" || msg["from_user_id"] != "wx-bot-1" || msg["context_token"] != "ctx-1" {
+		t.Fatalf("send route=%+v", msg)
+	}
+	items := msg["item_list"].([]interface{})
+	item := items[0].(map[string]interface{})
+	fileItem := item["file_item"].(map[string]interface{})
+	media := fileItem["media"].(map[string]interface{})
+	if item["type"].(float64) != 4 || fileItem["file_name"] != "report.pdf" || fileItem["len"] != strconv.FormatInt(int64(len(plain)), 10) {
+		t.Fatalf("file item=%+v", item)
+	}
+	if media["encrypt_query_param"] != "download-param-1" || media["encrypt_type"].(float64) != 1 {
+		t.Fatalf("media=%+v", media)
+	}
+	if _, ok := media["aes_key"].(string); !ok {
+		t.Fatalf("missing aes_key media=%+v", media)
 	}
 }
 
@@ -2475,12 +2644,21 @@ type fakeWeixinClawBotAPI struct {
 	media         map[string]fakeWeixinClawBotMedia
 	downloadCalls []weixinClawBotMediaRef
 	sends         []fakeWeixinClawBotSend
+	mediaSends    []fakeWeixinClawBotMediaSend
 }
 
 type fakeWeixinClawBotSend struct {
 	Token        string
 	ToUserID     string
 	Text         string
+	ContextToken string
+	FromUserID   string
+}
+
+type fakeWeixinClawBotMediaSend struct {
+	Token        string
+	ToUserID     string
+	Media        weixinClawBotOutboundMedia
 	ContextToken string
 	FromUserID   string
 }
@@ -2531,6 +2709,17 @@ func (f *fakeWeixinClawBotAPI) SendTextMessage(ctx context.Context, botToken str
 		Token:        botToken,
 		ToUserID:     toUserID,
 		Text:         text,
+		ContextToken: contextToken,
+		FromUserID:   fromUserID,
+	})
+	return nil
+}
+
+func (f *fakeWeixinClawBotAPI) SendMediaMessage(ctx context.Context, botToken string, toUserID string, media weixinClawBotOutboundMedia, contextToken string, fromUserID string) error {
+	f.mediaSends = append(f.mediaSends, fakeWeixinClawBotMediaSend{
+		Token:        botToken,
+		ToUserID:     toUserID,
+		Media:        media,
 		ContextToken: contextToken,
 		FromUserID:   fromUserID,
 	})
