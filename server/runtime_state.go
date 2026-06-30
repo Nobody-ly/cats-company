@@ -317,6 +317,7 @@ func (s *sharedMemoryRuntimeState) registerUserDevice(ownerUID int64, req Regist
 		InstallationID: normalizeDeviceText(req.InstallationID),
 		Status:         normalizeDeviceStatus(req.Status),
 		Capabilities:   normalizeDeviceCapabilities(req.Capabilities),
+		ModelStatus:    normalizeDeviceModelStatus(req.ModelStatus, now),
 		RegisteredAt:   unixMillis(now),
 		LastSeenAt:     unixMillis(now),
 	}

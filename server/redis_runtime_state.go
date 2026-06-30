@@ -374,6 +374,7 @@ func (s *RedisRuntimeState) registerUserDevice(ownerUID int64, req RegisterUserD
 		InstallationID: normalizeDeviceText(req.InstallationID),
 		Status:         normalizeDeviceStatus(req.Status),
 		Capabilities:   normalizeDeviceCapabilities(req.Capabilities),
+		ModelStatus:    normalizeDeviceModelStatus(req.ModelStatus, now),
 		RegisteredAt:   unixMillis(now),
 		LastSeenAt:     unixMillis(now),
 	}
@@ -1242,9 +1243,9 @@ func (l redisBotBodyLease) toRuntimeLease() botBodyLease {
 }
 
 type redisDeviceRPCEnvelope struct {
-	Route redisRuntimeRoute `json:"route"`
-	Msg   *MsgDeviceRPC     `json:"msg"`
-	DeviceRPC *MsgDeviceRPC `json:"device_rpc,omitempty"`
+	Route     redisRuntimeRoute `json:"route"`
+	Msg       *MsgDeviceRPC     `json:"msg"`
+	DeviceRPC *MsgDeviceRPC     `json:"device_rpc,omitempty"`
 }
 
 type redisThinToolRPCEnvelope struct {

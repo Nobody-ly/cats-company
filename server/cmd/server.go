@@ -296,6 +296,9 @@ func main() {
 	feedbackHandler := server.NewFeedbackHandler(db)
 	relayConfigHandler := server.NewRelayConfigHandler()
 	relayKeyHandler := server.NewRelayKeyHandlerFromEnv()
+	relayKeyHandler.SetDeviceModelStatusResolver(func(uid int64) (server.DeviceModelStatus, bool) {
+		return server.LatestDeviceModelStatus(hub, uid)
+	})
 	relayAdminClient := server.NewRelayAdminClientFromEnv()
 	relayCommercialPublicEnabled := envBool("CATS_RELAY_COMMERCIAL_ENABLED")
 	relayCommercialTestUIDs := envInt64Set("CATS_RELAY_COMMERCIAL_TEST_UIDS")

@@ -9,30 +9,30 @@ import (
 
 // ClientMessage is the top-level client-to-server message envelope.
 type ClientMessage struct {
-	Hi        *MsgClientHi     `json:"hi,omitempty"`
-	Acc       *MsgClientAcc    `json:"acc,omitempty"`
-	Login     *MsgClientLogin  `json:"login,omitempty"`
-	Sub       *MsgClientSub    `json:"sub,omitempty"`
-	Pub       *MsgClientPub    `json:"pub,omitempty"`
-	Get       *MsgClientGet    `json:"get,omitempty"`
-	Set       *MsgClientSet    `json:"set,omitempty"`
-	Del       *MsgClientDel    `json:"del,omitempty"`
-	Note      *MsgClientNote   `json:"note,omitempty"`
-	Friend    *MsgClientFriend `json:"friend,omitempty"`
-	DeviceRPC *MsgDeviceRPC    `json:"device_rpc,omitempty"`
-	ThinToolRPC *MsgThinToolRPC `json:"thin_tool_rpc,omitempty"`
+	Hi          *MsgClientHi     `json:"hi,omitempty"`
+	Acc         *MsgClientAcc    `json:"acc,omitempty"`
+	Login       *MsgClientLogin  `json:"login,omitempty"`
+	Sub         *MsgClientSub    `json:"sub,omitempty"`
+	Pub         *MsgClientPub    `json:"pub,omitempty"`
+	Get         *MsgClientGet    `json:"get,omitempty"`
+	Set         *MsgClientSet    `json:"set,omitempty"`
+	Del         *MsgClientDel    `json:"del,omitempty"`
+	Note        *MsgClientNote   `json:"note,omitempty"`
+	Friend      *MsgClientFriend `json:"friend,omitempty"`
+	DeviceRPC   *MsgDeviceRPC    `json:"device_rpc,omitempty"`
+	ThinToolRPC *MsgThinToolRPC  `json:"thin_tool_rpc,omitempty"`
 }
 
 // ServerMessage is the top-level server-to-client message envelope.
 type ServerMessage struct {
-	Ctrl      *MsgServerCtrl   `json:"ctrl,omitempty"`
-	Data      *MsgServerData   `json:"data,omitempty"`
-	Pres      *MsgServerPres   `json:"pres,omitempty"`
-	Meta      *MsgServerMeta   `json:"meta,omitempty"`
-	Info      *MsgServerInfo   `json:"info,omitempty"`
-	Friend    *MsgServerFriend `json:"friend,omitempty"`
-	DeviceRPC *MsgDeviceRPC    `json:"device_rpc,omitempty"`
-	ThinToolRPC *MsgThinToolRPC `json:"thin_tool_rpc,omitempty"`
+	Ctrl        *MsgServerCtrl   `json:"ctrl,omitempty"`
+	Data        *MsgServerData   `json:"data,omitempty"`
+	Pres        *MsgServerPres   `json:"pres,omitempty"`
+	Meta        *MsgServerMeta   `json:"meta,omitempty"`
+	Info        *MsgServerInfo   `json:"info,omitempty"`
+	Friend      *MsgServerFriend `json:"friend,omitempty"`
+	DeviceRPC   *MsgDeviceRPC    `json:"device_rpc,omitempty"`
+	ThinToolRPC *MsgThinToolRPC  `json:"thin_tool_rpc,omitempty"`
 }
 
 // --- Client messages ---
@@ -46,13 +46,14 @@ type MsgClientHi struct {
 }
 
 type MsgClientHiDevice struct {
-	DeviceID       string   `json:"device_id"`
-	DisplayName    string   `json:"display_name,omitempty"`
-	BodyID         string   `json:"body_id,omitempty"`
-	InstallationID string   `json:"installation_id,omitempty"`
-	OS             string   `json:"os,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	Capabilities   []string `json:"capabilities,omitempty"`
+	DeviceID       string             `json:"device_id"`
+	DisplayName    string             `json:"display_name,omitempty"`
+	BodyID         string             `json:"body_id,omitempty"`
+	InstallationID string             `json:"installation_id,omitempty"`
+	OS             string             `json:"os,omitempty"`
+	Status         string             `json:"status,omitempty"`
+	Capabilities   []string           `json:"capabilities,omitempty"`
+	ModelStatus    *DeviceModelStatus `json:"model_status,omitempty"`
 }
 
 type MsgClientAcc struct {
