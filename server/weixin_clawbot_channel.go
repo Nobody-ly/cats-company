@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -118,6 +119,7 @@ type weixinClawBotMediaRef struct {
 	Kind        string
 	Name        string
 	URL         string
+	AESKey      string
 	MediaID     string
 	ContentType string
 	Size        int64
@@ -890,10 +892,11 @@ func weixinClawBotMediaRefFromMap(item weixinClawBotMessageItem, source string, 
 	ref := weixinClawBotMediaRef{
 		Kind:        weixinClawBotMediaKind(item.Type, source, weixinClawBotMapStringDeep(payload, 3, "mime_type", "mimeType", "content_type", "contentType", "file_type", "fileType"), weixinClawBotMapStringDeep(payload, 3, "file_name", "fileName", "filename", "name", "title", "display_name", "displayName")),
 		Name:        weixinClawBotMapStringDeep(payload, 3, "file_name", "fileName", "filename", "name", "title", "display_name", "displayName"),
-		URL:         weixinClawBotMapStringDeep(payload, 3, "download_url", "downloadUrl", "file_url", "fileUrl", "image_url", "imageUrl", "media_url", "mediaUrl", "resource_url", "resourceUrl", "url"),
+		URL:         weixinClawBotMapStringDeep(payload, 3, "download_url", "downloadUrl", "full_url", "fullUrl", "file_url", "fileUrl", "image_url", "imageUrl", "media_url", "mediaUrl", "resource_url", "resourceUrl", "url"),
+		AESKey:      weixinClawBotMapStringDeep(payload, 3, "aes_key", "aesKey"),
 		MediaID:     weixinClawBotMapStringDeep(payload, 3, "media_id", "mediaId", "file_id", "fileId", "resource_id", "resourceId", "resource_key", "resourceKey"),
 		ContentType: weixinClawBotMapStringDeep(payload, 3, "mime_type", "mimeType", "content_type", "contentType", "file_type", "fileType"),
-		Size:        weixinClawBotMapInt64Deep(payload, 3, "size", "file_size", "fileSize", "content_length", "contentLength"),
+		Size:        weixinClawBotMapInt64Deep(payload, 3, "size", "len", "length", "file_size", "fileSize", "content_length", "contentLength"),
 		ItemType:    item.Type,
 		Source:      source,
 		Raw:         weixinClawBotItemRaw(item),
@@ -988,11 +991,49 @@ func weixinClawBotItemRaw(item weixinClawBotMessageItem) json.RawMessage {
 
 func truncateWeixinClawBotRawJSON(raw json.RawMessage) string {
 	value := strings.TrimSpace(string(raw))
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err == nil {
+		if redacted, err := json.Marshal(redactWeixinClawBotRawValue(decoded)); err == nil {
+			value = string(redacted)
+		}
+	}
 	const maxRawItemLogBytes = 4096
 	if len(value) > maxRawItemLogBytes {
 		return value[:maxRawItemLogBytes] + "...(truncated)"
 	}
 	return value
+}
+
+func redactWeixinClawBotRawValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		redacted := make(map[string]interface{}, len(typed))
+		for key, entry := range typed {
+			if shouldRedactWeixinClawBotRawField(key) {
+				redacted[key] = "[redacted]"
+				continue
+			}
+			redacted[key] = redactWeixinClawBotRawValue(entry)
+		}
+		return redacted
+	case []interface{}:
+		redacted := make([]interface{}, 0, len(typed))
+		for _, entry := range typed {
+			redacted = append(redacted, redactWeixinClawBotRawValue(entry))
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
+func shouldRedactWeixinClawBotRawField(key string) bool {
+	switch weixinClawBotNormalizedKey(key) {
+	case "aeskey", "fullurl", "downloadurl", "fileurl", "imageurl", "mediaurl", "resourceurl", "url", "encryptqueryparam", "encryptedqueryparam":
+		return true
+	default:
+		return false
+	}
 }
 
 func weixinClawBotMapStringDeep(payload map[string]interface{}, depth int, keys ...string) string {
@@ -1277,11 +1318,109 @@ func (c *httpWeixinClawBotAPI) DownloadMedia(ctx context.Context, botToken strin
 	if fileName == "" {
 		fileName = "weixin-clawbot-" + ref.Kind + "-" + randomClawBotHex(4)
 	}
+	body := resp.Body
+	if strings.TrimSpace(ref.AESKey) != "" {
+		encrypted, err := readWeixinClawBotEncryptedMediaBody(resp.Body, ref.Kind)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		decrypted, err := decryptWeixinClawBotMediaBody(encrypted, ref.AESKey)
+		if err != nil {
+			return nil, err
+		}
+		body = io.NopCloser(bytes.NewReader(decrypted))
+	}
 	return &channelMediaDownload{
-		Body:        resp.Body,
+		Body:        body,
 		FileName:    fileName,
 		ContentType: contentType,
 	}, nil
+}
+
+func readWeixinClawBotEncryptedMediaBody(src io.Reader, kind string) ([]byte, error) {
+	return readWeixinClawBotEncryptedMediaBodyWithLimit(src, maxWeixinClawBotPlainMediaSize(kind))
+}
+
+func readWeixinClawBotEncryptedMediaBodyWithLimit(src io.Reader, maxPlainSize int64) ([]byte, error) {
+	if src == nil {
+		return nil, errors.New("missing weixin clawbot encrypted media body")
+	}
+	if maxPlainSize <= 0 {
+		maxPlainSize = int64(maxFileSize)
+	}
+	maxEncryptedSize := maxPlainSize + aes.BlockSize
+	limited := &io.LimitedReader{R: src, N: maxEncryptedSize + 1}
+	encrypted, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(encrypted)) > maxEncryptedSize {
+		return nil, fmt.Errorf("file too large; maximum supported size is %dMB", maxUploadSizeMB)
+	}
+	return encrypted, nil
+}
+
+func maxWeixinClawBotPlainMediaSize(kind string) int64 {
+	if strings.EqualFold(strings.TrimSpace(kind), "image") {
+		return int64(maxImageSize)
+	}
+	return int64(maxFileSize)
+}
+
+func decryptWeixinClawBotMediaBody(encrypted []byte, rawAESKey string) ([]byte, error) {
+	key, err := decodeWeixinClawBotMediaAESKey(rawAESKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(encrypted) == 0 || len(encrypted)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("invalid weixin clawbot encrypted media size: %d", len(encrypted))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	decrypted := make([]byte, len(encrypted))
+	for offset := 0; offset < len(encrypted); offset += aes.BlockSize {
+		block.Decrypt(decrypted[offset:offset+aes.BlockSize], encrypted[offset:offset+aes.BlockSize])
+	}
+	return unpadWeixinClawBotPKCS7(decrypted)
+}
+
+func decodeWeixinClawBotMediaAESKey(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("missing weixin clawbot media aes key")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode weixin clawbot media aes key: %w", err)
+	}
+	keyHex := strings.TrimSpace(string(decoded))
+	key, err := hex.DecodeString(keyHex)
+	if err == nil && len(key) == aes.BlockSize {
+		return key, nil
+	}
+	if len(decoded) == aes.BlockSize {
+		return decoded, nil
+	}
+	return nil, fmt.Errorf("invalid weixin clawbot media aes key length: decoded=%d hex=%d", len(decoded), len(key))
+}
+
+func unpadWeixinClawBotPKCS7(data []byte) ([]byte, error) {
+	if len(data) == 0 || len(data)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("invalid weixin clawbot padded media size: %d", len(data))
+	}
+	pad := int(data[len(data)-1])
+	if pad == 0 || pad > aes.BlockSize || pad > len(data) {
+		return nil, fmt.Errorf("invalid weixin clawbot media padding: %d", pad)
+	}
+	for i := len(data) - pad; i < len(data); i++ {
+		if int(data[i]) != pad {
+			return nil, errors.New("invalid weixin clawbot media padding bytes")
+		}
+	}
+	return data[:len(data)-pad], nil
 }
 
 func (c *httpWeixinClawBotAPI) mediaDownloadURLFromRef(ref weixinClawBotMediaRef) string {

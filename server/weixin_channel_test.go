@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1591,7 +1594,7 @@ func TestWeixinClawBotPollDeliversTextAndFileAttachmentBlocks(t *testing.T) {
 					ContextToken: "ctx-1",
 					ItemList: []weixinClawBotMessageItem{
 						clawBotTextItem("请看合同"),
-						clawBotFileItem(fileURL, "contract.pdf", "application/pdf"),
+						clawBotFullURLFileItem(fileURL, "contract.pdf"),
 					},
 				},
 			},
@@ -1622,7 +1625,7 @@ func TestWeixinClawBotPollDeliversTextAndFileAttachmentBlocks(t *testing.T) {
 	if url, _ := payload["url"].(string); !strings.HasPrefix(url, "/uploads/files/") {
 		t.Fatalf("url=%+v", payload["url"])
 	}
-	if len(api.downloadCalls) != 1 || api.downloadCalls[0].URL != fileURL || api.downloadCalls[0].Kind != "file" {
+	if len(api.downloadCalls) != 1 || api.downloadCalls[0].URL != fileURL || api.downloadCalls[0].Kind != "file" || api.downloadCalls[0].Size != 12 || api.downloadCalls[0].AESKey == "" {
 		t.Fatalf("download calls=%+v", api.downloadCalls)
 	}
 	stored, _ := db.GetWeixinClawBotTokenByHash(tokenHash)
@@ -2131,6 +2134,53 @@ func TestHTTPWeixinClawBotMediaURLValidation(t *testing.T) {
 	}
 }
 
+func TestDecryptWeixinClawBotMediaBody(t *testing.T) {
+	keyHex := "c2cb03434d21ad330487118c5f843966"
+	rawKey := base64.StdEncoding.EncodeToString([]byte(keyHex))
+	key, err := hex.DecodeString(keyHex)
+	if err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	plaintext := []byte("PK\x03\x04fake docx payload")
+	encrypted := encryptWeixinClawBotMediaForTest(t, key, plaintext)
+	decrypted, err := decryptWeixinClawBotMediaBody(encrypted, rawKey)
+	if err != nil {
+		t.Fatalf("decrypt media: %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Fatalf("decrypted=%x want=%x", decrypted, plaintext)
+	}
+}
+
+func TestReadWeixinClawBotEncryptedMediaBodyAppliesLimit(t *testing.T) {
+	maxPlainSize := int64(32)
+	exactLimit := bytes.Repeat([]byte{0}, int(maxPlainSize)+aes.BlockSize)
+	read, err := readWeixinClawBotEncryptedMediaBodyWithLimit(bytes.NewReader(exactLimit), maxPlainSize)
+	if err != nil {
+		t.Fatalf("read exact limit: %v", err)
+	}
+	if len(read) != len(exactLimit) {
+		t.Fatalf("read len=%d want=%d", len(read), len(exactLimit))
+	}
+	tooLarge := append(exactLimit, 0)
+	if _, err := readWeixinClawBotEncryptedMediaBodyWithLimit(bytes.NewReader(tooLarge), maxPlainSize); err == nil || !strings.Contains(err.Error(), "file too large") {
+		t.Fatalf("expected file too large, got %v", err)
+	}
+}
+
+func TestTruncateWeixinClawBotRawJSONRedactsSensitiveMediaFields(t *testing.T) {
+	raw := json.RawMessage(`{"type":4,"file_item":{"media":{"aes_key":"secret-key","full_url":"https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=secret-query","encrypted_query_param":"secret-query"},"file_name":"contract.docx"},"items":[{"download_url":"https://media.example/private"}]}`)
+	redacted := truncateWeixinClawBotRawJSON(raw)
+	for _, secret := range []string{"secret-key", "secret-query", "novac2c.cdn.weixin.qq.com", "media.example/private"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("redacted raw leaked %q: %s", secret, redacted)
+		}
+	}
+	if !strings.Contains(redacted, "contract.docx") || !strings.Contains(redacted, "[redacted]") {
+		t.Fatalf("redacted raw lost useful structure: %s", redacted)
+	}
+}
+
 func TestWeixinClawBotPollRoutesSharedTokenUsersIndependently(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}
@@ -2351,6 +2401,20 @@ func clawBotFileItem(downloadURL, name, contentType string) weixinClawBotMessage
 	})
 }
 
+func clawBotFullURLFileItem(downloadURL, name string) weixinClawBotMessageItem {
+	return clawBotItemFromPayload(map[string]interface{}{
+		"type": 4,
+		"file_item": map[string]interface{}{
+			"media": map[string]interface{}{
+				"full_url": downloadURL,
+				"aes_key":  "YzJjYjAzNDM0ZDIxYWQzMzA0ODcxMThjNWY4NDM5NjY=",
+			},
+			"file_name": name,
+			"len":       "12",
+		},
+	})
+}
+
 func clawBotImageItem(downloadURL, name, contentType string) weixinClawBotMessageItem {
 	return clawBotItemFromPayload(map[string]interface{}{
 		"type": 2,
@@ -2378,6 +2442,22 @@ func clawBotUnknownItem() weixinClawBotMessageItem {
 		"type":          99,
 		"mystery_field": "opaque-value",
 	})
+}
+
+func encryptWeixinClawBotMediaForTest(t *testing.T, key []byte, plaintext []byte) []byte {
+	t.Helper()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+	pad := aes.BlockSize - len(plaintext)%aes.BlockSize
+	padded := append([]byte{}, plaintext...)
+	padded = append(padded, bytes.Repeat([]byte{byte(pad)}, pad)...)
+	encrypted := make([]byte, len(padded))
+	for offset := 0; offset < len(padded); offset += aes.BlockSize {
+		block.Encrypt(encrypted[offset:offset+aes.BlockSize], padded[offset:offset+aes.BlockSize])
+	}
+	return encrypted
 }
 
 func clawBotItemFromPayload(payload map[string]interface{}) weixinClawBotMessageItem {

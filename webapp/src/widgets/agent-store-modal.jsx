@@ -1081,7 +1081,7 @@ function AgentEntryModal({ bot, onClose, onCopy, copiedField }) {
               )}
               {!clawBotMobileLoading && !clawBotMobileError && !clawBotMobileQRValue && (
                 <div style={{ background: 'var(--v3-bg-app)', border: '1px solid var(--v3-border)', borderRadius: 8, padding: 10, color: 'var(--v3-text-main)', fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
-                可选环境变量：CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL、CATSCO_WEIXIN_CLAWBOT_BOT_TYPE<br />
+                可选环境变量：CATSCO_WEIXIN_CLAWBOT_ILINK_BASE_URL、CATSCO_WEIXIN_CLAWBOT_BOT_TYPE、CATSCO_WEIXIN_CLAWBOT_MEDIA_HOST_ALLOWLIST<br />
                 默认使用 https://ilinkai.weixin.qq.com 和 bot_type=3。
                 </div>
               )}
