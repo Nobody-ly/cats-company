@@ -71,6 +71,10 @@ func deliverInboundChannelMessageToAgent(db store.Store, hub *Hub, actorUID, age
 }
 
 func deliverInboundChannelTextToGroup(db store.Store, hub *Hub, canonicalUID int64, binding *types.ChannelGroupBinding, text, clientMsgID, source string, metadata map[string]interface{}) error {
+	return deliverInboundChannelMessageToGroup(db, hub, canonicalUID, binding, text, nil, clientMsgID, source, metadata)
+}
+
+func deliverInboundChannelMessageToGroup(db store.Store, hub *Hub, canonicalUID int64, binding *types.ChannelGroupBinding, text string, files []uploadPayload, clientMsgID, source string, metadata map[string]interface{}) error {
 	if canonicalUID <= 0 || binding == nil || strings.TrimSpace(binding.TopicID) == "" {
 		return errors.New("invalid channel group binding")
 	}
@@ -83,13 +87,23 @@ func deliverInboundChannelTextToGroup(db store.Store, hub *Hub, canonicalUID int
 	if err := db.CreateTopic(binding.TopicID, "group", canonicalUID); err != nil {
 		return fmt.Errorf("create group topic: %w", err)
 	}
-	rawContent, _ := json.Marshal(text)
+	displayText := strings.TrimSpace(text)
+	if displayText == "" {
+		displayText = channelMediaDisplaySummary(files)
+	}
+	rawContent, _ := json.Marshal(displayText)
+	contentBlocks := channelInboundContentBlocks(text, files)
+	messageType := "text"
+	if strings.TrimSpace(text) == "" && len(files) == 1 {
+		messageType = files[0].Type
+	}
 	payload, err := normalizeMessageRequest(&SendMessageRequest{
-		TopicID:     binding.TopicID,
-		ClientMsgID: clientMsgID,
-		Content:     rawContent,
-		Type:        "text",
-		Metadata:    metadata,
+		TopicID:       binding.TopicID,
+		ClientMsgID:   clientMsgID,
+		Content:       rawContent,
+		Type:          messageType,
+		ContentBlocks: contentBlocks,
+		Metadata:      metadata,
 	})
 	if err != nil {
 		return err
