@@ -554,7 +554,7 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 	case "help":
 		return h.replyToFeishu(ctx, replyIDType, replyID, feishuGatewayHelpText())
 	case "list":
-		return h.replyToFeishu(ctx, replyIDType, replyID, h.formatFeishuRosterReply(appID))
+		return h.replyToFeishu(ctx, replyIDType, replyID, h.formatFeishuRosterReply(appID, channelUserID))
 	case "current":
 		return h.replyToFeishuSafely(ctx, channelUserID, event.Message.ChatID, chatType, h.formatFeishuCurrentReply(appID, channelUserID, event.Message.ChatID, chatType, actorUID))
 	case "bind":
@@ -574,7 +574,7 @@ func (h *FeishuChannelHandler) handleMessageEvent(ctx context.Context, env *feis
 		return err
 	}
 	if binding == nil {
-		return h.replyToFeishu(ctx, replyIDType, replyID, "请先选择一个虚拟员工。\n"+h.formatFeishuRosterReply(appID))
+		return h.replyToFeishu(ctx, replyIDType, replyID, "请先选择一个虚拟员工。\n"+h.formatFeishuRosterReply(appID, channelUserID))
 	}
 	if msg, ok, err := h.feishuBindingDeliverableMessage(binding); err != nil {
 		return err
@@ -661,6 +661,9 @@ func parseFeishuGatewayCommand(text string) feishuGatewayCommand {
 	case "设备授权", "绑定设备", "/device":
 		return feishuGatewayCommand{Kind: "device", Trigger: true}
 	}
+	if n, err := strconv.Atoi(lower); err == nil && n > 0 {
+		return feishuGatewayCommand{Kind: "select", Target: text, Trigger: true}
+	}
 	for _, prefix := range []string{"切换到", "切换 ", "选择 ", "/use ", "use "} {
 		if strings.HasPrefix(lower, strings.ToLower(prefix)) {
 			return feishuGatewayCommand{Kind: "select", Target: strings.TrimSpace(text[len(prefix):]), Trigger: true}
@@ -711,56 +714,134 @@ func stripFeishuLeadingMentions(text string) string {
 	return text
 }
 
-func (h *FeishuChannelHandler) listFeishuRoster(appID string) ([]feishuRosterItem, error) {
+func (h *FeishuChannelHandler) listFeishuRoster(appID, channelUserID string) ([]feishuRosterItem, bool, error) {
 	bindings, ok := h.db.(store.ChannelAgentBindingStore)
 	if !ok {
-		return nil, errors.New("channel binding store not configured")
+		return nil, false, errors.New("channel binding store not configured")
+	}
+	canonicalUID, hasCanonical, err := h.resolveFeishuRosterCanonicalUID(bindings, appID, channelUserID)
+	if err != nil {
+		return nil, false, err
 	}
 	entries, err := bindings.ListChannelAgentEntriesByChannelApp("feishu", appID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	entryByAgent := make(map[int64]*types.ChannelAgentEntry)
+	seen := make(map[int64]struct{})
 	items := make([]feishuRosterItem, 0, len(entries))
 	for _, entry := range entries {
 		if entry == nil || entry.Status != "active" || entry.AgentUID <= 0 {
+			continue
+		}
+		if !channelEntryAgentAvailable(h.db, entry) {
+			continue
+		}
+		if _, ok := entryByAgent[entry.AgentUID]; !ok {
+			entryByAgent[entry.AgentUID] = entry
+		}
+		if !h.feishuRosterEntryVisible(entry, canonicalUID, hasCanonical) {
 			continue
 		}
 		agent, err := h.db.GetUser(entry.AgentUID)
 		if err != nil || agent == nil || agent.AccountType != types.AccountBot {
 			continue
 		}
+		if _, ok := seen[agent.ID]; ok {
+			continue
+		}
 		name := displayNameOrUsername(agent.DisplayName, agent.Username)
 		items = append(items, feishuRosterItem{Entry: entry, Agent: agent, Name: name})
+		seen[agent.ID] = struct{}{}
 	}
-	return items, nil
+	if hasCanonical {
+		ownedBots, err := h.db.ListBotsByOwner(canonicalUID)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, bot := range ownedBots {
+			agentUID := mapID(bot["id"])
+			if agentUID <= 0 {
+				continue
+			}
+			if _, ok := seen[agentUID]; ok {
+				continue
+			}
+			agent, err := h.db.GetUser(agentUID)
+			if err != nil || agent == nil || agent.AccountType != types.AccountBot || agent.State != 0 {
+				continue
+			}
+			if ownerUID, err := h.db.GetBotOwner(agentUID); err != nil || ownerUID != canonicalUID {
+				continue
+			}
+			name := displayNameOrUsername(agent.DisplayName, agent.Username)
+			items = append(items, feishuRosterItem{Entry: entryByAgent[agentUID], Agent: agent, Name: name})
+			seen[agentUID] = struct{}{}
+		}
+	}
+	return items, hasCanonical, nil
 }
 
-func (h *FeishuChannelHandler) formatFeishuRosterReply(appID string) string {
-	items, err := h.listFeishuRoster(appID)
+func (h *FeishuChannelHandler) resolveFeishuRosterCanonicalUID(bindings store.ChannelAgentBindingStore, appID, channelUserID string) (int64, bool, error) {
+	if bindings == nil || strings.TrimSpace(channelUserID) == "" {
+		return 0, false, nil
+	}
+	identity, err := bindings.ResolveChannelAgentBindingForChannelUser("feishu", strings.TrimSpace(appID), strings.TrimSpace(channelUserID))
+	if err != nil {
+		return 0, false, err
+	}
+	if identity == nil || identity.CanonicalUID <= 0 {
+		return 0, false, nil
+	}
+	return identity.CanonicalUID, true, nil
+}
+
+func (h *FeishuChannelHandler) feishuRosterEntryVisible(entry *types.ChannelAgentEntry, canonicalUID int64, hasCanonical bool) bool {
+	if entry == nil {
+		return false
+	}
+	if types.NormalizeChannelAgentAccessMode(entry.AccessMode) == types.ChannelAgentAccessPublic {
+		return true
+	}
+	if !hasCanonical || canonicalUID <= 0 {
+		return false
+	}
+	status, _, err := channelBindingStatusForEntryCanonicalUser(h.db, entry, canonicalUID)
+	return err == nil && status == types.ChannelAgentBindingActive
+}
+
+func (h *FeishuChannelHandler) formatFeishuRosterReply(appID, channelUserID string) string {
+	items, hasCanonical, err := h.listFeishuRoster(appID, channelUserID)
 	if err != nil {
 		log.Printf("list feishu roster failed: %v", err)
 		return "暂时无法读取虚拟员工列表，请稍后重试。"
 	}
 	if len(items) == 0 {
-		return "当前飞书应用还没有可用的虚拟员工入口。请先在 CatsCo 中为虚拟员工生成飞书入口码。"
+		if !hasCanonical {
+			return "当前只显示公开虚拟员工，但暂时没有可用入口。未能识别到这次移动端使用码对应的 CatsCo 账号；如果你刚从网页端扫码进入，请重新打开最新移动端使用码，或联系管理员检查移动端自动识别配置。"
+		}
+		return "当前没有可用的虚拟员工。请先在 CatsCo 中创建或添加虚拟员工。"
 	}
 	var b strings.Builder
 	b.WriteString("可用虚拟员工：")
 	for i, item := range items {
 		fmt.Fprintf(&b, "\n%d. %s", i+1, item.Name)
 	}
-	b.WriteString("\n\n发送「切换到 员工名」选择当前员工。")
+	b.WriteString("\n\n发送编号或「切换到 员工名」选择当前员工。")
+	if !hasCanonical {
+		b.WriteString("\n当前只显示公开入口；如果你刚从 CatsCo 网页端生成移动端使用码进入但没有看到自己的机器人，请重新打开最新移动端使用码，或联系管理员检查移动端自动识别配置。需要手动确认身份时，请先选择一个公开入口后发送「绑定账号」。")
+	}
 	return b.String()
 }
 
-func (h *FeishuChannelHandler) findFeishuRosterEntry(appID, target string) (*feishuRosterItem, string, error) {
-	items, err := h.listFeishuRoster(appID)
+func (h *FeishuChannelHandler) findFeishuRosterEntry(appID, channelUserID, target string) (*feishuRosterItem, string, error) {
+	items, _, err := h.listFeishuRoster(appID, channelUserID)
 	if err != nil {
 		return nil, "", err
 	}
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return nil, "请告诉我要切换到哪个虚拟员工。\n" + h.formatFeishuRosterReply(appID), nil
+		return nil, "请告诉我要切换到哪个虚拟员工。\n" + h.formatFeishuRosterReply(appID, channelUserID), nil
 	}
 	if n, err := strconv.Atoi(target); err == nil && n >= 1 && n <= len(items) {
 		return &items[n-1], "", nil
@@ -791,15 +872,25 @@ func (h *FeishuChannelHandler) findFeishuRosterEntry(appID, target string) (*fei
 		}
 		return nil, b.String(), nil
 	}
-	return nil, "没有找到这个虚拟员工。\n" + h.formatFeishuRosterReply(appID), nil
+	return nil, "没有找到这个虚拟员工。\n" + h.formatFeishuRosterReply(appID, channelUserID), nil
 }
 
 func (h *FeishuChannelHandler) selectFeishuAgent(appID, channelUserID, conversationID, conversationType string, actorUID int64, target string) (string, error) {
-	item, message, err := h.findFeishuRosterEntry(appID, target)
+	item, message, err := h.findFeishuRosterEntry(appID, channelUserID, target)
 	if err != nil || item == nil {
 		return message, err
 	}
-	binding, _, err := h.bindOrRequestFeishuIdentity(item.Entry, actorUID, channelUserID, conversationID, conversationType)
+	entry := item.Entry
+	if entry == nil {
+		entry, err = h.ensureFeishuOwnerRosterEntry(appID, channelUserID, item)
+		if err != nil {
+			return "", err
+		}
+		if entry == nil {
+			return "暂时无法为这个虚拟员工生成飞书入口，请回到 CatsCo 网页端重新生成移动端使用码。", nil
+		}
+	}
+	binding, _, err := h.bindOrRequestFeishuIdentity(entry, actorUID, channelUserID, conversationID, conversationType)
 	if err != nil {
 		return "", err
 	}
@@ -817,6 +908,33 @@ func (h *FeishuChannelHandler) selectFeishuAgent(appID, channelUserID, conversat
 		return fmt.Sprintf("已选择「%s」。\n%s", item.Name, msg), nil
 	}
 	return fmt.Sprintf("已切换到「%s」。现在可以直接提问；如需使用你的电脑文件，请发送「设备授权」。", item.Name), nil
+}
+
+func (h *FeishuChannelHandler) ensureFeishuOwnerRosterEntry(appID, channelUserID string, item *feishuRosterItem) (*types.ChannelAgentEntry, error) {
+	if item == nil || item.Agent == nil || item.Agent.ID <= 0 {
+		return nil, nil
+	}
+	bindings, ok := h.db.(store.ChannelAgentBindingStore)
+	if !ok {
+		return nil, errors.New("channel binding store not configured")
+	}
+	canonicalUID, hasCanonical, err := h.resolveFeishuRosterCanonicalUID(bindings, appID, channelUserID)
+	if err != nil || !hasCanonical {
+		return nil, err
+	}
+	ownerUID, err := h.db.GetBotOwner(item.Agent.ID)
+	if err != nil || ownerUID != canonicalUID {
+		return nil, err
+	}
+	return bindings.EnsureChannelAgentEntry(&types.ChannelAgentEntry{
+		SceneKey:     mustGenerateSceneKey(),
+		Channel:      "feishu",
+		ChannelAppID: appID,
+		AccessMode:   types.ChannelAgentAccessApprovalRequired,
+		OwnerUID:     canonicalUID,
+		AgentUID:     item.Agent.ID,
+		Status:       "active",
+	})
 }
 
 func (h *FeishuChannelHandler) upsertFeishuRoute(appID, channelUserID, conversationID, conversationType string, actorUID, agentUID int64, source string) (*types.ChannelAgentRoute, error) {
@@ -1036,7 +1154,7 @@ func (h *FeishuChannelHandler) formatFeishuCurrentReply(appID, channelUserID, co
 		return "暂时无法读取当前虚拟员工，请稍后重试。"
 	}
 	if binding == nil {
-		return "当前还没有选择虚拟员工。\n" + h.formatFeishuRosterReply(appID)
+		return "当前还没有选择虚拟员工。\n" + h.formatFeishuRosterReply(appID, channelUserID)
 	}
 	agent, _ := h.db.GetUser(binding.AgentUID)
 	name := "当前虚拟员工"
@@ -1055,7 +1173,7 @@ func (h *FeishuChannelHandler) formatFeishuCurrentReply(appID, channelUserID, co
 func (h *FeishuChannelHandler) formatFeishuAccountBindingReply(appID, channelUserID, conversationID, conversationType string, actorUID int64) string {
 	binding, err := h.resolveCurrentFeishuBinding(appID, channelUserID, conversationID, conversationType, actorUID)
 	if err != nil || binding == nil {
-		return "请先选择一个虚拟员工，再绑定 CatsCo 账号。\n" + h.formatFeishuRosterReply(appID)
+		return "请先选择一个虚拟员工，再绑定 CatsCo 账号。\n" + h.formatFeishuRosterReply(appID, channelUserID)
 	}
 	if channelBindingNeedsCatsCoLogin(binding) {
 		return channelBindingDeviceLinkGuidance(h.db, nil, binding)
@@ -1066,7 +1184,7 @@ func (h *FeishuChannelHandler) formatFeishuAccountBindingReply(appID, channelUse
 func (h *FeishuChannelHandler) formatFeishuDeviceBindingReply(appID, channelUserID, conversationID, conversationType string, actorUID int64) string {
 	binding, err := h.resolveCurrentFeishuBinding(appID, channelUserID, conversationID, conversationType, actorUID)
 	if err != nil || binding == nil {
-		return "请先选择一个虚拟员工，再进行设备授权。\n" + h.formatFeishuRosterReply(appID)
+		return "请先选择一个虚拟员工，再进行设备授权。\n" + h.formatFeishuRosterReply(appID, channelUserID)
 	}
 	if channelBindingNeedsCatsCoLogin(binding) {
 		return channelBindingDeviceLinkGuidance(h.db, nil, binding)
