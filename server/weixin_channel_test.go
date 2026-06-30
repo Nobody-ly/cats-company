@@ -2152,6 +2152,35 @@ func TestDecryptWeixinClawBotMediaBody(t *testing.T) {
 	}
 }
 
+func TestReadWeixinClawBotEncryptedMediaBodyAppliesLimit(t *testing.T) {
+	maxPlainSize := int64(32)
+	exactLimit := bytes.Repeat([]byte{0}, int(maxPlainSize)+aes.BlockSize)
+	read, err := readWeixinClawBotEncryptedMediaBodyWithLimit(bytes.NewReader(exactLimit), maxPlainSize)
+	if err != nil {
+		t.Fatalf("read exact limit: %v", err)
+	}
+	if len(read) != len(exactLimit) {
+		t.Fatalf("read len=%d want=%d", len(read), len(exactLimit))
+	}
+	tooLarge := append(exactLimit, 0)
+	if _, err := readWeixinClawBotEncryptedMediaBodyWithLimit(bytes.NewReader(tooLarge), maxPlainSize); err == nil || !strings.Contains(err.Error(), "file too large") {
+		t.Fatalf("expected file too large, got %v", err)
+	}
+}
+
+func TestTruncateWeixinClawBotRawJSONRedactsSensitiveMediaFields(t *testing.T) {
+	raw := json.RawMessage(`{"type":4,"file_item":{"media":{"aes_key":"secret-key","full_url":"https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=secret-query","encrypted_query_param":"secret-query"},"file_name":"contract.docx"},"items":[{"download_url":"https://media.example/private"}]}`)
+	redacted := truncateWeixinClawBotRawJSON(raw)
+	for _, secret := range []string{"secret-key", "secret-query", "novac2c.cdn.weixin.qq.com", "media.example/private"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("redacted raw leaked %q: %s", secret, redacted)
+		}
+	}
+	if !strings.Contains(redacted, "contract.docx") || !strings.Contains(redacted, "[redacted]") {
+		t.Fatalf("redacted raw lost useful structure: %s", redacted)
+	}
+}
+
 func TestWeixinClawBotPollRoutesSharedTokenUsersIndependently(t *testing.T) {
 	db := newChannelAgentTestStore()
 	db.users[7] = &types.User{ID: 7, Username: "owner", DisplayName: "Owner", AccountType: types.AccountHuman}

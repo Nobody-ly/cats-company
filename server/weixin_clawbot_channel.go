@@ -991,11 +991,49 @@ func weixinClawBotItemRaw(item weixinClawBotMessageItem) json.RawMessage {
 
 func truncateWeixinClawBotRawJSON(raw json.RawMessage) string {
 	value := strings.TrimSpace(string(raw))
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err == nil {
+		if redacted, err := json.Marshal(redactWeixinClawBotRawValue(decoded)); err == nil {
+			value = string(redacted)
+		}
+	}
 	const maxRawItemLogBytes = 4096
 	if len(value) > maxRawItemLogBytes {
 		return value[:maxRawItemLogBytes] + "...(truncated)"
 	}
 	return value
+}
+
+func redactWeixinClawBotRawValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		redacted := make(map[string]interface{}, len(typed))
+		for key, entry := range typed {
+			if shouldRedactWeixinClawBotRawField(key) {
+				redacted[key] = "[redacted]"
+				continue
+			}
+			redacted[key] = redactWeixinClawBotRawValue(entry)
+		}
+		return redacted
+	case []interface{}:
+		redacted := make([]interface{}, 0, len(typed))
+		for _, entry := range typed {
+			redacted = append(redacted, redactWeixinClawBotRawValue(entry))
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
+func shouldRedactWeixinClawBotRawField(key string) bool {
+	switch weixinClawBotNormalizedKey(key) {
+	case "aeskey", "fullurl", "downloadurl", "fileurl", "imageurl", "mediaurl", "resourceurl", "url", "encryptqueryparam", "encryptedqueryparam":
+		return true
+	default:
+		return false
+	}
 }
 
 func weixinClawBotMapStringDeep(payload map[string]interface{}, depth int, keys ...string) string {
@@ -1282,7 +1320,7 @@ func (c *httpWeixinClawBotAPI) DownloadMedia(ctx context.Context, botToken strin
 	}
 	body := resp.Body
 	if strings.TrimSpace(ref.AESKey) != "" {
-		encrypted, err := io.ReadAll(resp.Body)
+		encrypted, err := readWeixinClawBotEncryptedMediaBody(resp.Body, ref.Kind)
 		resp.Body.Close()
 		if err != nil {
 			return nil, err
@@ -1298,6 +1336,36 @@ func (c *httpWeixinClawBotAPI) DownloadMedia(ctx context.Context, botToken strin
 		FileName:    fileName,
 		ContentType: contentType,
 	}, nil
+}
+
+func readWeixinClawBotEncryptedMediaBody(src io.Reader, kind string) ([]byte, error) {
+	return readWeixinClawBotEncryptedMediaBodyWithLimit(src, maxWeixinClawBotPlainMediaSize(kind))
+}
+
+func readWeixinClawBotEncryptedMediaBodyWithLimit(src io.Reader, maxPlainSize int64) ([]byte, error) {
+	if src == nil {
+		return nil, errors.New("missing weixin clawbot encrypted media body")
+	}
+	if maxPlainSize <= 0 {
+		maxPlainSize = int64(maxFileSize)
+	}
+	maxEncryptedSize := maxPlainSize + aes.BlockSize
+	limited := &io.LimitedReader{R: src, N: maxEncryptedSize + 1}
+	encrypted, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(encrypted)) > maxEncryptedSize {
+		return nil, fmt.Errorf("file too large; maximum supported size is %dMB", maxUploadSizeMB)
+	}
+	return encrypted, nil
+}
+
+func maxWeixinClawBotPlainMediaSize(kind string) int64 {
+	if strings.EqualFold(strings.TrimSpace(kind), "image") {
+		return int64(maxImageSize)
+	}
+	return int64(maxFileSize)
 }
 
 func decryptWeixinClawBotMediaBody(encrypted []byte, rawAESKey string) ([]byte, error) {
