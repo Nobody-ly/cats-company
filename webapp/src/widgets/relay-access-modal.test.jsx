@@ -87,7 +87,7 @@ describe('RelayAccessModal commercial rollout', () => {
 
     expect(container.textContent).toContain('套餐与邀请码');
     expect(container.textContent).toContain('未开放');
-    expect(container.textContent).toContain('当前仍使用默认 relay 额度和现有 Key');
+    expect(container.textContent).toContain('当前仍使用默认模型服务额度和现有 Key');
     expect(container.textContent).toContain('套餐和邀请码仍在内部测试');
     expect(container.querySelector('.relay-access-invite-form')).toBeNull();
   });
@@ -199,7 +199,7 @@ describe('RelayAccessModal commercial rollout', () => {
     await renderModal();
 
     expect(container.textContent).toContain('当前使用自定义模型');
-    expect(container.textContent).toContain('不消耗 CatsCo 中转套餐');
+    expect(container.textContent).toContain('不消耗 CatsCo 模型服务套餐');
   });
 
   it('shows explicit over-limit warning for the current relay model', async () => {
@@ -242,6 +242,6 @@ describe('RelayAccessModal commercial rollout', () => {
     await renderModal();
 
     expect(container.textContent).toContain('当前模型未设置额度');
-    expect(container.textContent).toContain('等待 relay 限额同步');
+    expect(container.textContent).toContain('等待模型限额同步');
   });
 });

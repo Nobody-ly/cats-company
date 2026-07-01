@@ -823,7 +823,7 @@
     </section>
 
     <section class="admin-view" data-admin-view="commercial">
-      <h2>中转商业化测试</h2>
+      <h2>模型服务商业化测试</h2>
       <p>先建立套餐、邀请码和人工发放账本；模型额度通过“预演 -> 同步”写入 relay。现有自动建 Key、Bifrost 转发和用户默认额度不会被创建套餐这一步直接改动。</p>
       <div class="commercial-status-grid" id="commercial-status-grid" aria-live="polite">
         <div class="commercial-status-card">
@@ -1614,7 +1614,7 @@ http://127.0.0.1:26061/local/account-admin</code>
     function renderCommercialInvites(invites) {
       commercialInvites = Array.isArray(invites) ? invites : [];
       if (!commercialInvites.length) {
-        commercialInviteList.innerHTML = '<div class="commercial-item"><div><strong>暂无邀请码</strong><div class="commercial-meta">创建后用户可在中转页兑换。</div></div></div>';
+        commercialInviteList.innerHTML = '<div class="commercial-item"><div><strong>暂无邀请码</strong><div class="commercial-meta">创建后用户可在模型服务页兑换。</div></div></div>';
         updateCommercialStats();
         return;
       }

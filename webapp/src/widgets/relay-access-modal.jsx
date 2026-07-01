@@ -183,7 +183,7 @@ function usageResetInfo(summary) {
   if (summary.source === 'custom' || summary.status === 'custom') {
     return {
       title: '自定义模型',
-      detail: '不使用 CatsCo 中转额度',
+      detail: '不使用 CatsCo 模型服务额度',
       note: '自定义模型的额度和重置时间由你自己的服务商决定。',
     };
   }
@@ -243,7 +243,7 @@ function currentQuotaDisplay(summary, fallbackModel, commercialEnabled) {
       percent: 0,
       note: commercialEnabled
         ? '如果刚切换模型，数据可能延迟几分钟刷新。'
-        : '当前仍可使用管理员默认 relay 额度或自定义模型。',
+        : '当前仍可使用管理员默认模型服务额度或自定义模型。',
     };
   }
   if (summary.source === 'custom' || summary.status === 'custom') {
@@ -251,10 +251,10 @@ function currentQuotaDisplay(summary, fallbackModel, commercialEnabled) {
       className: 'custom',
       model: '自定义模型',
       title: '当前使用自定义模型',
-      meta: '不消耗 CatsCo 中转套餐',
+      meta: '不消耗 CatsCo 模型服务套餐',
       detail: '额度由你自己的服务商决定',
       percent: 0,
-      note: '切回 CatsCo 中转模型后，这里会显示对应模型的剩余额度。',
+      note: '切回 CatsCo 模型服务后，这里会显示对应模型的剩余额度。',
     };
   }
 
@@ -267,7 +267,7 @@ function currentQuotaDisplay(summary, fallbackModel, commercialEnabled) {
       model: summary.model || fallbackModel,
       title: '当前模型未设置额度',
       meta: `${summary.provider ? `${summary.provider} · ` : ''}已用 ${formatCNY(used)} CNY`,
-      detail: '等待 relay 限额同步',
+      detail: '等待模型限额同步',
       percent: 0,
       note: '管理员同步模型额度后，这里会显示剩余额度和用量百分比。',
     };
@@ -292,7 +292,7 @@ function budgetUsageMeta(model, amount, usageByModel) {
   const { loading, summary: usage } = usageStateForModel(usageByModel, model);
   if (loading) return '用量读取中';
   if (!usage) return '未同步到 relay';
-  if (usage.source === 'custom' || usage.status === 'custom') return '自定义模型不计入中转套餐';
+  if (usage.source === 'custom' || usage.status === 'custom') return '自定义模型不计入模型服务套餐';
   const relayLimit = Number(usage.limit_cny || 0);
   if (!usage.model || relayLimit <= 0) return '未同步到 relay';
   const used = Math.max(0, Number(usage.used_cny || 0));
@@ -417,7 +417,7 @@ export default function RelayAccessModal({ onClose }) {
     const portalWindow = window.open('about:blank', '_blank');
     if (portalWindow) {
       portalWindow.opener = null;
-      portalWindow.document.title = '正在打开 CatsCo 中转站';
+      portalWindow.document.title = '正在打开 CatsCo 模型服务';
     }
     const navigatePortal = (url) => {
       if (portalWindow) {
@@ -435,10 +435,10 @@ export default function RelayAccessModal({ onClose }) {
         navigatePortal(session.url);
         return;
       }
-      throw new Error('中转站登录链接生成失败');
+      throw new Error('模型服务登录链接生成失败');
     } catch (err) {
       const fallback = config.docs_url || config.base_url || FALLBACK_CONFIG.docs_url;
-      setError(err.message || '自动登录中转站失败，已打开普通页面');
+      setError(err.message || '自动登录模型服务失败，已打开普通页面');
       navigatePortal(fallback);
     } finally {
       setActionLoading('');
@@ -600,11 +600,11 @@ export default function RelayAccessModal({ onClose }) {
       <div className="oc-modal relay-access-modal" onClick={(event) => event.stopPropagation()}>
         <div className="oc-modal-header relay-access-header">
           <div>
-            <h3>CatsCo 中转站</h3>
+            <h3>CatsCo 模型服务</h3>
             <p>
               {config.self_service_enabled
-                ? '生成并管理自己的中转 Key，接到第三方客户端或 CatsCo 自定义模型。'
-                : '查看中转连接地址，并使用管理员发放的访问凭证。'}
+                ? '生成并管理自己的模型服务 Key，接到第三方客户端或 CatsCo 自定义模型。'
+                : '查看模型服务连接地址，并使用管理员发放的访问凭证。'}
             </p>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭">
@@ -620,7 +620,7 @@ export default function RelayAccessModal({ onClose }) {
             <div className="relay-access-hero-main">
               <span className="relay-access-summary-icon"><Server size={18} /></span>
               <div>
-                <div className="relay-access-eyebrow">当前中转</div>
+                <div className="relay-access-eyebrow">模型服务</div>
                 <div className="relay-access-title">{config.base_url}</div>
                 <div className="oc-settings-secondary">{currentModelText(currentUsage, config.default_model)}</div>
               </div>
@@ -643,7 +643,7 @@ export default function RelayAccessModal({ onClose }) {
                   onClick={openRelayPortal}
                   disabled={actionLoading === 'portal'}
                 >
-                  {actionLoading === 'portal' ? '登录中...' : '打开中转站'}
+                  {actionLoading === 'portal' ? '登录中...' : '打开模型服务'}
                   <ExternalLink size={14} />
                 </button>
               )}
@@ -657,7 +657,7 @@ export default function RelayAccessModal({ onClose }) {
                 <div className="oc-settings-secondary">
                   {commercialEnabled
                     ? summarizeCommercial(commercialSummary)
-                    : '套餐兑换暂未开放；当前仍使用默认 relay 额度和现有 Key。'}
+                    : '套餐兑换暂未开放；当前仍使用默认模型服务额度和现有 Key。'}
                 </div>
               </div>
               <span className={`relay-access-state ${commercialEnabled ? 'active' : 'inactive'}`}>
@@ -760,13 +760,13 @@ export default function RelayAccessModal({ onClose }) {
             ) : (
               <div className="relay-access-token-note">
                 <Gift size={16} />
-                <span>{commercial?.note || '套餐和邀请码仍在内部测试。现在不影响你的默认 relay 额度、Key 和模型调用。'}</span>
+                <span>{commercial?.note || '套餐和邀请码仍在内部测试。现在不影响你的默认模型服务额度、Key 和模型调用。'}</span>
               </div>
             )}
             {commercialEnabled && (
               <div className="oc-settings-secondary">
                 {commercialEnforced
-                  ? '套餐额度已接入 relay 模型限额；管理员仍可在后台手动调额或重置用量。'
+                  ? '套餐额度已接入模型限额；管理员仍可在后台手动调额或重置用量。'
                   : (commercial?.note || '套餐额度先记录在账本里；需要管理员后台对账/同步后，才会成为 relay 真实模型限额。')}
               </div>
             )}
@@ -806,7 +806,7 @@ export default function RelayAccessModal({ onClose }) {
                 <div className="relay-access-title">我的 Key</div>
                 <div className="oc-settings-secondary">
                   {config.self_service_enabled
-                    ? '每个账号一把中转 Key，用于第三方客户端或 CatsCo 自定义模型。'
+                    ? '每个账号一把模型服务 Key，用于第三方客户端或 CatsCo 自定义模型。'
                     : '如需访问凭证，请联系管理员发放或重置。'}
                 </div>
               </div>
@@ -828,7 +828,7 @@ export default function RelayAccessModal({ onClose }) {
               <div className="relay-access-empty-key">
                 <KeyRound size={18} />
                 <div>
-                  <div className="relay-access-title">还没有中转 Key</div>
+                  <div className="relay-access-title">还没有模型服务 Key</div>
                   <div className="oc-settings-secondary">生成后只显示一次明文，请立刻复制到需要使用的客户端。</div>
                 </div>
                 <button type="button" className="relay-access-primary-btn" disabled={busy} onClick={createKey}>
