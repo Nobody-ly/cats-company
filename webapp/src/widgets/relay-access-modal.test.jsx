@@ -6,6 +6,7 @@ jest.mock('../api', () => ({
     getRelayConfig: jest.fn(),
     getRelayKey: jest.fn(),
     getRelayCommercial: jest.fn(),
+    getRelayUsage: jest.fn(),
     createRelaySession: jest.fn(),
     createRelayKey: jest.fn(),
     rotateRelayKey: jest.fn(),
@@ -34,6 +35,18 @@ describe('RelayAccessModal commercial rollout', () => {
       ],
     });
     api.getRelayKey.mockResolvedValue({ key: null });
+    api.getRelayUsage.mockResolvedValue({
+      configured: true,
+      summary: {
+        source: 'relay',
+        model: 'MiniMax-M3',
+        used_cny: 125,
+        limit_cny: 500,
+        remaining_cny: 375,
+        percent: 25,
+        status: 'normal',
+      },
+    });
     api.getRelayCommercial.mockResolvedValue({
       enabled: false,
       note: '套餐和邀请码仍在内部测试。',
@@ -63,6 +76,7 @@ describe('RelayAccessModal commercial rollout', () => {
       root.render(<RelayAccessModal onClose={jest.fn()} />);
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
     });
   }
 
@@ -77,6 +91,18 @@ describe('RelayAccessModal commercial rollout', () => {
   });
 
   it('shows invite redemption and per-model budgets when commercial rollout is enabled', async () => {
+    api.getRelayUsage.mockImplementation(({ model } = {}) => Promise.resolve({
+      configured: true,
+      summary: {
+        source: 'relay',
+        model: model || 'MiniMax-M3',
+        used_cny: model === 'deepseek-v4-flash' ? 12.5 : 125,
+        limit_cny: model === 'deepseek-v4-flash' ? 100 : 500,
+        remaining_cny: model === 'deepseek-v4-flash' ? 87.5 : 375,
+        percent: model === 'deepseek-v4-flash' ? 12.5 : 25,
+        status: 'normal',
+      },
+    }));
     api.getRelayCommercial.mockResolvedValue({
       enabled: true,
       summary: {
@@ -129,7 +155,27 @@ describe('RelayAccessModal commercial rollout', () => {
     expect(container.textContent).toContain('教师试用包');
     expect(container.textContent).toContain('MiniMax-M3');
     expect(container.textContent).toContain('deepseek-v4-flash');
+    expect(container.textContent).toContain('剩余 375.00 CNY');
+    expect(container.textContent).toContain('剩余 87.50 CNY');
     expect(container.textContent).not.toContain('禁用套餐');
     expect(container.querySelector('.relay-access-invite-form')).not.toBeNull();
+  });
+
+  it('shows explicit no-package state for enabled users without active entitlements', async () => {
+    api.getRelayCommercial.mockResolvedValue({
+      enabled: true,
+      summary: {
+        uid: 38,
+        total_cny: 0,
+        totals_by_model: {},
+        entitlements: [],
+        plans: [],
+      },
+    });
+
+    await renderModal();
+
+    expect(container.textContent).toContain('无套餐');
+    expect(container.textContent).toContain('当前没有有效套餐');
   });
 });

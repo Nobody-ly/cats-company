@@ -2665,6 +2665,14 @@ button.catsco-download-action:disabled {
   overflow-wrap: anywhere;
 }
 
+.relay-access-budget-list em {
+  display: block;
+  margin-top: 3px;
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
 .relay-access-invite-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
