@@ -121,9 +121,9 @@ function modelUsageKey(model) {
 
 function resetDurationLabel(value) {
   const raw = String(value || '').trim();
-  if (!raw) return '未设置';
+  if (!raw) return '重置周期未同步';
   const match = raw.match(/^(\d+)([dDwWmMyY])$/);
-  if (!match) return raw;
+  if (!match) return `按 ${raw} 重置`;
   const amount = Number(match[1]);
   const unit = match[2].toLowerCase();
   const unitLabel = {
@@ -132,7 +132,7 @@ function resetDurationLabel(value) {
     m: '个月',
     y: '年',
   }[unit] || '';
-  return `滚动 ${amount} ${unitLabel}`;
+  return `每 ${amount} ${unitLabel}重置`;
 }
 
 function addResetDuration(lastReset, duration) {
@@ -153,16 +153,16 @@ function addResetDuration(lastReset, duration) {
 function usageResetInfo(summary) {
   if (typeof summary === 'undefined') {
     return {
-      title: '周期读取中',
-      detail: '等待 relay 同步',
-      note: '额度周期来自中转后台；同步后会显示上次和下次重置时间。',
+      title: '额度周期读取中',
+      detail: '等待后台同步',
+      note: '同步后会显示当前额度周期、上次重置和预计下次重置时间。',
     };
   }
   if (!summary) {
     return {
-      title: '周期未同步',
-      detail: '暂未拿到 relay 数据',
-      note: '当前暂未拿到 relay 额度周期；套餐到期时间仍以上方套餐为准。',
+      title: '额度周期未同步',
+      detail: '暂未拿到用量数据',
+      note: '当前暂未拿到额度周期；套餐到期时间仍以上方套餐为准。',
     };
   }
   if (summary.source === 'custom' || summary.status === 'custom') {
@@ -177,17 +177,17 @@ function usageResetInfo(summary) {
   const nextReset = formatShortDateTime(addResetDuration(summary.last_reset, summary.reset_duration));
   if (!summary.reset_duration && !summary.last_reset) {
     return {
-      title: '周期读取中',
-      detail: '等待 relay 同步',
-      note: '额度周期来自中转后台；同步后会显示上次和下次重置时间。',
+      title: '额度周期读取中',
+      detail: '等待后台同步',
+      note: '同步后会显示当前额度周期、上次重置和预计下次重置时间。',
     };
   }
   return {
     title: label,
-    detail: nextReset ? `下次约 ${nextReset}` : '下次时间由 relay 自动计算',
+    detail: nextReset ? `下次 ${nextReset}` : '下次时间待同步',
     note: lastReset
-      ? `当前显示的是 relay 当前周期额度；上次重置 ${lastReset}，不是自然月统计。`
-      : '当前显示的是 relay 当前周期额度；不是自然月统计。',
+      ? `当前显示的是本周期额度；上次重置 ${lastReset}，不是自然月。`
+      : '当前显示的是本周期额度；不是自然月。',
   };
 }
 

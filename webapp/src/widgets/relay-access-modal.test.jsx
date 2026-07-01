@@ -155,9 +155,9 @@ describe('RelayAccessModal commercial rollout', () => {
     expect(container.textContent).toContain('需要管理员后台对账/同步后');
     expect(container.textContent).toContain('当前有效套餐');
     expect(container.textContent).toContain('套餐最近到期');
-    expect(container.textContent).toContain('滚动 1 个月');
-    expect(container.textContent).toContain('下次约');
-    expect(container.textContent).toContain('不是自然月统计');
+    expect(container.textContent).toContain('每 1 个月重置');
+    expect(container.textContent).toContain('下次');
+    expect(container.textContent).toContain('不是自然月');
     expect(container.textContent).toContain('当前套餐');
     expect(container.textContent).toContain('教师试用包');
     expect(container.textContent).toContain('MiniMax-M3');
