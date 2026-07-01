@@ -103,6 +103,36 @@ function commercialTotals(summary) {
     .sort(([a], [b]) => a.localeCompare(b));
 }
 
+function modelUsageKey(model) {
+  return String(model || '').trim();
+}
+
+function usageStateForModel(usageByModel, model) {
+  const key = modelUsageKey(model);
+  if (!Object.prototype.hasOwnProperty.call(usageByModel, key)) {
+    return { loading: true, summary: null };
+  }
+  return { loading: false, summary: usageByModel[key] || null };
+}
+
+function currentModelText(summary, fallbackModel) {
+  if (typeof summary === 'undefined') return '当前模型读取中';
+  if (summary?.source === 'custom' || summary?.status === 'custom') return '当前使用自定义模型';
+  if (summary?.model) return `当前模型：${summary.model}`;
+  return `默认模型：${fallbackModel}`;
+}
+
+function budgetUsageMeta(model, amount, usageByModel) {
+  const { loading, summary: usage } = usageStateForModel(usageByModel, model);
+  if (loading) return '用量读取中';
+  if (!usage) return '未同步到 relay';
+  if (usage.source === 'custom' || usage.status === 'custom') return '自定义模型不计入中转套餐';
+  if (!usage.model || Number(usage.limit_cny || 0) <= 0) return '未同步到 relay';
+  const used = Math.max(0, Number(usage.used_cny || 0));
+  const remaining = Math.max(0, Number(amount || 0) - used);
+  return `已用 ${formatCNY(used)} CNY · 剩余 ${formatCNY(remaining)} CNY`;
+}
+
 function nearestPackageExpiry(packages) {
   const dates = packages
     .map((item) => new Date(item.expires_at || '').getTime())
@@ -144,6 +174,8 @@ export default function RelayAccessModal({ onClose }) {
   const [keyLoading, setKeyLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
   const [commercial, setCommercial] = useState(null);
+  const [currentUsage, setCurrentUsage] = useState(undefined);
+  const [usageByModel, setUsageByModel] = useState({});
   const [inviteCode, setInviteCode] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState('');
@@ -315,6 +347,59 @@ export default function RelayAccessModal({ onClose }) {
   const packageExpiry = nearestPackageExpiry(activePackages);
   const packageExpiryText = activePackages.length > 0 ? formatShortDate(packageExpiry) : '无套餐';
 
+  useEffect(() => {
+    let cancelled = false;
+    api.getRelayUsage()
+      .then((data) => {
+        if (!cancelled) setCurrentUsage(data?.summary || null);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentUsage(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [relayKey?.prefix, commercial?.summary?.total_cny]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const models = modelTotals.map(([model]) => modelUsageKey(model)).filter(Boolean);
+    if (!commercialEnabled || models.length === 0) {
+      setUsageByModel({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setUsageByModel((prev) => {
+      const next = {};
+      models.forEach((model) => {
+        if (prev[model]) next[model] = prev[model];
+      });
+      return next;
+    });
+
+    Promise.all(models.map(async (model) => {
+      try {
+        const data = await api.getRelayUsage({ model });
+        return [model, data?.summary || null];
+      } catch {
+        return [model, null];
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      const next = {};
+      entries.forEach(([model, summary]) => {
+        next[model] = summary;
+      });
+      setUsageByModel(next);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [commercialEnabled, JSON.stringify(modelTotals)]);
+
   const redeemInvite = async () => {
     const code = inviteCode.trim();
     if (!code) {
@@ -363,7 +448,7 @@ export default function RelayAccessModal({ onClose }) {
               <div>
                 <div className="relay-access-eyebrow">当前中转</div>
                 <div className="relay-access-title">{config.base_url}</div>
-                <div className="oc-settings-secondary">默认模型：{config.default_model}</div>
+                <div className="oc-settings-secondary">{currentModelText(currentUsage, config.default_model)}</div>
               </div>
             </div>
             <div className="relay-access-hero-actions">
@@ -417,7 +502,7 @@ export default function RelayAccessModal({ onClose }) {
               <div className="relay-access-commerce-card">
                 <Gift size={17} />
                 <div>
-                  <strong>{activePackages.length}</strong>
+                  <strong>{activePackages.length > 0 ? activePackages.length : '无套餐'}</strong>
                   <span>当前有效套餐</span>
                 </div>
               </div>
@@ -442,12 +527,22 @@ export default function RelayAccessModal({ onClose }) {
               </div>
             )}
 
+            {commercialEnabled && activePackages.length === 0 && (
+              <div className="relay-access-token-note">
+                <Gift size={16} />
+                <span>当前没有有效套餐。可以输入邀请码兑换，或联系管理员发放额度。</span>
+              </div>
+            )}
+
             {commercialEnabled && modelTotals.length > 0 && (
               <div className="relay-access-budget-list">
                 {modelTotals.map(([model, amount]) => (
                   <div key={model}>
-                    <span>{modelBudgetLabel(model)}</span>
-                    <strong>{formatCNY(amount)} CNY</strong>
+                    <span>
+                      <strong>{modelBudgetLabel(model)}</strong>
+                      <em>{budgetUsageMeta(model, amount, usageByModel)}</em>
+                    </span>
+                    <strong>额度 {formatCNY(amount)} CNY</strong>
                   </div>
                 ))}
               </div>
