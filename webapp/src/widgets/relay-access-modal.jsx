@@ -71,6 +71,18 @@ function formatShortDate(value) {
   return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
 }
 
+function formatShortDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function formatCNY(value) {
   const number = Number(value || 0);
   return number.toLocaleString('zh-CN', {
@@ -107,6 +119,78 @@ function modelUsageKey(model) {
   return String(model || '').trim();
 }
 
+function resetDurationLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '未设置';
+  const match = raw.match(/^(\d+)([dDwWmMyY])$/);
+  if (!match) return raw;
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const unitLabel = {
+    d: '天',
+    w: '周',
+    m: '个月',
+    y: '年',
+  }[unit] || '';
+  return `滚动 ${amount} ${unitLabel}`;
+}
+
+function addResetDuration(lastReset, duration) {
+  const date = new Date(lastReset || '');
+  if (Number.isNaN(date.getTime())) return null;
+  const match = String(duration || '').trim().match(/^(\d+)([dDwWmMyY])$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const next = new Date(date.getTime());
+  if (unit === 'd') next.setDate(next.getDate() + amount);
+  if (unit === 'w') next.setDate(next.getDate() + amount * 7);
+  if (unit === 'm') next.setMonth(next.getMonth() + amount);
+  if (unit === 'y') next.setFullYear(next.getFullYear() + amount);
+  return next.toISOString();
+}
+
+function usageResetInfo(summary) {
+  if (typeof summary === 'undefined') {
+    return {
+      title: '周期读取中',
+      detail: '等待 relay 同步',
+      note: '额度周期来自中转后台；同步后会显示上次和下次重置时间。',
+    };
+  }
+  if (!summary) {
+    return {
+      title: '周期未同步',
+      detail: '暂未拿到 relay 数据',
+      note: '当前暂未拿到 relay 额度周期；套餐到期时间仍以上方套餐为准。',
+    };
+  }
+  if (summary.source === 'custom' || summary.status === 'custom') {
+    return {
+      title: '自定义模型',
+      detail: '不使用 CatsCo 中转额度',
+      note: '自定义模型的额度和重置时间由你自己的服务商决定。',
+    };
+  }
+  const label = resetDurationLabel(summary.reset_duration);
+  const lastReset = formatShortDateTime(summary.last_reset);
+  const nextReset = formatShortDateTime(addResetDuration(summary.last_reset, summary.reset_duration));
+  if (!summary.reset_duration && !summary.last_reset) {
+    return {
+      title: '周期读取中',
+      detail: '等待 relay 同步',
+      note: '额度周期来自中转后台；同步后会显示上次和下次重置时间。',
+    };
+  }
+  return {
+    title: label,
+    detail: nextReset ? `下次约 ${nextReset}` : '下次时间由 relay 自动计算',
+    note: lastReset
+      ? `当前显示的是 relay 当前周期额度；上次重置 ${lastReset}，不是自然月统计。`
+      : '当前显示的是 relay 当前周期额度；不是自然月统计。',
+  };
+}
+
 function usageStateForModel(usageByModel, model) {
   const key = modelUsageKey(model);
   if (!Object.prototype.hasOwnProperty.call(usageByModel, key)) {
@@ -130,7 +214,8 @@ function budgetUsageMeta(model, amount, usageByModel) {
   if (!usage.model || Number(usage.limit_cny || 0) <= 0) return '未同步到 relay';
   const used = Math.max(0, Number(usage.used_cny || 0));
   const remaining = Math.max(0, Number(amount || 0) - used);
-  return `已用 ${formatCNY(used)} CNY · 剩余 ${formatCNY(remaining)} CNY`;
+  const resetLabel = usage.reset_duration ? ` · ${resetDurationLabel(usage.reset_duration)}` : '';
+  return `已用 ${formatCNY(used)} CNY · 剩余 ${formatCNY(remaining)} CNY${resetLabel}`;
 }
 
 function nearestPackageExpiry(packages) {
@@ -346,6 +431,7 @@ export default function RelayAccessModal({ onClose }) {
   const modelTotals = commercialTotals(commercialSummary);
   const packageExpiry = nearestPackageExpiry(activePackages);
   const packageExpiryText = activePackages.length > 0 ? formatShortDate(packageExpiry) : '无套餐';
+  const currentResetInfo = usageResetInfo(currentUsage);
 
   useEffect(() => {
     let cancelled = false;
@@ -510,10 +596,18 @@ export default function RelayAccessModal({ onClose }) {
                 <CalendarDays size={17} />
                 <div>
                   <strong>{packageExpiryText}</strong>
-                  <span>最近到期</span>
+                  <span>套餐最近到期</span>
+                </div>
+              </div>
+              <div className="relay-access-commerce-card">
+                <RotateCcw size={17} />
+                <div>
+                  <strong>{currentResetInfo.title}</strong>
+                  <span>{currentResetInfo.detail}</span>
                 </div>
               </div>
             </div>
+            <div className="relay-access-period-note">{currentResetInfo.note}</div>
 
             {commercialEnabled && activePackages.length > 0 && (
               <div className="relay-access-package-list">

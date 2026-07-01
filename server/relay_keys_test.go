@@ -223,7 +223,7 @@ func TestRelayUsageSummaryUsesCurrentUserRelayData(t *testing.T) {
 					{
 						Provider: "minimax-m3-anthropic",
 						Model:    "MiniMax-M3",
-						Budget:   commercialRelayBudget{MaxLimit: 500, CurrentUsage: 250, ResetDuration: "1M"},
+						Budget:   commercialRelayBudget{MaxLimit: 500, CurrentUsage: 250, ResetDuration: "1M", LastReset: "2026-06-08 03:29:30+00:00"},
 					},
 				}},
 			},
@@ -256,6 +256,9 @@ func TestRelayUsageSummaryUsesCurrentUserRelayData(t *testing.T) {
 	}
 	if out.Summary.Source != "relay" || out.Summary.Model != "MiniMax-M3" || out.Summary.Percent != 50 || out.Summary.RemainingCNY != 250 {
 		t.Fatalf("unexpected usage summary: %+v", out.Summary)
+	}
+	if out.Summary.ResetDuration != "1M" || out.Summary.LastReset == "" {
+		t.Fatalf("expected reset metadata in usage summary, got %+v", out.Summary)
 	}
 }
 

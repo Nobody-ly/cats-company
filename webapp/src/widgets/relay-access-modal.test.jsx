@@ -45,6 +45,8 @@ describe('RelayAccessModal commercial rollout', () => {
         remaining_cny: 375,
         percent: 25,
         status: 'normal',
+        reset_duration: '1M',
+        last_reset: '2026-06-08T03:29:30Z',
       },
     });
     api.getRelayCommercial.mockResolvedValue({
@@ -101,6 +103,8 @@ describe('RelayAccessModal commercial rollout', () => {
         remaining_cny: model === 'deepseek-v4-flash' ? 87.5 : 375,
         percent: model === 'deepseek-v4-flash' ? 12.5 : 25,
         status: 'normal',
+        reset_duration: '1M',
+        last_reset: '2026-06-08T03:29:30Z',
       },
     }));
     api.getRelayCommercial.mockResolvedValue({
@@ -150,7 +154,10 @@ describe('RelayAccessModal commercial rollout', () => {
     expect(container.textContent).toContain('套餐账本额度');
     expect(container.textContent).toContain('需要管理员后台对账/同步后');
     expect(container.textContent).toContain('当前有效套餐');
-    expect(container.textContent).toContain('最近到期');
+    expect(container.textContent).toContain('套餐最近到期');
+    expect(container.textContent).toContain('滚动 1 个月');
+    expect(container.textContent).toContain('下次约');
+    expect(container.textContent).toContain('不是自然月统计');
     expect(container.textContent).toContain('当前套餐');
     expect(container.textContent).toContain('教师试用包');
     expect(container.textContent).toContain('MiniMax-M3');

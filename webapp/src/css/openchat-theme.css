@@ -2589,7 +2589,7 @@ button.catsco-download-action:disabled {
 
 .relay-access-commerce-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2671,6 +2671,13 @@ button.catsco-download-action:disabled {
   color: var(--v3-text-muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.relay-access-period-note {
+  color: var(--v3-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 2px 0;
 }
 
 .relay-access-invite-form {

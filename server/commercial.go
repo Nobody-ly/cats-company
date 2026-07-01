@@ -161,6 +161,7 @@ type commercialRelayBudget struct {
 	MaxLimit                float64 `json:"max_limit"`
 	CurrentUsage            float64 `json:"current_usage"`
 	ResetDuration           string  `json:"reset_duration"`
+	LastReset               string  `json:"last_reset,omitempty"`
 	PassthroughCurrentUsage float64 `json:"passthrough_current_usage,omitempty"`
 	AccountCurrentUsage     float64 `json:"account_current_usage,omitempty"`
 }

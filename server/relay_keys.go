@@ -67,14 +67,16 @@ type relayUsageResponse struct {
 }
 
 type relayUsageSummary struct {
-	Source       string  `json:"source,omitempty"`
-	Model        string  `json:"model"`
-	Provider     string  `json:"provider,omitempty"`
-	UsedCNY      float64 `json:"used_cny"`
-	LimitCNY     float64 `json:"limit_cny"`
-	RemainingCNY float64 `json:"remaining_cny"`
-	Percent      float64 `json:"percent"`
-	Status       string  `json:"status"`
+	Source        string  `json:"source,omitempty"`
+	Model         string  `json:"model"`
+	Provider      string  `json:"provider,omitempty"`
+	UsedCNY       float64 `json:"used_cny"`
+	LimitCNY      float64 `json:"limit_cny"`
+	RemainingCNY  float64 `json:"remaining_cny"`
+	Percent       float64 `json:"percent"`
+	Status        string  `json:"status"`
+	ResetDuration string  `json:"reset_duration,omitempty"`
+	LastReset     string  `json:"last_reset,omitempty"`
 }
 
 func NewRelayKeyHandlerFromEnv() *RelayKeyHandler {
@@ -305,14 +307,16 @@ func buildRelayUsageResponse(user *commercialRelayUsageUser, preferredModel stri
 	return relayUsageResponse{
 		Configured: true,
 		Summary: &relayUsageSummary{
-			Source:       "relay",
-			Model:        limit.Model,
-			Provider:     limit.Provider,
-			UsedCNY:      used,
-			LimitCNY:     maxLimit,
-			RemainingCNY: remaining,
-			Percent:      percent,
-			Status:       status,
+			Source:        "relay",
+			Model:         limit.Model,
+			Provider:      limit.Provider,
+			UsedCNY:       used,
+			LimitCNY:      maxLimit,
+			RemainingCNY:  remaining,
+			Percent:       percent,
+			Status:        status,
+			ResetDuration: limit.Budget.ResetDuration,
+			LastReset:     limit.Budget.LastReset,
 		},
 	}
 }
