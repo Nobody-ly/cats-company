@@ -126,6 +126,15 @@ function resetDurationLabel(value) {
   if (!match) return `按 ${raw} 重置`;
   const amount = Number(match[1]);
   const unit = match[2].toLowerCase();
+  if (amount === 1) {
+    const oneUnitLabel = {
+      d: '每天重置',
+      w: '每周重置',
+      m: '每月重置',
+      y: '每年重置',
+    }[unit];
+    if (oneUnitLabel) return oneUnitLabel;
+  }
   const unitLabel = {
     d: '天',
     w: '周',
@@ -184,10 +193,10 @@ function usageResetInfo(summary) {
   }
   return {
     title: label,
-    detail: nextReset ? `下次 ${nextReset}` : '下次时间待同步',
+    detail: nextReset ? `下次 ${nextReset}` : '重置时间同步中',
     note: lastReset
       ? `当前显示的是本周期额度；上次重置 ${lastReset}，不是自然月。`
-      : '当前显示的是本周期额度；不是自然月。',
+      : '当前显示的是本周期额度；重置时间同步中，不影响当前额度使用。',
   };
 }
 
