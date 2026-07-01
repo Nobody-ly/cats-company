@@ -527,6 +527,49 @@ func TestCommercialRelayDryRunBuildsBudgetDiff(t *testing.T) {
 	}
 }
 
+func TestCommercialRelayDryRunFlagsAliasDriftWhenBestAliasMatches(t *testing.T) {
+	summary := &types.CommercialSummary{
+		UID: 38,
+		TotalsByModel: map[string]float64{
+			"deepseek-v4-flash": 100.05,
+		},
+		TotalCNY: 100.05,
+	}
+	relayUser := &commercialRelayUsageUser{
+		UID:        38,
+		Username:   "ck",
+		Configured: true,
+		Limits: commercialRelayLimits{ModelLimits: []commercialRelayModelLimit{
+			{
+				Provider:      "deepseek-anthropic",
+				Model:         "deepseek-v4-flash",
+				AllowedModels: []string{"deepseek-v4-flash"},
+				Budget:        commercialRelayBudget{MaxLimit: 100.05, CurrentUsage: 0, ResetDuration: "1M"},
+			},
+			{
+				Provider:      "deepseek-openai",
+				Model:         "deepseek-v4-flash",
+				AllowedModels: []string{"deepseek-v4-flash"},
+				Budget:        commercialRelayBudget{MaxLimit: 100, CurrentUsage: 0, ResetDuration: "1M"},
+			},
+		}},
+	}
+
+	dryRun := compareCommercialRelayBudgets(38, summary, relayUser)
+
+	row := findCommercialRelayComparison(t, dryRun, "deepseek-v4-flash")
+	if row.Status != "mismatch" || row.Delta <= 0 {
+		t.Fatalf("expected alias drift to show mismatch, got %+v", row)
+	}
+	if len(dryRun.ProposedUpdates) != 1 {
+		t.Fatalf("expected one alias sync update, got %+v", dryRun.ProposedUpdates)
+	}
+	update := findCommercialRelayUpdate(t, dryRun, "deepseek-openai")
+	if update.MaxLimit != 100.05 {
+		t.Fatalf("expected deepseek-openai to sync to 100.05, got %+v", update)
+	}
+}
+
 func TestCommercialRelayDryRunFlagsOverLimitWithoutNoopSync(t *testing.T) {
 	summary := &types.CommercialSummary{
 		UID: 38,

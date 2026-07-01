@@ -384,13 +384,14 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 		limits := relayByModel[model]
 		limit, ok := bestCommercialRelayLimit(limits)
 		row := relayComparisonForModel(model, amount, limit, ok)
-		dryRun.Comparisons = append(dryRun.Comparisons, row)
 
+		var aliasRowsNeedingSync []commercialRelayBudgetComparison
 		for _, aliasLimit := range limits {
 			aliasRow := relayComparisonForModel(model, amount, aliasLimit, true)
 			if !commercialRelayShouldSync(aliasRow) {
 				continue
 			}
+			aliasRowsNeedingSync = append(aliasRowsNeedingSync, aliasRow)
 			dryRun.ProposedUpdates = append(dryRun.ProposedUpdates, commercialRelayProviderBudgetUpdate{
 				Provider:      aliasRow.Provider,
 				AllowedModels: aliasRow.AllowedModels,
@@ -398,6 +399,11 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 				ResetDuration: defaultRelayResetDuration(aliasRow.ResetDuration),
 			})
 		}
+		if len(aliasRowsNeedingSync) > 0 && row.Status == "match" {
+			row.Status = "mismatch"
+			row.Delta = aliasRowsNeedingSync[0].Delta
+		}
+		dryRun.Comparisons = append(dryRun.Comparisons, row)
 	}
 	for model, limits := range relayByModel {
 		if commercialModels[model] {
