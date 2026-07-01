@@ -2625,6 +2625,87 @@ button.catsco-download-action:disabled {
   font-size: 12px;
 }
 
+.relay-access-current-quota {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--v3-border);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.relay-access-current-quota.active {
+  border-color: rgba(52, 199, 89, 0.22);
+  background: rgba(52, 199, 89, 0.06);
+}
+
+.relay-access-current-quota.warning {
+  border-color: rgba(214, 168, 79, 0.34);
+  background: rgba(214, 168, 79, 0.08);
+}
+
+.relay-access-current-quota.danger {
+  border-color: rgba(255, 86, 86, 0.38);
+  background: rgba(255, 86, 86, 0.08);
+}
+
+.relay-access-current-quota.custom,
+.relay-access-current-quota.inactive,
+.relay-access-current-quota.loading {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.relay-access-current-quota-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.relay-access-current-quota-head span,
+.relay-access-current-quota-meta {
+  color: var(--v3-text-muted);
+  font-size: 12px;
+}
+
+.relay-access-current-quota-head strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--v3-text-name);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.relay-access-current-quota-head em {
+  flex: 0 0 auto;
+  max-width: 46%;
+  color: var(--v3-text-name);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 800;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.relay-access-quota-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.relay-access-quota-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #23c483, #d6a84f);
+}
+
+.relay-access-current-quota.danger .relay-access-quota-bar i {
+  background: linear-gradient(90deg, #ff6b6b, #d6a84f);
+}
+
 .relay-access-budget-list {
   display: grid;
   gap: 8px;

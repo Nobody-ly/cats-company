@@ -391,6 +391,35 @@
       line-height: 1.15;
     }
 
+    .commercial-flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .commercial-flow-step {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.012);
+    }
+
+    .commercial-flow-step strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .commercial-flow-step span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
     .commercial-panel {
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -690,6 +719,7 @@
 
       .commercial-grid,
       .commercial-status-grid,
+      .commercial-flow,
       .commercial-item {
         grid-template-columns: 1fr;
       }
@@ -794,7 +824,7 @@
 
     <section class="admin-view" data-admin-view="commercial">
       <h2>中转商业化测试</h2>
-      <p>先建立套餐、邀请码和人工发放账本；模型额度可通过对账同步到 relay，现有自动建 Key 和 Bifrost 转发继续保留。</p>
+      <p>先建立套餐、邀请码和人工发放账本；模型额度通过“预演 -> 同步”写入 relay。现有自动建 Key、Bifrost 转发和用户默认额度不会被创建套餐这一步直接改动。</p>
       <div class="commercial-status-grid" id="commercial-status-grid" aria-live="polite">
         <div class="commercial-status-card">
           <span>套餐</span>
@@ -811,6 +841,28 @@
         <div class="commercial-status-card">
           <span>灰度状态</span>
           <strong>后台可用</strong>
+        </div>
+      </div>
+      <div class="commercial-flow" aria-label="商业化操作流程">
+        <div class="commercial-flow-step">
+          <strong>1. 建套餐</strong>
+          <span>定义每个模型的 CNY 额度和有效期，只写商业账本。</span>
+        </div>
+        <div class="commercial-flow-step">
+          <strong>2. 发邀请码</strong>
+          <span>用户兑换后生成套餐权益；也可以手工给 UID 补额。</span>
+        </div>
+        <div class="commercial-flow-step">
+          <strong>3. 查 UID</strong>
+          <span>确认用户套餐、账本和最近发放记录。</span>
+        </div>
+        <div class="commercial-flow-step">
+          <strong>4. Dry-run</strong>
+          <span>只对比商业额度和 relay 真实限额，不写线上。</span>
+        </div>
+        <div class="commercial-flow-step">
+          <strong>5. 同步 relay</strong>
+          <span>仅 enforce 开启后才会写模型限额；不会重建用户 Key。</span>
         </div>
       </div>
       <div class="commercial-grid" style="margin-top: 16px;">
@@ -891,12 +943,12 @@
             <button id="commercial-sync-button" type="button">尝试同步</button>
           </form>
           <div id="commercial-dry-run-error" class="error"></div>
-          <div id="commercial-dry-run-result" class="commercial-summary">对比商业账本里的模型额度和 relay-admin / Bifrost 当前模型限额；默认只预演，不会写入。</div>
+          <div id="commercial-dry-run-result" class="commercial-summary">先 Dry-run。它会对比商业账本里的模型额度、relay-admin 当前模型限额和已用成本；默认只预演，不会写入。</div>
         </div>
 
         <div class="commercial-panel commercial-panel-wide">
           <h3>运营边界</h3>
-          <p>这块先做商业化账本、灰度入口和 relay 对账。只有开启 enforce 变量后，“尝试同步”才会把模型额度写到 relay-admin 的 provider config；默认不会替换现有用户的 relay key、模型调用、key 级月预算或 Bifrost 路由。通用账本额度暂时只做记录和展示，不作为 relay 强制限额。</p>
+          <p>这块先做商业化账本、灰度入口和 relay 对账。只有开启 enforce 变量后，“尝试同步”才会把模型额度写到 relay-admin 的 provider config；默认不会替换现有用户的 relay key、模型调用、key 级月预算或 Bifrost 路由。通用账本额度暂时只做记录和展示，不作为 relay 强制限额。已超额用户需要补额或在 relay 侧重置用量后再继续。</p>
         </div>
       </div>
     </section>
@@ -1670,6 +1722,7 @@ http://127.0.0.1:26061/local/account-admin</code>
         return;
       }
       const comparisons = Array.isArray(dryRun.comparisons) ? dryRun.comparisons : [];
+      const overLimitRows = comparisons.filter((item) => item.status === 'over_limit');
       const rows = comparisons.map((item) => `
         <tr>
           <td>${escapeHTML(modelName(item.model))}<div class="commercial-meta">${escapeHTML(item.provider || '-')}</div></td>
@@ -1685,8 +1738,10 @@ http://127.0.0.1:26061/local/account-admin</code>
         `<strong>UID ${escapeHTML(dryRun.uid)} · relay ${dryRun.relay_key_configured ? '已配置' : '未配置'} · enforce ${dryRun.enforce_enabled ? '开启' : '关闭'}</strong>`,
         `<div class="commercial-meta">Key：${escapeHTML((dryRun.relay_key && dryRun.relay_key.prefix) || '-')} · 用户：${escapeHTML(dryRun.relay_username || '-')}</div>`,
         dryRun.relay_governance_error ? `<div class="error visible">Relay governance：${escapeHTML(dryRun.relay_governance_error)}</div>` : '',
+        overLimitRows.length ? `<div class="error visible">已超额：${escapeHTML(overLimitRows.map((item) => modelName(item.model)).join('、'))}。请先补额或重置用量，再让用户继续调用。</div>` : '',
         `<table class="commercial-compare-table"><thead><tr><th>模型</th><th>状态</th><th>商业额度</th><th>Relay 限额</th><th>已用</th><th>剩余</th></tr></thead><tbody>${rows || '<tr><td colspan="6">暂无模型额度。</td></tr>'}</tbody></table>`,
         `<div class="commercial-meta" style="margin-top:10px;">待同步项：${escapeHTML(proposed.length)} · ${escapeHTML(dryRun.note || '')}</div>`,
+        `<div class="commercial-meta">安全边界：Dry-run 不写入；同步只更新模型级 provider budget，不重建 Key，不改 Bifrost 路由。</div>`,
       ].join('');
     }
 

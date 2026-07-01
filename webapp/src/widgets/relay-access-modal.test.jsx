@@ -185,4 +185,63 @@ describe('RelayAccessModal commercial rollout', () => {
     expect(container.textContent).toContain('无套餐');
     expect(container.textContent).toContain('当前没有有效套餐');
   });
+
+  it('shows custom model as outside relay package quota', async () => {
+    api.getRelayUsage.mockResolvedValue({
+      configured: true,
+      summary: {
+        source: 'custom',
+        model: '自定义模型',
+        status: 'custom',
+      },
+    });
+
+    await renderModal();
+
+    expect(container.textContent).toContain('当前使用自定义模型');
+    expect(container.textContent).toContain('不消耗 CatsCo 中转套餐');
+  });
+
+  it('shows explicit over-limit warning for the current relay model', async () => {
+    api.getRelayUsage.mockResolvedValue({
+      configured: true,
+      summary: {
+        source: 'relay',
+        model: 'MiniMax-M3',
+        used_cny: 745.63,
+        limit_cny: 500,
+        remaining_cny: 0,
+        percent: 149.1,
+        status: 'over_limit',
+        reset_duration: '1M',
+        last_reset: '2026-06-08T03:29:30Z',
+      },
+    });
+
+    await renderModal();
+
+    expect(container.textContent).toContain('当前模型已超额');
+    expect(container.textContent).toContain('剩余额度 0 CNY');
+    expect(container.textContent).toContain('请联系管理员补额或重置');
+  });
+
+  it('does not present zero relay limit as a real remaining quota', async () => {
+    api.getRelayUsage.mockResolvedValue({
+      configured: true,
+      summary: {
+        source: 'relay',
+        model: 'MiniMax-M3',
+        used_cny: 0,
+        limit_cny: 0,
+        remaining_cny: 0,
+        percent: 0,
+        status: 'normal',
+      },
+    });
+
+    await renderModal();
+
+    expect(container.textContent).toContain('当前模型未设置额度');
+    expect(container.textContent).toContain('等待 relay 限额同步');
+  });
 });

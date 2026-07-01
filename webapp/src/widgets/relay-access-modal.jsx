@@ -91,6 +91,12 @@ function formatCNY(value) {
   });
 }
 
+function formatPercent(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return '0%';
+  return `${Math.max(0, number).toFixed(number > 0 && number < 1 ? 2 : 1).replace(/\.0$/, '')}%`;
+}
+
 function modelBudgetLabel(model) {
   if (!model || model === '*') return '通用额度';
   return model;
@@ -215,16 +221,88 @@ function currentModelText(summary, fallbackModel) {
   return `默认模型：${fallbackModel}`;
 }
 
+function currentQuotaDisplay(summary, fallbackModel, commercialEnabled) {
+  if (typeof summary === 'undefined') {
+    return {
+      className: 'loading',
+      model: '读取中',
+      title: '当前模型额度',
+      meta: '正在读取 relay 当前模型',
+      detail: '等待后台同步',
+      percent: 0,
+      note: '会按 CatsCo 当前启动模型展示对应额度。',
+    };
+  }
+  if (!summary) {
+    return {
+      className: 'inactive',
+      model: fallbackModel,
+      title: '当前模型额度',
+      meta: commercialEnabled ? 'relay 用量暂未同步' : '暂未接入套餐',
+      detail: commercialEnabled ? '暂无用量数据' : '套餐兑换后显示额度',
+      percent: 0,
+      note: commercialEnabled
+        ? '如果刚切换模型，数据可能延迟几分钟刷新。'
+        : '当前仍可使用管理员默认 relay 额度或自定义模型。',
+    };
+  }
+  if (summary.source === 'custom' || summary.status === 'custom') {
+    return {
+      className: 'custom',
+      model: '自定义模型',
+      title: '当前使用自定义模型',
+      meta: '不消耗 CatsCo 中转套餐',
+      detail: '额度由你自己的服务商决定',
+      percent: 0,
+      note: '切回 CatsCo 中转模型后，这里会显示对应模型的剩余额度。',
+    };
+  }
+
+  const limit = Number(summary.limit_cny || 0);
+  const used = Number(summary.used_cny || 0);
+  const remaining = Number(summary.remaining_cny || 0);
+  if (limit <= 0) {
+    return {
+      className: 'inactive',
+      model: summary.model || fallbackModel,
+      title: '当前模型未设置额度',
+      meta: `${summary.provider ? `${summary.provider} · ` : ''}已用 ${formatCNY(used)} CNY`,
+      detail: '等待 relay 限额同步',
+      percent: 0,
+      note: '管理员同步模型额度后，这里会显示剩余额度和用量百分比。',
+    };
+  }
+  const percent = limit > 0 ? Math.min(100, Math.max(0, Number(summary.percent || 0))) : 0;
+  const overLimit = summary.status === 'over_limit' || (limit > 0 && used > limit);
+  const high = !overLimit && (summary.status === 'high' || percent >= 90);
+  return {
+    className: overLimit ? 'danger' : high ? 'warning' : 'active',
+    model: summary.model || fallbackModel,
+    title: overLimit ? '当前模型已超额' : high ? '当前模型接近上限' : '当前模型额度',
+    meta: `${summary.provider ? `${summary.provider} · ` : ''}已用 ${formatCNY(used)} / ${formatCNY(limit)} CNY`,
+    detail: overLimit ? '剩余额度 0 CNY' : `剩余 ${formatCNY(remaining)} CNY`,
+    percent,
+    note: overLimit
+      ? '这组模型额度已超出，后续调用应被 relay 拦截；请联系管理员补额或重置。'
+      : '按当前启动模型展示，切换模型后可能延迟几分钟刷新。',
+  };
+}
+
 function budgetUsageMeta(model, amount, usageByModel) {
   const { loading, summary: usage } = usageStateForModel(usageByModel, model);
   if (loading) return '用量读取中';
   if (!usage) return '未同步到 relay';
   if (usage.source === 'custom' || usage.status === 'custom') return '自定义模型不计入中转套餐';
-  if (!usage.model || Number(usage.limit_cny || 0) <= 0) return '未同步到 relay';
+  const relayLimit = Number(usage.limit_cny || 0);
+  if (!usage.model || relayLimit <= 0) return '未同步到 relay';
   const used = Math.max(0, Number(usage.used_cny || 0));
-  const remaining = Math.max(0, Number(amount || 0) - used);
+  const remaining = Math.max(0, Number(usage.remaining_cny || 0));
+  const overLimit = usage.status === 'over_limit' || used > relayLimit;
   const resetLabel = usage.reset_duration ? ` · ${resetDurationLabel(usage.reset_duration)}` : '';
-  return `已用 ${formatCNY(used)} CNY · 剩余 ${formatCNY(remaining)} CNY${resetLabel}`;
+  const syncHint = Math.abs(Number(amount || 0) - relayLimit) > 0.000001
+    ? ` · relay 限额 ${formatCNY(relayLimit)}`
+    : '';
+  return `${overLimit ? '已超额 · ' : ''}已用 ${formatCNY(used)} CNY · 剩余 ${formatCNY(remaining)} CNY${syncHint}${resetLabel}`;
 }
 
 function nearestPackageExpiry(packages) {
@@ -441,6 +519,7 @@ export default function RelayAccessModal({ onClose }) {
   const packageExpiry = nearestPackageExpiry(activePackages);
   const packageExpiryText = activePackages.length > 0 ? formatShortDate(packageExpiry) : '无套餐';
   const currentResetInfo = usageResetInfo(currentUsage);
+  const currentQuota = currentQuotaDisplay(currentUsage, config.default_model, commercialEnabled);
 
   useEffect(() => {
     let cancelled = false;
@@ -586,11 +665,26 @@ export default function RelayAccessModal({ onClose }) {
               </span>
             </div>
 
+            <div className={`relay-access-current-quota ${currentQuota.className}`}>
+              <div className="relay-access-current-quota-head">
+                <div>
+                  <span>{currentQuota.title}</span>
+                  <strong>{currentQuota.model}</strong>
+                </div>
+                <em>{currentQuota.detail}</em>
+              </div>
+              <div className="relay-access-current-quota-meta">{currentQuota.meta}</div>
+              <div className="relay-access-quota-bar" aria-label={`当前模型用量 ${formatPercent(currentQuota.percent)}`}>
+                <i style={{ width: `${Math.min(100, Math.max(0, currentQuota.percent))}%` }} />
+              </div>
+              <div className="relay-access-period-note">{currentQuota.note}</div>
+            </div>
+
             <div className="relay-access-commerce-grid">
               <div className="relay-access-commerce-card">
                 <Sparkles size={17} />
                 <div>
-                  <strong>{formatCNY(commercialSummary?.total_cny)} CNY</strong>
+                  <strong>{commercialEnabled ? `${formatCNY(commercialSummary?.total_cny)} CNY` : '无套餐'}</strong>
                   <span>套餐账本额度</span>
                 </div>
               </div>
@@ -645,7 +739,7 @@ export default function RelayAccessModal({ onClose }) {
                       <strong>{modelBudgetLabel(model)}</strong>
                       <em>{budgetUsageMeta(model, amount, usageByModel)}</em>
                     </span>
-                    <strong>额度 {formatCNY(amount)} CNY</strong>
+                    <strong>套餐 {formatCNY(amount)} CNY</strong>
                   </div>
                 ))}
               </div>
