@@ -360,7 +360,7 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 		summary = &types.CommercialSummary{UID: uid, TotalsByModel: map[string]float64{}}
 		dryRun.Summary = summary
 	}
-	relayByModel := map[string]commercialRelayModelLimit{}
+	relayByModel := map[string][]commercialRelayModelLimit{}
 	if relayUser != nil {
 		dryRun.RelayKeyConfigured = relayUser.Configured
 		dryRun.RelayUsername = relayUser.Username
@@ -371,10 +371,7 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 			if model == "" || model == "*" {
 				continue
 			}
-			existing, exists := relayByModel[model]
-			if !exists || limit.Budget.MaxLimit > existing.Budget.MaxLimit {
-				relayByModel[model] = limit
-			}
+			relayByModel[model] = append(relayByModel[model], limit)
 		}
 	}
 	commercialModels := map[string]bool{}
@@ -384,37 +381,61 @@ func compareCommercialRelayBudgets(uid int64, summary *types.CommercialSummary, 
 			continue
 		}
 		commercialModels[model] = true
-		limit, ok := relayByModel[model]
+		limits := relayByModel[model]
+		limit, ok := bestCommercialRelayLimit(limits)
 		row := relayComparisonForModel(model, amount, limit, ok)
 		dryRun.Comparisons = append(dryRun.Comparisons, row)
-		if commercialRelayShouldSync(row) {
+
+		for _, aliasLimit := range limits {
+			aliasRow := relayComparisonForModel(model, amount, aliasLimit, true)
+			if !commercialRelayShouldSync(aliasRow) {
+				continue
+			}
 			dryRun.ProposedUpdates = append(dryRun.ProposedUpdates, commercialRelayProviderBudgetUpdate{
-				Provider:      row.Provider,
-				AllowedModels: row.AllowedModels,
-				MaxLimit:      row.CommercialLimit,
-				ResetDuration: defaultRelayResetDuration(row.ResetDuration),
+				Provider:      aliasRow.Provider,
+				AllowedModels: aliasRow.AllowedModels,
+				MaxLimit:      aliasRow.CommercialLimit,
+				ResetDuration: defaultRelayResetDuration(aliasRow.ResetDuration),
 			})
 		}
 	}
-	for model, limit := range relayByModel {
-		if commercialModels[model] || limit.Budget.MaxLimit <= 0 {
+	for model, limits := range relayByModel {
+		if commercialModels[model] {
 			continue
 		}
-		dryRun.Comparisons = append(dryRun.Comparisons, commercialRelayBudgetComparison{
-			Model:         model,
-			Provider:      limit.Provider,
-			AllowedModels: limit.AllowedModels,
-			Status:        "relay_only",
-			RelayLimit:    limit.Budget.MaxLimit,
-			RelayUsage:    limit.Budget.CurrentUsage,
-			Remaining:     math.Max(0, limit.Budget.MaxLimit-limit.Budget.CurrentUsage),
-			Delta:         -limit.Budget.MaxLimit,
-			ResetDuration: limit.Budget.ResetDuration,
-			Syncable:      true,
-		})
+		for _, limit := range limits {
+			if limit.Budget.MaxLimit <= 0 {
+				continue
+			}
+			dryRun.Comparisons = append(dryRun.Comparisons, commercialRelayBudgetComparison{
+				Model:         model,
+				Provider:      limit.Provider,
+				AllowedModels: limit.AllowedModels,
+				Status:        "relay_only",
+				RelayLimit:    limit.Budget.MaxLimit,
+				RelayUsage:    limit.Budget.CurrentUsage,
+				Remaining:     math.Max(0, limit.Budget.MaxLimit-limit.Budget.CurrentUsage),
+				Delta:         -limit.Budget.MaxLimit,
+				ResetDuration: limit.Budget.ResetDuration,
+				Syncable:      true,
+			})
+		}
 	}
 	dryRun.CanApply = len(dryRun.ProposedUpdates) > 0
 	return dryRun
+}
+
+func bestCommercialRelayLimit(limits []commercialRelayModelLimit) (commercialRelayModelLimit, bool) {
+	if len(limits) == 0 {
+		return commercialRelayModelLimit{}, false
+	}
+	best := limits[0]
+	for _, limit := range limits[1:] {
+		if limit.Budget.MaxLimit > best.Budget.MaxLimit {
+			best = limit
+		}
+	}
+	return best, true
 }
 
 func commercialRelayShouldSync(row commercialRelayBudgetComparison) bool {

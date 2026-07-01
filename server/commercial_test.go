@@ -488,6 +488,12 @@ func TestCommercialRelayDryRunBuildsBudgetDiff(t *testing.T) {
 				Budget:        commercialRelayBudget{MaxLimit: 50, CurrentUsage: 2, ResetDuration: "1M"},
 			},
 			{
+				Provider:      "deepseek-openai",
+				Model:         "deepseek-v4-flash",
+				AllowedModels: []string{"deepseek-v4-flash"},
+				Budget:        commercialRelayBudget{MaxLimit: 75, CurrentUsage: 3, ResetDuration: "1M"},
+			},
+			{
 				Provider:      "glm-anthropic",
 				Model:         "glm-5.1",
 				AllowedModels: []string{"glm-5.1"},
@@ -504,17 +510,20 @@ func TestCommercialRelayDryRunBuildsBudgetDiff(t *testing.T) {
 	if row := findCommercialRelayComparison(t, dryRun, "MiniMax-M3"); row.Status != "match" || row.RelayUsage != 12.5 {
 		t.Fatalf("unexpected m3 row: %+v", row)
 	}
-	if row := findCommercialRelayComparison(t, dryRun, "deepseek-v4-flash"); row.Status != "mismatch" || row.Delta != 50 {
+	if row := findCommercialRelayComparison(t, dryRun, "deepseek-v4-flash"); row.Status != "mismatch" || row.Delta != 25 {
 		t.Fatalf("unexpected deepseek row: %+v", row)
 	}
 	if row := findCommercialRelayComparison(t, dryRun, "glm-5.1"); row.Status != "relay_only" || row.RelayLimit != 500 {
 		t.Fatalf("unexpected glm row: %+v", row)
 	}
-	if len(dryRun.ProposedUpdates) != 1 {
-		t.Fatalf("expected one proposed update, got %+v", dryRun.ProposedUpdates)
+	if len(dryRun.ProposedUpdates) != 2 {
+		t.Fatalf("expected two proposed updates, got %+v", dryRun.ProposedUpdates)
 	}
-	if dryRun.ProposedUpdates[0].Provider != "deepseek-anthropic" || dryRun.ProposedUpdates[0].MaxLimit != 100 {
-		t.Fatalf("unexpected proposed update: %+v", dryRun.ProposedUpdates[0])
+	for _, provider := range []string{"deepseek-anthropic", "deepseek-openai"} {
+		update := findCommercialRelayUpdate(t, dryRun, provider)
+		if update.MaxLimit != 100 {
+			t.Fatalf("unexpected proposed update for %s: %+v", provider, update)
+		}
 	}
 }
 
@@ -596,4 +605,15 @@ func findCommercialRelayComparison(t *testing.T, dryRun *commercialRelayDryRun, 
 	}
 	t.Fatalf("comparison for %s not found: %+v", model, dryRun.Comparisons)
 	return commercialRelayBudgetComparison{}
+}
+
+func findCommercialRelayUpdate(t *testing.T, dryRun *commercialRelayDryRun, provider string) commercialRelayProviderBudgetUpdate {
+	t.Helper()
+	for _, update := range dryRun.ProposedUpdates {
+		if update.Provider == provider {
+			return update
+		}
+	}
+	t.Fatalf("proposed update for %s not found: %+v", provider, dryRun.ProposedUpdates)
+	return commercialRelayProviderBudgetUpdate{}
 }
